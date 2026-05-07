@@ -1,223 +1,42 @@
 {
 width: 5
 height: 1
-depth: 5
+depth: 1
 nodes: [
 	{
-		tiles: [
-			FloorTile
-			CornerSWTile
-		]
-	}
-	{
-		z: 1
-		tiles: [
-			FloorTile
-		]
-	}
-	{
-		z: 2
-		tiles: [
-			FloorTile
-		]
-	}
-	{
-		z: 3
-		tiles: [
-			FloorTile
-		]
-	}
-	{
-		z: 4
-		tiles: [
-			FloorTile
-			CornerWNTile
-		]
-	}
-	{
 		x: 1
 		tiles: [
-			FloorTile
-		]
-	}
-	{
-		x: 1
-		z: 1
-		tiles: [
-			FloorTile
-		]
-	}
-	{
-		x: 1
-		z: 2
-		tags: [
-			door_key
-		]
-		tiles: [
-			FloorTile
-			DoorHorizontalTile
-		]
-	}
-	{
-		x: 1
-		z: 3
-		tiles: [
-			FloorTile
-		]
-	}
-	{
-		x: 1
-		z: 4
-		tiles: [
-			FloorTile
+			{
+				type: FloorTile
+			}
 		]
 	}
 	{
 		x: 2
-		tags: [
-			door_manual
-		]
 		tiles: [
-			FloorTile
-			DoorHorizontalTile
-		]
-	}
-	{
-		x: 2
-		z: 1
-		tiles: [
-			FloorTile
-		]
-	}
-	{
-		x: 2
-		z: 2
-		tags: [
-			player_spawn
-		]
-		tiles: [
-			FloorTile
-		]
-	}
-	{
-		x: 2
-		z: 3
-		tiles: [
-			FloorTile
-		]
-	}
-	{
-		x: 2
-		z: 4
-		tiles: [
-			FloorTile
+			{
+				type: WallHorizontalTile
+			}
 		]
 	}
 	{
 		x: 3
 		tiles: [
-			FloorTile
+			{
+				type: CornerNETile
+			}
 		]
 	}
 	{
-		x: 3
-		z: 1
-		tiles: [
-			FloorTile
-		]
+		x: 4
 		items: [
 			{
-				id: 982ef5e3-aa0d-4ec7-b349-081b749890e0
+				id: 7d463913-8fb5-4cbb-94a4-17060be860de
 				type: Key
 				color: 0000ffff
 				name: Blue Key
 			}
 		]
-	}
-	{
-		x: 3
-		z: 2
-		tiles: [
-			FloorTile
-		]
-	}
-	{
-		x: 3
-		z: 3
-		tiles: [
-			FloorTile
-		]
-		items: [
-			{
-				id: 9942c785-6ed7-4ed1-a173-91a1fc95ffe8
-				type: Key
-				color: ff0000ff
-				name: Red Key
-			}
-		]
-	}
-	{
-		x: 3
-		z: 4
-		tiles: [
-			FloorTile
-		]
-	}
-	{
-		x: 4
-		tiles: [
-			FloorTile
-			CornerESTile
-		]
-	}
-	{
-		x: 4
-		z: 1
-		tiles: [
-			FloorTile
-		]
-	}
-	{
-		x: 4
-		z: 2
-		tiles: [
-			FloorTile
-		]
-	}
-	{
-		x: 4
-		z: 3
-		tiles: [
-			FloorTile
-		]
-	}
-	{
-		x: 4
-		z: 4
-		tiles: [
-			FloorTile
-			CornerNETile
-		]
-	}
-]
-associations: [
-	{
-		sourceX: 1
-		sourceY: 0
-		sourceZ: 2
-		targetX: 3
-		targetY: 0
-		targetZ: 1
-		type: key
-	}
-	{
-		sourceX: 1
-		sourceY: 0
-		sourceZ: 2
-		targetX: 3
-		targetY: 0
-		targetZ: 3
-		type: key
 	}
 ]
 }

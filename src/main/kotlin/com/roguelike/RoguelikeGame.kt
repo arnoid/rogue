@@ -63,7 +63,7 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         if (worldPath != null) {
             loadWorld(worldPath)
         } else {
-            world = World(5, 1, 5)
+            world = World(10, 10, 1)
             WorldGenerator(world, modelLoader).generate()
         }
 
@@ -78,8 +78,8 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         cameraManager = CameraManager(camera)
 
         environment = Environment()
-        environment.set(ColorAttribute(ColorAttribute.AmbientLight, 0.3f, 0.3f, 0.3f, 1f))
-        environment.add(DirectionalLight().set(0.4f, 0.4f, 0.4f, -1f, -1f, -1f))
+        environment.set(ColorAttribute(ColorAttribute.AmbientLight, 0.6f, 0.6f, 0.6f, 1f))
+        environment.add(DirectionalLight().set(0.8f, 0.8f, 0.8f, -1f, -1f, -1f))
 
         // UI Setup
         stage = Stage(ScreenViewport())
@@ -131,7 +131,7 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         if (loadedWorld != null) {
             world = loadedWorld
         } else {
-            world = World(5, 1, 5)
+            world = World(10, 10, 1)
             WorldGenerator(world, modelLoader).generate()
         }
     }

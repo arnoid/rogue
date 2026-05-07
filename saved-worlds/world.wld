@@ -1,118 +1,58 @@
 {
 width: 5
-height: 1
-depth: 10
+height: 7
+depth: 1
 nodes: [
 	{
 		tiles: [
 			{
 				type: FloorTile
 			}
-			{
-				type: CornerSWTile
-			}
 		]
 	}
 	{
-		z: 1
+		y: 1
 		tiles: [
 			{
 				type: FloorTile
 			}
-			{
-				type: WallVerticalTile
-			}
 		]
 	}
 	{
-		z: 2
+		y: 2
 		tiles: [
-			{
-				type: FloorTile
-			}
-			{
-				type: WallVerticalTile
-			}
-		]
-	}
-	{
-		z: 3
-		tiles: [
-			{
-				type: FloorTile
-			}
-			{
-				type: WallVerticalTile
-			}
-		]
-	}
-	{
-		z: 4
-		tiles: [
-			{
-				type: FloorTile
-			}
-			{
-				type: CornerWNTile
-			}
-			{
-				type: CornerSWTile
-			}
-		]
-	}
-	{
-		z: 5
-		tiles: [
-			{
-				type: WallVerticalTile
-			}
 			{
 				type: FloorTile
 			}
 		]
 	}
 	{
-		z: 6
+		y: 3
 		tiles: [
-			{
-				type: CornerWNTile
-			}
-			{
-				type: CornerSWTile
-			}
 			{
 				type: FloorTile
 			}
 		]
 	}
 	{
-		z: 7
+		y: 4
 		tiles: [
-			{
-				type: WallVerticalTile
-			}
 			{
 				type: FloorTile
 			}
 		]
 	}
 	{
-		z: 8
+		y: 5
 		tiles: [
-			{
-				type: WallVerticalTile
-			}
 			{
 				type: FloorTile
 			}
 		]
 	}
 	{
-		z: 9
+		y: 6
 		tiles: [
-			{
-				type: CornerWNTile
-			}
 			{
 				type: FloorTile
 			}
@@ -124,14 +64,11 @@ nodes: [
 			{
 				type: FloorTile
 			}
-			{
-				type: WallHorizontalTile
-			}
 		]
 	}
 	{
 		x: 1
-		z: 1
+		y: 1
 		tiles: [
 			{
 				type: FloorTile
@@ -140,10 +77,7 @@ nodes: [
 	}
 	{
 		x: 1
-		z: 2
-		tags: [
-			player_spawn
-		]
+		y: 2
 		tiles: [
 			{
 				type: FloorTile
@@ -152,7 +86,7 @@ nodes: [
 	}
 	{
 		x: 1
-		z: 3
+		y: 3
 		tiles: [
 			{
 				type: FloorTile
@@ -161,19 +95,7 @@ nodes: [
 	}
 	{
 		x: 1
-		z: 4
-		tiles: [
-			{
-				type: FloorTile
-			}
-			{
-				type: WallHorizontalTile
-			}
-		]
-	}
-	{
-		x: 1
-		z: 5
+		y: 4
 		tiles: [
 			{
 				type: FloorTile
@@ -182,19 +104,7 @@ nodes: [
 	}
 	{
 		x: 1
-		z: 6
-		tiles: [
-			{
-				type: WallHorizontalTile
-			}
-			{
-				type: FloorTile
-			}
-		]
-	}
-	{
-		x: 1
-		z: 7
+		y: 5
 		tiles: [
 			{
 				type: FloorTile
@@ -203,20 +113,8 @@ nodes: [
 	}
 	{
 		x: 1
-		z: 8
+		y: 6
 		tiles: [
-			{
-				type: FloorTile
-			}
-		]
-	}
-	{
-		x: 1
-		z: 9
-		tiles: [
-			{
-				type: WallHorizontalTile
-			}
 			{
 				type: FloorTile
 			}
@@ -228,14 +126,11 @@ nodes: [
 			{
 				type: FloorTile
 			}
-			{
-				type: WallHorizontalTile
-			}
 		]
 	}
 	{
 		x: 2
-		z: 1
+		y: 1
 		tiles: [
 			{
 				type: FloorTile
@@ -244,7 +139,7 @@ nodes: [
 	}
 	{
 		x: 2
-		z: 2
+		y: 2
 		tiles: [
 			{
 				type: FloorTile
@@ -253,7 +148,7 @@ nodes: [
 	}
 	{
 		x: 2
-		z: 3
+		y: 3
 		tiles: [
 			{
 				type: FloorTile
@@ -262,22 +157,7 @@ nodes: [
 	}
 	{
 		x: 2
-		z: 4
-		tags: [
-			door_manual
-		]
-		tiles: [
-			{
-				type: FloorTile
-			}
-			{
-				type: DoorHorizontalTile
-			}
-		]
-	}
-	{
-		x: 2
-		z: 5
+		y: 4
 		tiles: [
 			{
 				type: FloorTile
@@ -286,11 +166,8 @@ nodes: [
 	}
 	{
 		x: 2
-		z: 6
+		y: 5
 		tiles: [
-			{
-				type: CornerESTile
-			}
 			{
 				type: FloorTile
 			}
@@ -298,60 +175,7 @@ nodes: [
 	}
 	{
 		x: 2
-		z: 7
-		tiles: [
-			{
-				type: WallVerticalTile
-			}
-			{
-				type: FloorTile
-			}
-		]
-	}
-	{
-		x: 2
-		z: 8
-		tags: [
-			door_key
-		]
-		tiles: [
-			{
-				type: DoorVerticalTile
-			}
-			{
-				type: FloorTile
-			}
-		]
-	}
-	{
-		x: 2
-		z: 9
-		tiles: [
-			{
-				type: CornerWNTile
-			}
-			{
-				type: CornerNETile
-			}
-			{
-				type: FloorTile
-			}
-		]
-	}
-	{
-		x: 3
-		tiles: [
-			{
-				type: FloorTile
-			}
-			{
-				type: WallHorizontalTile
-			}
-		]
-	}
-	{
-		x: 3
-		z: 1
+		y: 6
 		tiles: [
 			{
 				type: FloorTile
@@ -360,7 +184,6 @@ nodes: [
 	}
 	{
 		x: 3
-		z: 2
 		tiles: [
 			{
 				type: FloorTile
@@ -369,7 +192,7 @@ nodes: [
 	}
 	{
 		x: 3
-		z: 3
+		y: 1
 		tiles: [
 			{
 				type: FloorTile
@@ -378,19 +201,7 @@ nodes: [
 	}
 	{
 		x: 3
-		z: 4
-		tiles: [
-			{
-				type: FloorTile
-			}
-			{
-				type: WallHorizontalTile
-			}
-		]
-	}
-	{
-		x: 3
-		z: 5
+		y: 2
 		tiles: [
 			{
 				type: FloorTile
@@ -399,24 +210,7 @@ nodes: [
 	}
 	{
 		x: 3
-		z: 6
-		tiles: [
-			{
-				type: FloorTile
-			}
-		]
-		items: [
-			{
-				id: 0debdc72-67c5-449b-a52f-eb76431df2b0
-				type: Key
-				color: ff0000ff
-				name: Red Key
-			}
-		]
-	}
-	{
-		x: 3
-		z: 7
+		y: 3
 		tiles: [
 			{
 				type: FloorTile
@@ -425,7 +219,7 @@ nodes: [
 	}
 	{
 		x: 3
-		z: 8
+		y: 4
 		tiles: [
 			{
 				type: FloorTile
@@ -434,11 +228,17 @@ nodes: [
 	}
 	{
 		x: 3
-		z: 9
+		y: 5
 		tiles: [
 			{
-				type: WallHorizontalTile
+				type: FloorTile
 			}
+		]
+	}
+	{
+		x: 3
+		y: 6
+		tiles: [
 			{
 				type: FloorTile
 			}
@@ -450,69 +250,12 @@ nodes: [
 			{
 				type: FloorTile
 			}
-			{
-				type: CornerESTile
-			}
 		]
 	}
 	{
 		x: 4
-		z: 1
+		y: 1
 		tiles: [
-			{
-				type: FloorTile
-			}
-			{
-				type: WallVerticalTile
-			}
-		]
-	}
-	{
-		x: 4
-		z: 2
-		tiles: [
-			{
-				type: FloorTile
-			}
-			{
-				type: WallVerticalTile
-			}
-		]
-	}
-	{
-		x: 4
-		z: 3
-		tiles: [
-			{
-				type: FloorTile
-			}
-			{
-				type: WallVerticalTile
-			}
-		]
-	}
-	{
-		x: 4
-		z: 4
-		tiles: [
-			{
-				type: FloorTile
-			}
-			{
-				type: CornerNETile
-			}
-			{
-				type: CornerESTile
-			}
-		]
-	}
-	{
-		x: 4
-		z: 5
-		tiles: [
-			{
-				type: WallVerticalTile
-			}
 			{
 				type: FloorTile
 			}
@@ -520,11 +263,8 @@ nodes: [
 	}
 	{
 		x: 4
-		z: 6
+		y: 2
 		tiles: [
-			{
-				type: WallVerticalTile
-			}
 			{
 				type: FloorTile
 			}
@@ -532,11 +272,8 @@ nodes: [
 	}
 	{
 		x: 4
-		z: 7
+		y: 3
 		tiles: [
-			{
-				type: WallVerticalTile
-			}
 			{
 				type: FloorTile
 			}
@@ -544,11 +281,8 @@ nodes: [
 	}
 	{
 		x: 4
-		z: 8
+		y: 4
 		tiles: [
-			{
-				type: WallVerticalTile
-			}
 			{
 				type: FloorTile
 			}
@@ -556,25 +290,21 @@ nodes: [
 	}
 	{
 		x: 4
-		z: 9
+		y: 5
 		tiles: [
-			{
-				type: CornerNETile
-			}
 			{
 				type: FloorTile
 			}
 		]
 	}
-]
-associations: [
 	{
-		sourceX: 2
-		sourceZ: 8
-		targetX: 3
-		targetZ: 6
-		type: key
-		data: Red Key
+		x: 4
+		y: 6
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
 	}
 ]
 }

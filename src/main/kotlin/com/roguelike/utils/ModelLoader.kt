@@ -31,7 +31,8 @@ class ModelLoader(val assetLoader: AssetLoader) {
     private fun getModelData(model: Model): Pair<Float, Vector3> {
         val box = BoundingBox()
         model.calculateBoundingBox(box)
-        val scale = 1.0f / box.width
+        val maxDim = maxOf(box.width, maxOf(box.height, box.depth))
+        val scale = if (maxDim > 0f) 1.0f / maxDim else 1.0f
         val center = Vector3()
         box.getCenter(center)
         return scale to center
@@ -40,7 +41,9 @@ class ModelLoader(val assetLoader: AssetLoader) {
     fun createFloorTile(): FloorTile {
         val model = assetLoader.loadModel("floor", "models/tiles/obj/floor_dirt_large.obj")
         val (scale, center) = getModelData(model)
-        return FloorTile(model, scale, center)
+        val tile = FloorTile(model, scale, center)
+        tile.zOffset = 0f   // floor sits at the node's Z plane (no extra displacement)
+        return tile
     }
 
     fun createWallHorizontalTile(): WallHorizontalTile {
@@ -52,7 +55,9 @@ class ModelLoader(val assetLoader: AssetLoader) {
     fun createWallVerticalTile(): WallVerticalTile {
         val model = assetLoader.loadModel("wall", "models/tiles/obj/wall.obj")
         val (scale, center) = getModelData(model)
-        return WallVerticalTile(model, scale, center)
+        val tile = WallVerticalTile(model, scale, center)
+        tile.rotationZ = 90f   // +90° around Z on top of TileRenderer base (effective 270°)
+        return tile
     }
 
     fun createDoorHorizontalTile(): DoorHorizontalTile {

@@ -13,81 +13,99 @@ import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer
 import com.badlogic.gdx.math.Vector2
 import com.badlogic.gdx.math.Vector3
+import com.badlogic.gdx.scenes.scene2d.Actor as S2DActor
+import com.badlogic.gdx.scenes.scene2d.InputEvent
 import com.badlogic.gdx.scenes.scene2d.Stage
+import com.badlogic.gdx.scenes.scene2d.Touchable
 import com.badlogic.gdx.scenes.scene2d.ui.*
 import com.badlogic.gdx.scenes.scene2d.utils.ChangeListener
+import com.badlogic.gdx.scenes.scene2d.utils.ClickListener
 import com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable
 import com.badlogic.gdx.utils.viewport.ScreenViewport
-import com.roguelike.utils.AssetLoader
+import com.kotcrab.vis.ui.VisUI
+import com.kotcrab.vis.ui.widget.*
+import com.kotcrab.vis.ui.widget.color.ColorPicker
 import com.roguelike.rendering.*
 import com.roguelike.serialization.WorldIO
 import com.roguelike.utils.*
 import com.roguelike.world.*
-import java.io.File
-import com.badlogic.gdx.utils.Json
-import com.badlogic.gdx.utils.SerializationException
-import com.badlogic.gdx.scenes.scene2d.Actor as S2DActor
-import com.badlogic.gdx.scenes.scene2d.Touchable
-import com.badlogic.gdx.scenes.scene2d.InputEvent
-import com.badlogic.gdx.scenes.scene2d.InputListener
-import com.badlogic.gdx.scenes.scene2d.utils.ClickListener
-import com.badlogic.gdx.utils.Array as GdxArray
-import java.util.ArrayList
+import ktx.scene2d.*
 
 class MapEditor(private val game: Game) : Screen {
     private lateinit var camera: PerspectiveCamera
     private lateinit var modelBatch: ModelBatch
     private lateinit var environment: Environment
     private lateinit var shapeRenderer: ShapeRenderer
-    
+
     private lateinit var assetLoader: AssetLoader
     private lateinit var modelLoader: ModelLoader
     private lateinit var world: World
-    
+
     private lateinit var stage: Stage
     private lateinit var skin: Skin
-    
+
     private val tileRenderer = TileRenderer()
     private lateinit var worldRenderer: WorldRenderer
     private lateinit var itemRenderer: ItemRenderer
-    
+
     private var showFrames = true
     private lateinit var frameModel: Model
     private lateinit var frameInstance: ModelInstance
     private lateinit var hoverFrameInstance: ModelInstance
     private lateinit var selectedFrameInstance: ModelInstance
-    
+    private lateinit var centerSphereModel: Model
+    private lateinit var centerSphereInstance: ModelInstance
+    private lateinit var tagSphereModel: Model
+    private lateinit var tagSphereInstance: ModelInstance
+    private lateinit var tagFont: BitmapFont
+    private lateinit var tagSpriteBatch: com.badlogic.gdx.graphics.g2d.SpriteBatch
+
     private var isDialogActive = false
     private var currentFilePath: String? = null
-    
-    private var maxRenderY = 0
+
+    private var maxRenderZ = 0
     private var hoveredX = -1
     private var hoveredY = -1
     private var hoveredZ = -1
-    
+
     private var selectedX = -1
     private var selectedY = -1
     private var selectedZ = -1
-    
-    // Camera control
-    private var cameraPitch = 0f
-    private var cameraYaw = 0f
-    private var cameraRoll = 0f
-    private var cameraDistance = 25f
+    // Tracks the last node painted in the current LMB press; resets on button release
+    private var lastPaintX = -1
+    private var lastPaintY = -1
+    private var lastPaintZ = -1
+    // Tracks the last node erased in the current Ctrl+LMB press; resets on button release
+    private var lastEraseX = -1
+    private var lastEraseY = -1
+    private var lastEraseZ = -1
 
-    private val cameraTarget = Vector3(5f, 5f, 0f)
-    
-    private val previewEnvironment = Environment().apply {
-        set(ColorAttribute(ColorAttribute.AmbientLight, 0.4f, 0.4f, 0.4f, 1f))
-        add(DirectionalLight().set(0.8f, 0.8f, 0.8f, -1f, -0.8f, -0.2f))
+    // Unified palette selection — only one item (tile, item, or tag) can be active at a time
+    private sealed class PaletteSelection {
+        data class Tile(val type: String) : PaletteSelection()
+        data class Item(val name: String, val color: Color) : PaletteSelection()
+        data class Tag(val tag: String) : PaletteSelection()
     }
-    private val previewCamera = PerspectiveCamera(67f, 100f, 100f).apply {
-        position.set(1.2f, 1.2f, 1.2f)
-        lookAt(0f, 0f, 0f)
-        near = 0.1f
-        far = 100f
-        update()
-    }
+    private var paletteSelection: PaletteSelection? = null
+
+    // Camera control
+    private var cameraDistance = 20f
+
+    private val cameraTarget = Vector3(0f, 0f, 0f)
+
+    private val previewEnvironment =
+            Environment().apply {
+                set(ColorAttribute(ColorAttribute.AmbientLight, 0.6f, 0.6f, 0.6f, 1f))
+                add(DirectionalLight().set(1.0f, 1.0f, 1.0f, -1f, -0.8f, -0.2f))
+            }
+    private val previewCamera =
+            PerspectiveCamera(67f, 100f, 100f).apply {
+                position.set(1.2f, 1.2f, 1.2f)
+                lookAt(0f, 0f, 0f)
+                near = 0.1f
+                far = 100f
+                update()
+            }
 
     private lateinit var xLabel: Label
     private lateinit var yLabel: Label
@@ -95,8 +113,18 @@ class MapEditor(private val game: Game) : Screen {
     private lateinit var layerLabel: Label
 
     private val tileContainers = HashMap<String, Table>()
+    private val itemContainers = HashMap<String, Table>()  // key = item name
 
     private val tagButtons = HashMap<String, TextButton>()
+    private var cameraPitch = 45f
+    private var cameraYaw = 0f
+    private lateinit var orientationGizmo: OrientationGizmo
+    private lateinit var rootTable: VisTable
+    private lateinit var viewportArea: VisTable
+    private var lastViewX = 0
+    private var lastViewY = 0
+    private var lastViewW = 0
+    private var lastViewH = 0
 
     override fun show() {
         modelBatch = ModelBatch()
@@ -105,28 +133,57 @@ class MapEditor(private val game: Game) : Screen {
         modelLoader = ModelLoader(assetLoader)
         itemRenderer = ItemRenderer(assetLoader)
         worldRenderer = WorldRenderer(tileRenderer, itemRenderer)
-        world = World(5, 1, 5)
-        WorldGenerator(world, modelLoader).generate()
-        maxRenderY = world.height - 1
+        world = World(1, 1, 1)
+        maxRenderZ = (world.depth - 1).coerceAtLeast(0)
+        cameraTarget.set(
+                (world.width / 2).toFloat(),
+                (world.height / 2).toFloat(),
+                (world.depth / 2).toFloat()
+        )
+
+        if (!VisUI.isLoaded()) VisUI.load()
         
-        camera = PerspectiveCamera(67f, Gdx.graphics.width.toFloat(), Gdx.graphics.height.toFloat())
+        camera = PerspectiveCamera(67f, 1f, 1f)
         camera.near = 0.1f
         camera.far = 1000f
         updateCamera()
 
+        orientationGizmo = OrientationGizmo(camera, modelBatch, shapeRenderer) {
+            cameraTarget.set((world.width / 2).toFloat(), (world.height / 2).toFloat(), (world.depth / 2).toFloat())
+            updateCamera()
+        }
+
         environment = Environment()
-        environment.set(ColorAttribute(ColorAttribute.AmbientLight, 0.4f, 0.4f, 0.4f, 1f))
-        environment.add(DirectionalLight().set(0.8f, 0.8f, 0.8f, -1f, -0.8f, -0.2f))
+        environment.set(ColorAttribute(ColorAttribute.AmbientLight, 0.6f, 0.6f, 0.6f, 1f))
+        environment.add(DirectionalLight().set(1.0f, 1.0f, 1.0f, -1f, -0.8f, -0.2f))
+
+        stage = Stage(ScreenViewport())
+        val scrollHandler = object : com.badlogic.gdx.InputAdapter() {
+            override fun scrolled(amountX: Float, amountY: Float): Boolean {
+                cameraDistance = (cameraDistance + amountY * 1.5f).coerceIn(2f, 100f)
+                updateCamera()
+                return true
+            }
+        }
+        Gdx.input.inputProcessor = com.badlogic.gdx.InputMultiplexer(scrollHandler, stage)
 
         createUI()
+        updatePaletteHighlights()
         createFrameModel()
     }
 
     private fun createFrameModel() {
         val modelBuilder = ModelBuilder()
         modelBuilder.begin()
-        val part = modelBuilder.part("frame", GL20.GL_LINES, (VertexAttributes.Usage.Position or VertexAttributes.Usage.ColorPacked).toLong(), Material())
-        
+        val part =
+                modelBuilder.part(
+                        "frame",
+                        GL20.GL_LINES,
+                        (VertexAttributes.Usage.Position or VertexAttributes.Usage.ColorPacked)
+                                .toLong(),
+                        Material()
+                )
+
         val size = 0.5f
         part.setColor(Color.WHITE)
         // Bottom square
@@ -134,344 +191,279 @@ class MapEditor(private val game: Game) : Screen {
         part.line(size, -size, -size, size, -size, size)
         part.line(size, -size, size, -size, -size, size)
         part.line(-size, -size, size, -size, -size, -size)
-        
+
         // Top square
         part.line(-size, size, -size, size, size, -size)
         part.line(size, size, -size, size, size, size)
         part.line(size, size, size, -size, size, size)
         part.line(-size, size, size, -size, size, -size)
-        
+
         // Vertical pillars
         part.line(-size, -size, -size, -size, size, -size)
         part.line(size, -size, -size, size, size, -size)
         part.line(size, -size, size, size, size, size)
         part.line(-size, -size, size, -size, size, size)
-        
+
         frameModel = modelBuilder.end()
         frameInstance = ModelInstance(frameModel)
-        
+
         hoverFrameInstance = ModelInstance(frameModel)
         hoverFrameInstance.materials.get(0).set(ColorAttribute.createDiffuse(Color.YELLOW))
-        
+
         selectedFrameInstance = ModelInstance(frameModel)
         selectedFrameInstance.materials.get(0).set(ColorAttribute.createDiffuse(Color.CYAN))
+
+        val sphereSize = 0.15f
+        centerSphereModel =
+                modelBuilder.createSphere(
+                        sphereSize,
+                        sphereSize,
+                        sphereSize,
+                        16,
+                        16,
+                        Material(ColorAttribute.createDiffuse(Color.RED)),
+                        (VertexAttributes.Usage.Position or VertexAttributes.Usage.Normal).toLong()
+                )
+        centerSphereInstance = ModelInstance(centerSphereModel)
+
+        // Tag indicator sphere (small white sphere rendered at node centre when tags are present)
+        val tagSphereSize = 0.22f
+        tagSphereModel = modelBuilder.createSphere(
+            tagSphereSize, tagSphereSize, tagSphereSize, 12, 12,
+            Material(ColorAttribute.createDiffuse(Color.WHITE)),
+            (VertexAttributes.Usage.Position or VertexAttributes.Usage.Normal).toLong()
+        )
+        tagSphereInstance = ModelInstance(tagSphereModel)
+
+        tagFont = BitmapFont()
+        tagFont.color = Color.WHITE
+        tagSpriteBatch = com.badlogic.gdx.graphics.g2d.SpriteBatch()
     }
 
     private fun createUI() {
-        stage = Stage(ScreenViewport())
-        Gdx.input.inputProcessor = stage
-        
-        skin = Skin()
-        val font = BitmapFont()
-        skin.add("default", font)
-        
-        val pixmap = Pixmap(1, 1, Pixmap.Format.RGBA8888)
-        pixmap.setColor(Color.WHITE)
-        pixmap.fill()
-        val texture = Texture(pixmap)
-        skin.add("white", texture)
-        
-        val labelStyle = Label.LabelStyle(font, Color.WHITE)
-        skin.add("default", labelStyle)
-        val textFieldStyle = TextField.TextFieldStyle(font, Color.BLACK, null, null, null)
-        textFieldStyle.background = skin.newDrawable("white", Color.DARK_GRAY)
-        
-        val textButtonStyle = TextButton.TextButtonStyle()
-        textButtonStyle.font = font
-        textButtonStyle.fontColor = Color.WHITE
-        textButtonStyle.up = skin.newDrawable("white", Color.GRAY)
-        textButtonStyle.over = skin.newDrawable("white", Color.LIGHT_GRAY)
-        textButtonStyle.down = skin.newDrawable("white", Color.DARK_GRAY)
-        textButtonStyle.checked = skin.newDrawable("white", Color.DARK_GRAY)
-        skin.add("default", textButtonStyle)
-        
-        val windowStyle = Window.WindowStyle(font, Color.WHITE, skin.newDrawable("white", Color.BLACK))
-        skin.add("default", windowStyle)
-        
-        val listStyle = com.badlogic.gdx.scenes.scene2d.ui.List.ListStyle(font, Color.YELLOW, Color.WHITE, skin.newDrawable("white", Color.BLACK))
-        skin.add("default", listStyle)
-        
-        val scrollPaneStyle = com.badlogic.gdx.scenes.scene2d.ui.ScrollPane.ScrollPaneStyle(skin.newDrawable("white", Color.DARK_GRAY), null, null, null, null)
-        skin.add("default", scrollPaneStyle)
+        rootTable = VisTable()
+        rootTable.setFillParent(true)
+        stage.addActor(rootTable)
 
-        // Menu Bar Table
-        val menuBar = Table()
-        menuBar.setFillParent(true)
-        menuBar.touchable = Touchable.childrenOnly
-        menuBar.top().left()
+        // ── Row 1: Top Menu Bar ──────────────────────────────────────────────
+        val menuBar = MenuBar()
+        rootTable.add(menuBar.table).fillX().expandX().top().row()
 
-        val newBtn = TextButton("New", textButtonStyle)
-        newBtn.addListener(object : ChangeListener() {
-            override fun changed(event: ChangeEvent, actor: S2DActor) {
-                newWorld()
-            }
-        })
-        
-        val openBtn = TextButton("Open", textButtonStyle)
-        openBtn.addListener(object : ChangeListener() {
-            override fun changed(event: ChangeEvent, actor: S2DActor) {
-                openWorld()
-            }
-        })
-        
-        val saveBtn = TextButton("Save", textButtonStyle)
-        saveBtn.addListener(object : ChangeListener() {
-            override fun changed(event: ChangeEvent, actor: S2DActor) {
-                saveWorld()
-            }
-        })
+        val fileMenu = Menu("File")
+        menuBar.addMenu(fileMenu)
+        fileMenu.addItem(MenuItem("New").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { newWorld() } }) })
+        fileMenu.addItem(MenuItem("Open").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { openWorld() } }) })
+        fileMenu.addItem(MenuItem("Save").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { saveWorld() } }) })
+        fileMenu.addItem(MenuItem("Exit").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { game.screen = MainMenuScreen(game) } }) })
 
-        val saveAsBtn = TextButton("Save As", textButtonStyle)
-        saveAsBtn.addListener(object : ChangeListener() {
-            override fun changed(event: ChangeEvent, actor: S2DActor) {
-                saveWorldAs()
-            }
-        })
-        
-        menuBar.add(Label(" FILE ", labelStyle)).pad(5f)
-        menuBar.add(newBtn).pad(2f)
-        menuBar.add(openBtn).pad(2f)
-        menuBar.add(saveBtn).pad(2f)
-        menuBar.add(saveAsBtn).pad(2f)
-        
-        // Dimensions
-        menuBar.add(Label(" | DIMENSIONS: ", labelStyle)).padLeft(20f)
-        
-        xLabel = Label(world.width.toString(), labelStyle)
-        yLabel = Label(world.height.toString(), labelStyle)
-        zLabel = Label(world.depth.toString(), labelStyle)
-        layerLabel = Label(maxRenderY.toString(), labelStyle)
+        // ── Row 2: Main Area ─────────────────────────────────────────────────
+        val mainRow = VisTable()
+        rootTable.add(mainRow).fill().expand().row()
 
-        // Removed local updateUI
-        
-        fun resize(nx: Int, ny: Int, nz: Int) {
-            val oldWorld = world
-            world = World(nx.coerceAtLeast(1), ny.coerceAtLeast(1), nz.coerceAtLeast(1))
-            
-            // Copy nodes from old world to new world
-            for (x in 0 until minOf(oldWorld.width, world.width)) {
-                for (y in 0 until minOf(oldWorld.height, world.height)) {
-                    for (z in 0 until minOf(oldWorld.depth, world.depth)) {
-                        val oldNode = oldWorld.getNode(x, y, z)!!
-                        val newNode = world.getNode(x, y, z)!!
-                        
-                        // Copy tiles
-                        newNode.tiles.addAll(oldNode.tiles)
-                        
-                        // Copy tags
-                        oldNode.tags.forEach { world.addTag(newNode, it) }
-                    }
-                }
-            }
+        // ── Left Tool Column ─────────────────────────────────────────────────
+        val toolColumn = VisTable()
+        toolColumn.background = VisUI.getSkin().getDrawable("window-bg")
+        toolColumn.top()
+        mainRow.add(toolColumn).width(60f).fillY()
 
-            maxRenderY = world.height - 1
-            cameraTarget.set(world.width / 2f, world.height / 2f, world.depth / 2f)
-            updateCamera()
-            updateUI()
+        val gridIconPath = "/Users/sarnaut/work/workspace/roguelike/src/main/resources/icons/view-grid-outline.png"
+        val gridIconFile = Gdx.files.absolute(gridIconPath)
+        val gridToggleStyle = ImageButton.ImageButtonStyle(VisUI.getSkin().get(ImageButton.ImageButtonStyle::class.java))
+        gridToggleStyle.up = VisUI.getSkin().newDrawable("white", Color.DARK_GRAY)
+        gridToggleStyle.checked = VisUI.getSkin().newDrawable("white", Color.valueOf("4444FF"))
+        if (gridIconFile.exists()) {
+            val gridTex = Texture(gridIconFile)
+            val d = TextureRegionDrawable(com.badlogic.gdx.graphics.g2d.TextureRegion(gridTex))
+            gridToggleStyle.imageUp = d; gridToggleStyle.imageChecked = d
         }
+        val gridToggle = ImageButton(gridToggleStyle)
+        gridToggle.isChecked = showFrames
+        gridToggle.addListener(object : ChangeListener() {
+            override fun changed(event: ChangeEvent, actor: com.badlogic.gdx.scenes.scene2d.Actor) {
+                showFrames = gridToggle.isChecked
+            }
+        })
+        toolColumn.add(gridToggle).size(48f).pad(8f).row()
 
-        // X
-        menuBar.add(Label("X:", labelStyle))
-        val xMinus = TextButton("-", textButtonStyle)
-        xMinus.addListener(object : ChangeListener() {
-            override fun changed(event: ChangeEvent, actor: S2DActor) {
-                resize(world.width - 1, world.height, world.depth)
-            }
-        })
-        val xPlus = TextButton("+", textButtonStyle)
-        xPlus.addListener(object : ChangeListener() {
-            override fun changed(event: ChangeEvent, actor: S2DActor) {
-                resize(world.width + 1, world.height, world.depth)
-            }
-        })
-        menuBar.add(xMinus).width(30f)
-        menuBar.add(xLabel).width(30f).center()
-        menuBar.add(xPlus).width(30f)
+        // ── Viewport | Palette: two plain cells, no draggable handle ─────────
 
-        // Y
-        menuBar.add(Label(" Y:", labelStyle))
-        val yMinus = TextButton("-", textButtonStyle)
-        yMinus.addListener(object : ChangeListener() {
-            override fun changed(event: ChangeEvent, actor: S2DActor) {
-                resize(world.width, world.height - 1, world.depth)
-            }
-        })
-        val yPlus = TextButton("+", textButtonStyle)
-        yPlus.addListener(object : ChangeListener() {
-            override fun changed(event: ChangeEvent, actor: S2DActor) {
-                resize(world.width, world.height + 1, world.depth)
-            }
-        })
-        menuBar.add(yMinus).width(30f)
-        menuBar.add(yLabel).width(30f).center()
-        menuBar.add(yPlus).width(30f)
+        // Left: viewport placeholder — 3D rendering fills this area via GL viewport
+        viewportArea = VisTable()
+        viewportArea.add(orientationGizmo).size(100f).top().left().pad(10f).expand().top().left()
+        mainRow.add(viewportArea).fill().expand()
 
-        // Z
-        menuBar.add(Label(" Z:", labelStyle))
-        val zMinus = TextButton("-", textButtonStyle)
-        zMinus.addListener(object : ChangeListener() {
-            override fun changed(event: ChangeEvent, actor: S2DActor) {
-                resize(world.width, world.height, world.depth - 1)
-            }
-        })
-        val zPlus = TextButton("+", textButtonStyle)
-        zPlus.addListener(object : ChangeListener() {
-            override fun changed(event: ChangeEvent, actor: S2DActor) {
-                resize(world.width, world.height, world.depth + 1)
-            }
-        })
-        menuBar.add(zMinus).width(30f)
-        menuBar.add(zLabel).width(30f).center()
-        menuBar.add(zPlus).width(30f)
-        
-        // Layer Picker
-        menuBar.add(Label(" | LAYER (Y): ", labelStyle)).padLeft(20f)
-        
-        val minusBtn = TextButton("-", textButtonStyle)
-        minusBtn.addListener(object : ChangeListener() {
-            override fun changed(event: ChangeEvent, actor: S2DActor) {
-                maxRenderY = (maxRenderY - 1).coerceAtLeast(0)
-                layerLabel.setText(maxRenderY.toString())
-            }
-        })
-        
-        val plusBtn = TextButton("+", textButtonStyle)
-        plusBtn.addListener(object : ChangeListener() {
-            override fun changed(event: ChangeEvent, actor: S2DActor) {
-                maxRenderY = (maxRenderY + 1).coerceAtMost(world.height - 1)
-                layerLabel.setText(maxRenderY.toString())
-            }
-        })
-        
-        menuBar.add(minusBtn).width(30f)
-        menuBar.add(layerLabel).width(30f).center()
-        menuBar.add(plusBtn).width(30f)
-        
-        // Toggle Frames
-        val frameBtn = TextButton("Toggle Frames", textButtonStyle)
-        frameBtn.addListener(object : ChangeListener() {
-            override fun changed(event: ChangeEvent, actor: S2DActor) {
-                showFrames = !showFrames
-            }
-        })
-        menuBar.add(frameBtn).padLeft(20f)
+        // Right: scrollable palette (fixed width, no split-pane handle intercepting clicks)
+        val paletteContent = VisTable()
+        paletteContent.top()
+        val paletteScroll = VisScrollPane(paletteContent)
+        paletteScroll.setFadeScrollBars(false)
+        paletteScroll.setScrollingDisabled(true, false)
+        paletteScroll.setCancelTouchFocus(false)  // allow child ClickListeners to receive touchUp
+        mainRow.add(paletteScroll).width(260f).fillY()
 
-        val exitBtn = TextButton("Exit", textButtonStyle)
-        exitBtn.addListener(object : ChangeListener() {
-            override fun changed(event: ChangeEvent, actor: S2DActor) {
-                game.screen = MainMenuScreen(game)
-            }
-        })
-        menuBar.add(exitBtn).padLeft(20f)
-        
-        stage.addActor(menuBar)
-        
-        createSidePanel()
-    }
-
-
-    private fun createSidePanel() {
-        val root = Table()
-        root.setFillParent(true)
-        root.right()
-        
-        val panel = Table()
-        panel.background = skin.newDrawable("white", Color.BLACK)
-        panel.pad(10f)
-        
-        val scrollTable = Table()
-        val scrollPane = ScrollPane(scrollTable, skin)
-        panel.add(scrollPane).width(200f).fillY().expandY()
-        
-        root.add(panel).fillY().expandY()
-        stage.addActor(root)
-
-        // Palette tabs
-        scrollTable.add(Label("TILES", skin)).pad(10f).row()
-
-        val tileTypes = listOf(
-            FloorTile.TYPE,
-            WallHorizontalTile.TYPE,
-            WallVerticalTile.TYPE,
-            DoorHorizontalTile.TYPE,
-            DoorVerticalTile.TYPE,
-            ToggleTile.TYPE,
-            CornerNETile.TYPE,
-            CornerESTile.TYPE,
-            CornerSWTile.TYPE,
-            CornerWNTile.TYPE
+        // ── Palette: Tiles (grouped) ─────────────────────────────────────────
+        val tileGroups = listOf(
+            "Floors"      to listOf(FloorTile.TYPE),
+            "Walls"       to listOf(WallHorizontalTile.TYPE, WallVerticalTile.TYPE,
+                                    CornerNETile.TYPE, CornerESTile.TYPE,
+                                    CornerSWTile.TYPE, CornerWNTile.TYPE),
+            "Doors"       to listOf(DoorHorizontalTile.TYPE, DoorVerticalTile.TYPE),
+            "Interaction" to listOf(ToggleTile.TYPE)
         )
 
-        tileTypes.forEach { type ->
-            val tile = modelLoader.createTile(type)!!
-            val container = Table()
-            container.add(TilePreviewActor(tile)).size(64f).pad(5f)
-            container.add(Label(type.removeSuffix("Tile"), skin))
-            
-            container.addListener(object : ClickListener() {
-                override fun clicked(event: InputEvent, x: Float, y: Float) {
-                    applyTileToSelection(tile)
+        fun addTileGroup(groupName: String, types: List<String>) {
+            paletteContent.addSeparator().padTop(6f).padBottom(2f)
+            paletteContent.add(VisLabel(groupName)).padLeft(8f).padBottom(2f).left().row()
+            val grid = VisTable()
+            paletteContent.add(grid).fillX().expandX().row()
+            types.forEachIndexed { index, type ->
+                val tile = modelLoader.createTile(type)!!
+                val container = SelectionBorderGroup {
+                    paletteSelection.let { it is PaletteSelection.Tile && it.type == type }
                 }
-            })
-            
-            scrollTable.add(container).fillX().row()
-            tileContainers[type] = container
+                container.add(TilePreviewActor(tile)).size(64f).pad(5f).row()
+                container.add(VisLabel(type.removeSuffix("Tile"))).expandX().center()
+                container.addListener(object : ClickListener() {
+                    override fun clicked(event: InputEvent, x: Float, y: Float) {
+                        val sel = PaletteSelection.Tile(type)
+                        paletteSelection = if (paletteSelection == sel) null else sel
+                        refreshPaletteHighlights()
+                        val state = if (paletteSelection != null) "selected" else "deselected"
+                        Gdx.app.log("Palette", "Tile $state: $type")
+                    }
+                })
+                grid.add(container).pad(5f)
+                if ((index + 1) % 3 == 0) grid.row()
+                tileContainers[type] = container
+            }
         }
 
-        scrollTable.add(Label("ITEMS", skin)).pad(10f).row()
+        paletteContent.add(VisLabel("TILES")).pad(10f).row()
+        tileGroups.forEach { (name, types) -> addTileGroup(name, types) }
+
+        // ── Palette: Items ───────────────────────────────────────────────────
+        paletteContent.addSeparator().padTop(10f).padBottom(4f)
+        paletteContent.add(VisLabel("ITEMS")).pad(10f).row()
+        val itemsGrid = VisTable()
+        paletteContent.add(itemsGrid).fillX().expandX().row()
+
         val items = listOf(
-            Triple(Color.BLUE, "Blue Key", "Key"),
+            Triple(Color.BLUE,  "Blue Key",  "Key"),
             Triple(Color.GREEN, "Green Key", "Key"),
-            Triple(Color.RED, "Red Key", "Key")
+            Triple(Color.RED,   "Red Key",   "Key")
         )
-        
-        items.forEach { (color, name, type) ->
-            val container = Table()
-            // Using a simple color preview for items in editor palette for now
-            val preview = Image(skin.getDrawable("white"))
+        items.forEachIndexed { index, (color, name, _) ->
+            val container = SelectionBorderGroup {
+                paletteSelection.let { it is PaletteSelection.Item && it.name == name }
+            }
+            val preview = Image(VisUI.getSkin().getDrawable("white"))
             preview.color = color
-            container.add(preview).size(32f).pad(5f)
-            container.add(Label(name, skin))
-            
+            container.add(preview).size(32f).pad(5f).row()
+            container.add(VisLabel(name)).expandX().center()
             container.addListener(object : ClickListener() {
                 override fun clicked(event: InputEvent, x: Float, y: Float) {
-                    val node = world.getNode(selectedX, selectedY, selectedZ)
-                    if (tapCount >= 2) {
-                        node?.items?.removeIf { it is KeyItem }
-                        world.associations.removeIf { it.target == node && it.type == "key" }
-                        Gdx.app.log("Editor", "Removed keys and associations from ($selectedX, $selectedY, $selectedZ)")
-                    } else {
-                        node?.items?.clear()
-                        node?.items?.add(KeyItem(color = color, name = name))
-                        Gdx.app.log("Editor", "Added $name to ($selectedX, $selectedY, $selectedZ)")
-                    }
+                    val sel = PaletteSelection.Item(name, color)
+                    paletteSelection = if (paletteSelection == sel) null else sel
+                    refreshPaletteHighlights()
+                    val state = if (paletteSelection != null) "selected" else "deselected"
+                    Gdx.app.log("Palette", "Item $state: $name")
                 }
             })
-            scrollTable.add(container).fillX().row()
+            itemsGrid.add(container).pad(5f)
+            if ((index + 1) % 3 == 0) itemsGrid.row()
+            itemContainers[name] = container
         }
 
-        scrollTable.add(Label("TAGS", skin)).pad(10f).row()
+        // ── Palette: Tags ────────────────────────────────────────────────────
+        paletteContent.addSeparator().padTop(10f).padBottom(4f)
+        paletteContent.add(VisLabel("TAGS")).pad(10f).row()
         val tags = listOf(
-            WorldNode.Tags.PLAYER_SPAWN,
-            WorldNode.Tags.ENEMY_SPAWN,
-            WorldNode.Tags.ITEM_SPAWN,
-            WorldNode.Tags.EXIT,
-            WorldNode.Tags.DOOR_MANUAL,
-            WorldNode.Tags.DOOR_KEY,
-            WorldNode.Tags.DOOR_TOGGLE,
-            WorldNode.Tags.TOGGLE
+            WorldNode.Tags.PLAYER_SPAWN, WorldNode.Tags.ENEMY_SPAWN,
+            WorldNode.Tags.ITEM_SPAWN,   WorldNode.Tags.EXIT,
+            WorldNode.Tags.DOOR_MANUAL,  WorldNode.Tags.DOOR_KEY,
+            WorldNode.Tags.DOOR_TOGGLE,  WorldNode.Tags.TOGGLE
         )
-
         tags.forEach { tag ->
-            val btn = TextButton(tag, skin)
+            val btn = VisTextButton(tag, "toggle")
             btn.addListener(object : ClickListener() {
                 override fun clicked(event: InputEvent, x: Float, y: Float) {
-                    toggleTag(tag)
+                    val sel = PaletteSelection.Tag(tag)
+                    paletteSelection = if (paletteSelection == sel) null else sel
+                    refreshPaletteHighlights()
+                    val state = if (paletteSelection != null) "selected" else "deselected"
+                    Gdx.app.log("Palette", "Tag $state: $tag")
                 }
             })
-            scrollTable.add(btn).fillX().pad(2f).row()
+            val tagContainer = SelectionBorderGroup {
+                paletteSelection.let { it is PaletteSelection.Tag && it.tag == tag }
+            }
+            tagContainer.add(btn).fillX()
+            paletteContent.add(tagContainer).fillX().pad(2f).row()
             tagButtons[tag] = btn
         }
+
+        // ── Row 3: Bottom Status Bar ─────────────────────────────────────────
+        val bottomBar = VisTable()
+        bottomBar.background = VisUI.getSkin().getDrawable("window-bg")
+        rootTable.add(bottomBar).fillX().height(40f).row()
+
+        bottomBar.add(VisLabel("X:")).padLeft(10f)
+        xLabel = VisLabel(world.width.toString())
+        yLabel = VisLabel(world.height.toString())
+        zLabel = VisLabel(world.depth.toString())
+
+        fun mkBtn(label: String, action: () -> Unit) = VisTextButton(label).also {
+            it.addListener(object : ChangeListener() {
+                override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { action() }
+            })
+        }
+
+        bottomBar.add(mkBtn("-") { resize(world.width - 1, world.height, world.depth) }).width(28f)
+        bottomBar.add(xLabel).width(28f).center()
+        bottomBar.add(mkBtn("+") { resize(world.width + 1, world.height, world.depth) }).width(28f)
+
+        bottomBar.add(VisLabel("  Y:")).padLeft(10f)
+        bottomBar.add(mkBtn("-") { resize(world.width, world.height - 1, world.depth) }).width(28f)
+        bottomBar.add(yLabel).width(28f).center()
+        bottomBar.add(mkBtn("+") { resize(world.width, world.height + 1, world.depth) }).width(28f)
+
+        bottomBar.add(VisLabel("  Z:")).padLeft(10f)
+        bottomBar.add(mkBtn("-") { resize(world.width, world.height, world.depth - 1) }).width(28f)
+        bottomBar.add(zLabel).width(28f).center()
+        bottomBar.add(mkBtn("+") { resize(world.width, world.height, world.depth + 1) }).width(28f)
+
+        bottomBar.add(VisLabel("  Layer:")).padLeft(20f)
+        layerLabel = VisLabel(maxRenderZ.toString())
+        bottomBar.add(mkBtn("-") {
+            maxRenderZ = (maxRenderZ - 1).coerceAtLeast(0)
+            layerLabel.setText(maxRenderZ.toString())
+        }).width(28f)
+        bottomBar.add(layerLabel).width(28f).center()
+        bottomBar.add(mkBtn("+") {
+            maxRenderZ = (maxRenderZ + 1).coerceAtMost(world.depth - 1)
+            layerLabel.setText(maxRenderZ.toString())
+        }).width(28f)
+    }
+
+    private fun resize(nx: Int, ny: Int, nz: Int) {
+        val oldWorld = world
+        world = World(nx.coerceAtLeast(1), ny.coerceAtLeast(1), nz.coerceAtLeast(1))
+        for (x in 0 until minOf(oldWorld.width, world.width)) {
+            for (y in 0 until minOf(oldWorld.height, world.height)) {
+                for (z in 0 until minOf(oldWorld.depth, world.depth)) {
+                    val oldNode = oldWorld.getNode(x, y, z)!!
+                    val newNode = world.getNode(x, y, z)!!
+                    newNode.tiles.addAll(oldNode.tiles)
+                    oldNode.tags.forEach { world.addTag(newNode, it) }
+                }
+            }
+        }
+        maxRenderZ = world.depth - 1
+        xLabel.setText(world.width.toString())
+        yLabel.setText(world.height.toString())
+        zLabel.setText(world.depth.toString())
+        layerLabel.setText(maxRenderZ.toString())
+        updateCamera()
     }
 
     private fun toggleTag(tag: String) {
@@ -484,80 +476,117 @@ class MapEditor(private val game: Game) : Screen {
         updatePaletteHighlights()
     }
 
-    private fun updatePaletteHighlights() {
-        val node = world.getNode(selectedX, selectedY, selectedZ) ?: return
-        
-        tileContainers.forEach { (type, table) ->
-            val hasTile = node.tiles.any { it.type == type }
-            table.background = if (hasTile) skin.newDrawable("white", Color.DARK_GRAY) else null
-        }
-        
+    // Refresh palette border highlights to reflect the current paletteSelection (radio-style)
+    private fun refreshPaletteHighlights() {
+        // SelectionBorderGroup instances draw their own cyan border via isSelected lambda.
+        // Only tag button checked-state needs explicit updating here.
+        val sel = paletteSelection
         tagButtons.forEach { (tag, btn) ->
-            btn.isChecked = node.tags.contains(tag)
+            btn.isChecked = sel is PaletteSelection.Tag && sel.tag == tag
         }
     }
 
-    private fun applyTileToSelection(tile: Tile) {
-        val node = world.getNode(selectedX, selectedY, selectedZ) ?: return
-        
-        // Toggle logic: if already has it, remove it. If different of same category, replace.
-        val existing = node.tiles.find { it.type == tile.type }
-        if (existing != null) {
-            node.tiles.remove(existing)
-        } else {
-            // Remove other tiles of same "base" type if desired? 
-            // For now just add multiple.
-            node.tiles.add(modelLoader.createTile(tile.type)!!)
+    // Update palette highlights based on the SELECTED WORLD NODE's content (dark-gray = node has it)
+    private fun updatePaletteHighlights() {
+        val node = world.getNode(selectedX, selectedY, selectedZ)
+        if (node == null) { refreshPaletteHighlights(); return }
+        val sel = paletteSelection
+        // SelectionBorderGroup draws cyan border automatically; only set dark-gray for "node has tile" state
+        val darkGray = VisUI.getSkin().newDrawable("white", Color.DARK_GRAY)
+        tileContainers.forEach { (type, table) ->
+            table.background = if (node.tiles.any { it.type == type } &&
+                                   !(sel is PaletteSelection.Tile && sel.type == type)) darkGray
+                               else null
         }
-        updatePaletteHighlights()
+        // Tag button checked = node has tag OR tag is the active selection
+        tagButtons.forEach { (tag, btn) ->
+            btn.isChecked = (sel is PaletteSelection.Tag && sel.tag == tag) || node.tags.contains(tag)
+        }
     }
 
     inner class TilePreviewActor(val tile: Tile) : S2DActor() {
+        init { touchable = Touchable.disabled }  // clicks fall through to the container's listener
         override fun draw(batch: com.badlogic.gdx.graphics.g2d.Batch, parentAlpha: Float) {
-            batch.end()
-            
-            val screenPos = localToStageCoordinates(Vector2(0f, 0f))
-            // Correct for stage scale and backbuffer (Retina/High-DPI)
-            val stage = stage
-            val x = screenPos.x * (Gdx.graphics.backBufferWidth.toFloat() / stage.width)
-            val y = screenPos.y * (Gdx.graphics.backBufferHeight.toFloat() / stage.height)
-            val w = width * (Gdx.graphics.backBufferWidth.toFloat() / stage.width)
-            val h = height * (Gdx.graphics.backBufferHeight.toFloat() / stage.height)
+            // Save scissor state so the ScrollPane's clipping is preserved after our GL work
+            val scissorWasEnabled = Gdx.gl.glIsEnabled(GL20.GL_SCISSOR_TEST)
+            val scissorBox = com.badlogic.gdx.utils.BufferUtils.newIntBuffer(4)  // must be direct for glGetIntegerv
+            Gdx.gl20.glGetIntegerv(GL20.GL_SCISSOR_BOX, scissorBox)
 
-            Gdx.gl.glViewport(x.toInt(), y.toInt(), w.toInt(), h.toInt())
-            
+            batch.end()
+            val screenPos = localToStageCoordinates(Vector2(0f, 0f))
+            val bx = screenPos.x * (Gdx.graphics.backBufferWidth.toFloat() / stage.width)
+            val by = screenPos.y * (Gdx.graphics.backBufferHeight.toFloat() / stage.height)
+            val bw = width * (Gdx.graphics.backBufferWidth.toFloat() / stage.width)
+            val bh = height * (Gdx.graphics.backBufferHeight.toFloat() / stage.height)
+            Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST)
+            Gdx.gl.glViewport(bx.toInt(), by.toInt(), bw.toInt(), bh.toInt())
             modelBatch.begin(previewCamera)
             tileRenderer.render(tile, modelBatch, previewEnvironment, 0f, 0f, 0f, ignoreYRotation = true)
             modelBatch.end()
-            
             Gdx.gl.glViewport(0, 0, Gdx.graphics.backBufferWidth, Gdx.graphics.backBufferHeight)
-            
+            // Restore scissor
+            if (scissorWasEnabled) {
+                Gdx.gl.glEnable(GL20.GL_SCISSOR_TEST)
+                Gdx.gl.glScissor(scissorBox[0], scissorBox[1], scissorBox[2], scissorBox[3])
+            } else {
+                Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST)
+            }
             batch.begin()
         }
     }
 
-    private fun updateUI() {
-        if (!::xLabel.isInitialized) return
-        xLabel.setText(world.width.toString())
-        yLabel.setText(world.height.toString())
-        zLabel.setText(world.depth.toString())
-        layerLabel.setText(maxRenderY.toString())
+    /**
+     * A VisTable wrapper that draws a 3-pixel cyan border frame around its entire bounds
+     * after all children have been drawn. The border appears on top of any 3D GL content
+     * rendered by child TilePreviewActors because it draws via the sprite batch after
+     * super.draw() returns.
+     */
+    inner class SelectionBorderGroup(val isSelected: () -> Boolean) : VisTable() {
+        init { touchable = Touchable.enabled }
+        override fun draw(batch: com.badlogic.gdx.graphics.g2d.Batch, parentAlpha: Float) {
+            super.draw(batch, parentAlpha)  // draws background + all children (including 3D previews)
+            if (isSelected()) {
+                val d = VisUI.getSkin().getDrawable("white")
+                val bord = 3f
+                batch.setColor(Color.CYAN)
+                d.draw(batch, x, y,              width, bord)           // bottom edge
+                d.draw(batch, x, y + height - bord, width, bord)       // top edge
+                d.draw(batch, x, y,              bord,  height)          // left edge
+                d.draw(batch, x + width - bord,  y,     bord,  height)   // right edge
+                batch.setColor(Color.WHITE)
+            }
+        }
+    }
+
+    private fun wrapAngle(angle: Float): Float {
+        var a = angle
+        while (a <= -180f) a += 360f
+        while (a > 180f) a -= 360f
+        return a
     }
 
     private fun updateCamera() {
-        camera.position.set(cameraTarget.x, cameraTarget.y, cameraTarget.z + cameraDistance)
-        camera.up.set(0f, 1f, 0f)
+        val pitchRad = Math.toRadians(cameraPitch.toDouble()).toFloat()
+        val yawRad = Math.toRadians(cameraYaw.toDouble()).toFloat()
+        val offsetX = cameraDistance * Math.cos(pitchRad.toDouble()).toFloat() * Math.sin(yawRad.toDouble()).toFloat()
+        val offsetZ = cameraDistance * Math.cos(pitchRad.toDouble()).toFloat() * Math.cos(yawRad.toDouble()).toFloat()
+        val offsetY = cameraDistance * Math.sin(pitchRad.toDouble()).toFloat()
+        camera.position.set(cameraTarget.x + offsetX, cameraTarget.y + offsetY, cameraTarget.z + offsetZ)
+        val isUpsideDown = Math.abs(cameraPitch) > 90f
+        camera.up.set(0f, if (isUpsideDown) -1f else 1f, 0f)
         camera.lookAt(cameraTarget)
         camera.update()
     }
 
     private fun newWorld() {
-        world = World(10, 1, 10)
-        maxRenderY = 0
+        world = World(1, 1, 1)
+        maxRenderZ = (world.depth - 1).coerceAtLeast(0)
         currentFilePath = null
-        cameraTarget.set(5f, 0f, 5f)
+        selectedX = -1
+        selectedY = -1
+        selectedZ = -1
+        cameraTarget.set((world.width / 2f), (world.height / 2f), (world.depth / 2f))
         updateCamera()
-        updateUI()
     }
 
     private fun openWorld() {
@@ -566,17 +595,19 @@ class MapEditor(private val game: Game) : Screen {
         Thread {
             try {
                 val path = PlatformUtils.chooseFile("wld")
-                
                 path?.let { filePath ->
                     val loadedWorld = WorldIO.loadWorld(filePath, { w, h, d -> World(w, h, d) }, { type -> modelLoader.createTile(type) })
                     if (loadedWorld != null) {
                         Gdx.app.postRunnable {
                             world = loadedWorld
                             currentFilePath = filePath
-                            maxRenderY = world.height - 1
+                            maxRenderZ = world.depth - 1
+                            xLabel.setText(world.width.toString())
+                            yLabel.setText(world.height.toString())
+                            zLabel.setText(world.depth.toString())
+                            layerLabel.setText(maxRenderZ.toString())
                             cameraTarget.set(world.width / 2f, world.height / 2f, world.depth / 2f)
                             updateCamera()
-                            updateUI()
                         }
                     }
                 }
@@ -588,11 +619,7 @@ class MapEditor(private val game: Game) : Screen {
 
     private fun saveWorld() {
         val path = currentFilePath
-        if (path == null) {
-            saveWorldAs()
-        } else {
-            WorldIO.saveWorld(path, world)
-        }
+        if (path == null) saveWorldAs() else WorldIO.saveWorld(path, world)
     }
 
     private fun saveWorldAs() {
@@ -601,16 +628,11 @@ class MapEditor(private val game: Game) : Screen {
         Thread {
             try {
                 val path = PlatformUtils.chooseFileName("world.wld")
-                
                 path?.let { filePath ->
                     var finalPath = filePath
-                    if (!finalPath.endsWith(".wld")) {
-                        finalPath += ".wld"
-                    }
+                    if (!finalPath.endsWith(".wld")) finalPath += ".wld"
                     WorldIO.saveWorld(finalPath, world)
-                    Gdx.app.postRunnable {
-                        currentFilePath = finalPath
-                    }
+                    Gdx.app.postRunnable { currentFilePath = finalPath }
                 }
             } finally {
                 isDialogActive = false
@@ -621,172 +643,347 @@ class MapEditor(private val game: Game) : Screen {
     override fun render(delta: Float) {
         handleInput(delta)
         updateHover()
-        
-        Gdx.gl.glClearColor(0.2f, 0.2f, 0.2f, 1f)
-        Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT or GL20.GL_DEPTH_BUFFER_BIT)
-        
-        modelBatch.begin(camera)
-        worldRenderer.render(world, modelBatch, environment, maxRenderY)
-        
-        if (showFrames) {
-            // Render wireframe boxes for each node
-            for (x in 0 until world.width) {
-                for (y in 0..maxRenderY.coerceAtMost(world.height - 1)) {
-                    for (z in 0 until world.depth) {
-                        val isSelected = x == selectedX && y == selectedY && z == selectedZ
-                        val isHovered = x == hoveredX && y == hoveredY && z == hoveredZ
-                        
-                        val instance = when {
-                            isSelected -> selectedFrameInstance
-                            isHovered -> hoverFrameInstance
-                            else -> frameInstance
-                        }
-                        
-                        instance.transform.setToTranslation(x.toFloat(), y.toFloat(), z.toFloat())
-                        
-                        if (isSelected || isHovered) {
-                            modelBatch.flush()
-                            Gdx.gl.glLineWidth(3f)
-                            modelBatch.render(instance, environment)
-                            modelBatch.flush()
-                            Gdx.gl.glLineWidth(1f)
-                        } else {
-                            modelBatch.render(instance, environment)
+
+
+        val bw = Gdx.graphics.backBufferWidth.toFloat()
+        val bh = Gdx.graphics.backBufferHeight.toFloat()
+        val ratioX = bw / stage.width
+        val ratioY = bh / stage.height
+
+        // Calculate 3D viewport in backbuffer pixels
+        val screenPos = viewportArea.localToStageCoordinates(Vector2(0f, 0f))
+        val viewX = (screenPos.x * ratioX).toInt()
+        val viewY = (screenPos.y * ratioY).toInt()
+        val viewW = (viewportArea.width * ratioX).toInt()
+        val viewH = (viewportArea.height * ratioY).toInt()
+
+        lastViewX = viewX; lastViewY = viewY; lastViewW = viewW; lastViewH = viewH
+
+        // ── Clear full screen for UI background ──────────────────────────────
+        Gdx.gl.glViewport(0, 0, bw.toInt(), bh.toInt())
+        Gdx.gl.glClearColor(0.15f, 0.15f, 0.15f, 1f)
+        Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT)
+
+        if (viewW > 0 && viewH > 0) {
+            // ── Scissor + viewport constrained to viewportArea ────────────────
+            Gdx.gl.glEnable(GL20.GL_SCISSOR_TEST)
+            Gdx.gl.glScissor(viewX, viewY, viewW, viewH)
+            Gdx.gl.glViewport(viewX, viewY, viewW, viewH)
+
+            // Clear ONLY the 3D area (colour + depth)
+            Gdx.gl.glClearColor(0.2f, 0.2f, 0.2f, 1f)
+            Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT or GL20.GL_DEPTH_BUFFER_BIT)
+
+            // Update camera to match this sub-viewport
+            camera.viewportWidth = viewW.toFloat()
+            camera.viewportHeight = viewH.toFloat()
+            camera.update()
+
+            // ── Render world ──────────────────────────────────────────────────
+            modelBatch.begin(camera)
+            worldRenderer.render(world, modelBatch, environment, maxRenderZ)
+
+            // ── Hover + selection indicators — always visible ─────────────────
+            if (hoveredX != -1) {
+                hoverFrameInstance.transform.setToTranslation(hoveredX.toFloat(), hoveredY.toFloat(), hoveredZ.toFloat())
+                modelBatch.render(hoverFrameInstance)
+            }
+            if (selectedX != -1) {
+                selectedFrameInstance.transform.setToTranslation(selectedX.toFloat(), selectedY.toFloat(), selectedZ.toFloat())
+                modelBatch.render(selectedFrameInstance)
+            }
+
+            // ── Full grid — only when grid toggle is on ───────────────────────
+            if (showFrames) {
+                for (x in 0 until world.width) {
+                    for (y in 0 until world.height) {
+                        for (z in 0..maxRenderZ.coerceAtMost(world.depth - 1)) {
+                            // skip: already rendered above
+                            if (x == selectedX && y == selectedY && z == selectedZ) continue
+                            if (x == hoveredX  && y == hoveredY  && z == hoveredZ)  continue
+                            frameInstance.transform.setToTranslation(x.toFloat(), y.toFloat(), z.toFloat())
+                            modelBatch.render(frameInstance)
                         }
                     }
                 }
             }
-        }
-        modelBatch.end()
+            modelBatch.end()
 
-        // Draw association lines
-        Gdx.gl.glEnable(GL20.GL_BLEND)
-        shapeRenderer.projectionMatrix = camera.combined
-        shapeRenderer.begin(ShapeRenderer.ShapeType.Line)
-        shapeRenderer.color = Color.YELLOW
-        world.associations.forEach { assoc ->
-            shapeRenderer.line(
-                assoc.source.x.toFloat(), assoc.source.y.toFloat(), assoc.source.z.toFloat(),
-                assoc.target.x.toFloat(), assoc.target.y.toFloat(), assoc.target.z.toFloat()
+            // ── Tag spheres — one per tagged node ────────────────────────────
+            modelBatch.begin(camera)
+            for (x in 0 until world.width) {
+                for (y in 0 until world.height) {
+                    for (z in 0..maxRenderZ.coerceAtMost(world.depth - 1)) {
+                        val node = world.getNode(x, y, z) ?: continue
+                        if (node.tags.isEmpty()) continue
+                        tagSphereInstance.transform.setToTranslation(x.toFloat(), y.toFloat(), z.toFloat())
+                        modelBatch.render(tagSphereInstance, environment)
+                    }
+                }
+            }
+            modelBatch.end()
+
+            // ── Tag text labels — projected to viewport 2D ────────────────────
+            // Project each tagged node's world position to viewport pixel coords.
+            val projPos = Vector3()
+            tagSpriteBatch.setProjectionMatrix(
+                com.badlogic.gdx.math.Matrix4().setToOrtho2D(0f, 0f, viewW.toFloat(), viewH.toFloat())
             )
+            tagSpriteBatch.begin()
+            for (x in 0 until world.width) {
+                for (y in 0 until world.height) {
+                    for (z in 0..maxRenderZ.coerceAtMost(world.depth - 1)) {
+                        val node = world.getNode(x, y, z) ?: continue
+                        if (node.tags.isEmpty()) continue
+                        // Project world position slightly above the sphere
+                        projPos.set(x.toFloat(), y.toFloat() + 0.45f, z.toFloat())
+                        camera.project(projPos, 0f, 0f, viewW.toFloat(), viewH.toFloat())
+                        if (projPos.z in 0f..1f) {
+                            val label = node.tags.joinToString("\n")
+                            tagFont.draw(tagSpriteBatch, label, projPos.x - 30f, projPos.y + 4f)
+                        }
+                    }
+                }
+            }
+            tagSpriteBatch.end()
+
+            // ── Association lines ─────────────────────────────────────────────
+            Gdx.gl.glEnable(GL20.GL_BLEND)
+            shapeRenderer.projectionMatrix = camera.combined
+            shapeRenderer.begin(com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType.Line)
+            shapeRenderer.color = Color.CYAN
+            world.associations.forEach { assoc ->
+                shapeRenderer.line(
+                    assoc.source.x.toFloat(), assoc.source.y.toFloat(), assoc.source.z.toFloat(),
+                    assoc.target.x.toFloat(), assoc.target.y.toFloat(), assoc.target.z.toFloat()
+                )
+            }
+            shapeRenderer.end()
+
+            // ── 2D crosshair at viewport centre (= rotation pivot) ────────────
+            val cx = viewW / 2f
+            val cy = viewH / 2f
+            val crossSize = 12f
+            val ortho = com.badlogic.gdx.math.Matrix4().setToOrtho2D(0f, 0f, viewW.toFloat(), viewH.toFloat())
+            shapeRenderer.projectionMatrix = ortho
+            shapeRenderer.begin(com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType.Line)
+            shapeRenderer.color = Color(1f, 1f, 1f, 0.8f)
+            shapeRenderer.line(cx - crossSize, cy, cx + crossSize, cy)
+            shapeRenderer.line(cx, cy - crossSize, cx, cy + crossSize)
+            shapeRenderer.end()
+            Gdx.gl.glDisable(GL20.GL_BLEND)
+
+            // ── Done with 3D — remove scissor, restore full viewport ──────────
+            Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST)
+            Gdx.gl.glViewport(0, 0, bw.toInt(), bh.toInt())
         }
-        shapeRenderer.end()
-        
+
+        // ── Draw Stage UI on top ──────────────────────────────────────────────
         stage.act(delta)
         stage.draw()
     }
 
     private fun updateHover() {
-        if (stage.hit(Gdx.input.x.toFloat(), (Gdx.graphics.height - Gdx.input.y).toFloat(), true) != null) {
-            hoveredX = -1
-            return
+        val scaleX = Gdx.graphics.backBufferWidth.toFloat() / Gdx.graphics.width
+        val scaleY = Gdx.graphics.backBufferHeight.toFloat() / Gdx.graphics.height
+
+        // Bounds check in backbuffer pixels (lastViewX/Y/W/H are in backbuffer space)
+        val mouseXPx = Gdx.input.x * scaleX
+        val mouseYPx = (Gdx.graphics.height - Gdx.input.y) * scaleY  // GL bottom-left origin
+
+        if (lastViewW <= 0 || lastViewH <= 0 ||
+            mouseXPx < lastViewX || mouseXPx > lastViewX + lastViewW ||
+            mouseYPx < lastViewY || mouseYPx > lastViewY + lastViewH) {
+            hoveredX = -1; return
         }
 
-        val ray = camera.getPickRay(Gdx.input.x.toFloat(), Gdx.input.y.toFloat())
-        var bestDist = Float.MAX_VALUE
+        // Camera.getPickRay() uses Gdx.graphics.getHeight() (logical) internally for Y-flip.
+        // We must pass LOGICAL pixel coordinates, converting the backbuffer viewport bounds back.
+        val ray = camera.getPickRay(
+            Gdx.input.x.toFloat(),          // logical X from left
+            Gdx.input.y.toFloat(),          // logical Y from top (getPickRay flips internally)
+            lastViewX / scaleX,             // viewport X in logical pixels
+            lastViewY / scaleY,             // viewport Y in logical pixels (from bottom)
+            lastViewW / scaleX,             // viewport W in logical pixels
+            lastViewH / scaleY              // viewport H in logical pixels
+        )
+
+        var bestT = Float.MAX_VALUE
         hoveredX = -1
-        
         for (x in 0 until world.width) {
-            for (y in 0..maxRenderY) {
-                for (z in 0 until world.depth) {
-                    val dist = ray.origin.dst(x.toFloat(), y.toFloat(), z.toFloat())
-                    if (dist < bestDist) {
-                        // Check if ray hits box
-                        val halfSize = 0.5f
-                        val minX = x - halfSize; val maxX = x + halfSize
-                        val minY = y - halfSize; val maxY = y + halfSize
-                        val minZ = z - halfSize; val maxZ = z + halfSize
-                        
-                        // Simple ray-AABB intersection (Slabs method)
-                        var tmin = Float.NEGATIVE_INFINITY
-                        var tmax = Float.POSITIVE_INFINITY
-
-                        // X slab
-                        if (Math.abs(ray.direction.x) > 0.00001f) {
-                            var t1 = (minX - ray.origin.x) / ray.direction.x
-                            var t2 = (maxX - ray.origin.x) / ray.direction.x
-                            tmin = Math.max(tmin, Math.min(t1, t2))
-                            tmax = Math.min(tmax, Math.max(t1, t2))
-                        } else if (ray.origin.x < minX || ray.origin.x > maxX) continue
-
-                        // Y slab
-                        if (Math.abs(ray.direction.y) > 0.00001f) {
-                            var t1 = (minY - ray.origin.y) / ray.direction.y
-                            var t2 = (maxY - ray.origin.y) / ray.direction.y
-                            tmin = Math.max(tmin, Math.min(t1, t2))
-                            tmax = Math.min(tmax, Math.max(t1, t2))
-                        } else if (ray.origin.y < minY || ray.origin.y > maxY) continue
-
-                        // Z slab
-                        if (Math.abs(ray.direction.z) > 0.00001f) {
-                            var t1 = (minZ - ray.origin.z) / ray.direction.z
-                            var t2 = (maxZ - ray.origin.z) / ray.direction.z
-                            tmin = Math.max(tmin, Math.min(t1, t2))
-                            tmax = Math.min(tmax, Math.max(t1, t2))
-                        } else if (ray.origin.z < minZ || ray.origin.z > maxZ) continue
-
-                        if (tmax < tmin || tmax < 0) continue
-
-                        
-                        bestDist = dist
-                        hoveredX = x
-                        hoveredY = y
-                        hoveredZ = z
-                    }
+            for (y in 0 until world.height) {
+                for (z in 0..maxRenderZ.coerceAtMost(world.depth - 1)) {
+                    val halfSize = 0.5f
+                    val minX = x - halfSize; val maxX = x + halfSize
+                    val minY = y - halfSize; val maxY = y + halfSize
+                    val minZ = z - halfSize; val maxZ = z + halfSize
+                    var tmin = Float.NEGATIVE_INFINITY; var tmax = Float.POSITIVE_INFINITY
+                    if (Math.abs(ray.direction.x) > 0.00001f) {
+                        val t1 = (minX - ray.origin.x) / ray.direction.x; val t2 = (maxX - ray.origin.x) / ray.direction.x
+                        tmin = maxOf(tmin, minOf(t1, t2)); tmax = minOf(tmax, maxOf(t1, t2))
+                    } else if (ray.origin.x < minX || ray.origin.x > maxX) continue
+                    if (Math.abs(ray.direction.y) > 0.00001f) {
+                        val t1 = (minY - ray.origin.y) / ray.direction.y; val t2 = (maxY - ray.origin.y) / ray.direction.y
+                        tmin = maxOf(tmin, minOf(t1, t2)); tmax = minOf(tmax, maxOf(t1, t2))
+                    } else if (ray.origin.y < minY || ray.origin.y > maxY) continue
+                    if (Math.abs(ray.direction.z) > 0.00001f) {
+                        val t1 = (minZ - ray.origin.z) / ray.direction.z; val t2 = (maxZ - ray.origin.z) / ray.direction.z
+                        tmin = maxOf(tmin, minOf(t1, t2)); tmax = minOf(tmax, maxOf(t1, t2))
+                    } else if (ray.origin.z < minZ || ray.origin.z > maxZ) continue
+                    if (tmax < tmin || tmax < 0) continue
+                    if (tmin < bestT) { bestT = tmin; hoveredX = x; hoveredY = y; hoveredZ = z }
                 }
             }
         }
     }
 
     private fun handleInput(delta: Float) {
-        if (Gdx.input.justTouched()) {
-            if (Gdx.input.isButtonPressed(Input.Buttons.LEFT)) {
-                if (hoveredX != -1) {
-                    selectedX = hoveredX
-                    selectedY = hoveredY
-                    selectedZ = hoveredZ
-                    Gdx.app.log("Editor", "Selected node: ($selectedX, $selectedY, $selectedZ)")
-                    updatePaletteHighlights()
-                } else if (hoveredX == -1 && stage.hit(Gdx.input.x.toFloat(), (Gdx.graphics.height - Gdx.input.y).toFloat(), true) == null) {
-                    Gdx.app.log("Editor", "Click ignored: No node hovered")
+        val dragging = Math.abs(Gdx.input.deltaX) > 1 || Math.abs(Gdx.input.deltaY) > 1
+        if (Gdx.input.isButtonPressed(Input.Buttons.LEFT) && dragging) {
+            val dx = Gdx.input.deltaX.toFloat()
+            val dy = Gdx.input.deltaY.toFloat()
+            val isShift = Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT) || Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT)
+            val isAlt   = Gdx.input.isKeyPressed(Input.Keys.ALT_LEFT)   || Gdx.input.isKeyPressed(Input.Keys.ALT_RIGHT)
+
+            when {
+                isAlt -> {
+                    // Alt/Option + drag → rotate
+                    cameraYaw   = wrapAngle(cameraYaw   - dx * 0.5f)
+                    cameraPitch = wrapAngle(cameraPitch  + dy * 0.5f)
+                    updateCamera()
                 }
-            } else if (Gdx.input.isButtonPressed(Input.Buttons.RIGHT)) {
-                // Association logic
-                if (selectedX != -1 && hoveredX != -1) {
-                    val source = world.getNode(selectedX, selectedY, selectedZ)
-                    val target = world.getNode(hoveredX, hoveredY, hoveredZ)
-                    if (source != null && target != null) {
-                        // Determine association type
-                        var assocData: String? = null
-                        val type = if (target.items.any { it is KeyItem }) {
-                            assocData = target.items.firstOrNull { it is KeyItem }?.name
-                            "key"
-                        } else if (target.tags.contains(WorldNode.Tags.TOGGLE)) {
-                            "toggle"
-                        } else {
-                            null
-                        }
-                        
-                        if (type != null) {
-                            world.addAssociation(source, target, type, assocData)
-                            Gdx.app.log("Editor", "Added $type association from ($selectedX,$selectedY,$selectedZ) to ($hoveredX,$hoveredY,$hoveredZ) with data: $assocData")
-                        }
-                    }
+                isShift -> {
+                    // Shift + drag → pan
+                    val sensitivity = cameraDistance / 800f
+                    val camRight = camera.direction.cpy().crs(camera.up).nor()
+                    val camUp    = camRight.cpy().crs(camera.direction).nor()
+                    cameraTarget.add(camRight.scl(-dx * sensitivity))
+                    cameraTarget.add(camUp.scl(dy * sensitivity))
+                    updateCamera()
                 }
+                // plain drag → no action; left click selects (handled below)
             }
         }
 
-        if (stage.keyboardFocus == null) {
-            // Camera rotation removed for top-down view
-            
-            updateCamera()
+        // Selection/paint: only when no camera modifier is held
+        val isShiftHeld = Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT) || Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT)
+        val isAltHeld   = Gdx.input.isKeyPressed(Input.Keys.ALT_LEFT)   || Gdx.input.isKeyPressed(Input.Keys.ALT_RIGHT)
+        val isCtrlHeld  = Gdx.input.isKeyPressed(Input.Keys.CONTROL_LEFT) || Gdx.input.isKeyPressed(Input.Keys.CONTROL_RIGHT)
+        val noModifier  = !isShiftHeld && !isAltHeld && !isCtrlHeld
+
+        // ── Ctrl + LMB: erase selected palette item from hovered node ─────────
+        if (Gdx.input.isButtonPressed(Input.Buttons.LEFT) && isCtrlHeld && !isShiftHeld && !isAltHeld
+            && paletteSelection != null && hoveredX != -1) {
+            val node = world.getNode(hoveredX, hoveredY, hoveredZ)
+            val isNewEraseNode = hoveredX != lastEraseX || hoveredY != lastEraseY || hoveredZ != lastEraseZ
+            when (val sel = paletteSelection) {
+                is PaletteSelection.Tile -> {
+                    // Continuous erase: remove tile from every node the cursor passes over
+                    if (node != null && node.tiles.removeIf { it.type == sel.type }) {
+                        Gdx.app.log("MapEditor", "Erased ${sel.type} from ($hoveredX, $hoveredY, $hoveredZ)")
+                        lastEraseX = hoveredX; lastEraseY = hoveredY; lastEraseZ = hoveredZ
+                    }
+                }
+                is PaletteSelection.Item -> {
+                    // Remove item from each new node entered
+                    if (node != null && isNewEraseNode) {
+                        node.items.removeIf { it is KeyItem && it.name == sel.name }
+                        Gdx.app.log("MapEditor", "Removed ${sel.name} from ($hoveredX, $hoveredY, $hoveredZ)")
+                        lastEraseX = hoveredX; lastEraseY = hoveredY; lastEraseZ = hoveredZ
+                    }
+                }
+                is PaletteSelection.Tag -> {
+                    // Remove tag from each new node entered
+                    if (isNewEraseNode) {
+                        selectedX = hoveredX; selectedY = hoveredY; selectedZ = hoveredZ
+                        val n = world.getNode(hoveredX, hoveredY, hoveredZ)
+                        if (n != null && n.tags.remove(sel.tag)) {
+                            updatePaletteHighlights()
+                            Gdx.app.log("MapEditor", "Removed tag ${sel.tag} from ($hoveredX, $hoveredY, $hoveredZ)")
+                        }
+                        lastEraseX = hoveredX; lastEraseY = hoveredY; lastEraseZ = hoveredZ
+                    }
+                }
+                null -> { /* nothing selected, nothing to erase */ }
+            }
+        } else if (!Gdx.input.isButtonPressed(Input.Buttons.LEFT)) {
+            lastEraseX = -1; lastEraseY = -1; lastEraseZ = -1
+        }
+
+        // ── Normal LMB: paint / select ────────────────────────────────────────
+        if (Gdx.input.isButtonPressed(Input.Buttons.LEFT) && noModifier && hoveredX != -1) {
+            val node = world.getNode(hoveredX, hoveredY, hoveredZ)
+            // True when mouse has moved to a node it hasn't painted in this press
+            val isNewNode = hoveredX != lastPaintX || hoveredY != lastPaintY || hoveredZ != lastPaintZ
+
+            when (val sel = paletteSelection) {
+                is PaletteSelection.Tile -> {
+                    // Continuous paint: add tile to every node the cursor passes over
+                    if (node != null && node.tiles.none { it.type == sel.type }) {
+                        node.tiles.add(modelLoader.createTile(sel.type)!!)
+                        Gdx.app.log("MapEditor", "Painted ${sel.type} → ($hoveredX, $hoveredY, $hoveredZ)")
+                        lastPaintX = hoveredX; lastPaintY = hoveredY; lastPaintZ = hoveredZ
+                    }
+                }
+                is PaletteSelection.Item -> {
+                    // Apply to each new node the cursor enters while LMB is held
+                    if (node != null && isNewNode) {
+                        node.items.removeIf { it is KeyItem }
+                        node.items.add(KeyItem(color = sel.color, name = sel.name))
+                        Gdx.app.log("MapEditor", "Placed ${sel.name} → ($hoveredX, $hoveredY, $hoveredZ)")
+                        lastPaintX = hoveredX; lastPaintY = hoveredY; lastPaintZ = hoveredZ
+                    }
+                }
+                is PaletteSelection.Tag -> {
+                    // Add tag to each new node entered; toggle (remove) only on single click of same node
+                    if (isNewNode) {
+                        selectedX = hoveredX; selectedY = hoveredY; selectedZ = hoveredZ
+                        val n = world.getNode(hoveredX, hoveredY, hoveredZ)
+                        if (n != null && !n.tags.contains(sel.tag)) {
+                            world.addTag(n, sel.tag)
+                            updatePaletteHighlights()
+                            Gdx.app.log("MapEditor", "Added tag ${sel.tag} → ($hoveredX, $hoveredY, $hoveredZ)")
+                        } else if (n != null && Gdx.input.justTouched()) {
+                            // Single click on a node that already has the tag → toggle off
+                            n.tags.remove(sel.tag)
+                            updatePaletteHighlights()
+                            Gdx.app.log("MapEditor", "Removed tag ${sel.tag} from ($hoveredX, $hoveredY, $hoveredZ)")
+                        }
+                        lastPaintX = hoveredX; lastPaintY = hoveredY; lastPaintZ = hoveredZ
+                    }
+                }
+                null -> {
+                    // Nothing selected — plain click selects the node
+                    if (Gdx.input.justTouched()) {
+                        selectedX = hoveredX; selectedY = hoveredY; selectedZ = hoveredZ
+                        Gdx.app.log("MapEditor", "Selected node: ($selectedX, $selectedY, $selectedZ)")
+                        updatePaletteHighlights()
+                    }
+                }
+            }
+        } else if (!Gdx.input.isButtonPressed(Input.Buttons.LEFT)) {
+            // Reset paint tracker when LMB is released
+            lastPaintX = -1; lastPaintY = -1; lastPaintZ = -1
+        }
+
+        if (Gdx.input.justTouched() && noModifier && Gdx.input.isButtonPressed(Input.Buttons.RIGHT)) {
+            if (selectedX != -1 && hoveredX != -1) {
+                val source = world.getNode(selectedX, selectedY, selectedZ)
+                val target = world.getNode(hoveredX, hoveredY, hoveredZ)
+                if (source != null && target != null) {
+                    var assocData: String? = null
+                    val type = if (target.items.any { it is KeyItem }) {
+                        assocData = target.items.firstOrNull { it is KeyItem }?.name; "key"
+                    } else if (target.tags.contains(WorldNode.Tags.TOGGLE)) "toggle" else null
+                    if (type != null) world.addAssociation(source, target, type, assocData)
+                }
+            }
         }
     }
 
     override fun resize(width: Int, height: Int) {
-        camera.viewportWidth = width.toFloat()
-        camera.viewportHeight = height.toFloat()
-        camera.update()
+        // Camera viewport is managed per-frame from the sub-viewport bounds.
+        // Only update the Stage viewport here.
         stage.viewport.update(width, height, true)
     }
 
@@ -798,8 +995,12 @@ class MapEditor(private val game: Game) : Screen {
         modelBatch.dispose()
         shapeRenderer.dispose()
         assetLoader.dispose()
-        stage.dispose()
-        skin.dispose()
         frameModel.dispose()
+        centerSphereModel.dispose()
+        tagSphereModel.dispose()
+        tagFont.dispose()
+        tagSpriteBatch.dispose()
+        orientationGizmo.dispose()
+        VisUI.dispose()
     }
 }

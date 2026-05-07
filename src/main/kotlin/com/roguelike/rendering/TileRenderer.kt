@@ -7,12 +7,21 @@ import com.badlogic.gdx.math.Vector3
 import com.roguelike.world.*
 
 class TileRenderer {
-    fun render(tile: Tile, batch: ModelBatch, environment: Environment, x: Float, y: Float, z: Float, ignoreYRotation: Boolean = false) {
+    fun render(
+            tile: Tile,
+            batch: ModelBatch,
+            environment: Environment,
+            x: Float,
+            y: Float,
+            z: Float,
+            ignoreYRotation: Boolean = false
+    ) {
         if (tile is BaseTile) {
-            val instanceToRender = when {
-                tile is DoorTile && tile.isOpen -> tile.openInstance
-                else -> tile.instance
-            }
+            val instanceToRender =
+                    when {
+                        tile is DoorTile && tile.isOpen -> tile.openInstance
+                        else -> tile.instance
+                    }
 
             // Calculate additional rotation for open doors
             // In X-Y ground, doors rotate around Z to open? Or around their "hinge" axis.
@@ -21,7 +30,7 @@ class TileRenderer {
 
             // Update transform
             updateTransform(instanceToRender, tile, x, y, z, ignoreYRotation, extraRotZ)
-            
+
             // If it's a door, keep the other instance synced for consistency
             if (tile is DoorTile) {
                 val otherInstance = if (tile.isOpen) tile.instance else tile.openInstance
@@ -36,64 +45,29 @@ class TileRenderer {
         }
     }
 
-    private fun updateTransform(instance: ModelInstance, tile: BaseTile, x: Float, y: Float, z: Float, ignoreYRotation: Boolean, additionalRotZ: Float = 0f) {
-        var rotX = 0f
+    private fun updateTransform(
+            instance: ModelInstance,
+            tile: BaseTile,
+            x: Float,
+            y: Float,
+            z: Float,
+            ignoreYRotation: Boolean,
+            additionalRotZ: Float = 0f
+    ) {
+        var rotX = -90f
         var rotY = 0f
-        var rotZ = 0f
+        var rotZ = 180f
         var zOff = 0f
         var tx = x
         var ty = y
         var tz = z // z is layer
 
         when (tile) {
-            is FloorTile -> {
-                // Flat in X-Y plane
-                zOff = -0.5f
-            }
-            is WallHorizontalTile -> {
-                // Standing up along Z, parallel to X axis
-                rotX = 90f
-            }
-            is WallVerticalTile -> {
-                // Standing up along Z, parallel to Y axis
-                rotX = 90f
-                rotZ = 90f
-            }
-            is DoorHorizontalTile -> {
-                rotX = 90f
-            }
-            is DoorVerticalTile -> {
-                rotX = 90f
-                rotZ = 90f
-            }
-            is CornerNETile -> {
-                tx -= 0.25f
-                ty -= 0.25f
-                rotX = 90f
-                rotY = 90f // This might need adjustment for X-Y
-            }
-            is CornerESTile -> {
-                tx -= 0.25f
-                ty += 0.25f
-                rotX = 90f
-                rotY = 90f
-                rotZ = -180f
-            }
-            is CornerSWTile -> {
-                tx += 0.25f
-                ty += 0.25f
-                rotX = 90f
-                rotY = 180f
-                rotZ = -180f
-            }
-            is CornerWNTile -> {
-                tx += 0.25f
-                ty -= 0.25f
-                rotX = 90f
-                rotY = 270f
-                rotZ = -180f
-            }
+        // Per-tile adjustments live in tile.rotationX/Y/Z and tile.zOffset (set in ModelLoader)
         }
+
+        // Add any tile-specific z offset
+        zOff += tile.zOffset
 
         // Apply additional rotation for open state
         rotZ += additionalRotZ
@@ -113,15 +87,15 @@ class TileRenderer {
 
     private fun updateColor(instance: ModelInstance, tile: Tile) {
         if (instance.materials.size > 0) {
-            val color = when (tile) {
-                is DoorTile -> if (tile.isOpen) Color.GREEN else Color.RED
-                is ToggleTile -> if (tile.linkedDoor?.isOpen == true) Color.GREEN else Color.RED
-                is FloorTile -> Color(0.6f, 0.4f, 0.2f, 1f)
-                else -> null
-            }
-            color?.let {
-                instance.materials.get(0).set(ColorAttribute.createDiffuse(it))
-            }
+            val color =
+                    when (tile) {
+                        is DoorTile -> if (tile.isOpen) Color.GREEN else Color.RED
+                        is ToggleTile ->
+                                if (tile.linkedDoor?.isOpen == true) Color.GREEN else Color.RED
+                        is FloorTile -> Color(0.6f, 0.4f, 0.2f, 1f)
+                        else -> null
+                    }
+            color?.let { instance.materials.get(0).set(ColorAttribute.createDiffuse(it)) }
         }
     }
 }

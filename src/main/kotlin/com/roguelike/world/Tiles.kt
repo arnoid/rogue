@@ -18,6 +18,7 @@ abstract class BaseTile(val model: Model, val scale: Float, val center: Vector3)
     var rotationX = 0f
     var rotationY = 0f
     var rotationZ = 0f
+    var zOffset   = 0f  // extra Z translation applied before rotation (node-local)
 
     protected fun setColor(color: Color) {
         if (instance.materials.size > 0) {
