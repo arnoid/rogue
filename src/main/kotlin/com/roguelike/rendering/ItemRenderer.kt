@@ -1,12 +1,13 @@
 package com.roguelike.rendering
 
+import com.badlogic.gdx.graphics.Color
 import com.badlogic.gdx.graphics.g3d.*
 import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute
 import com.badlogic.gdx.math.Vector3
 import com.badlogic.gdx.math.collision.BoundingBox
+import com.roguelike.core.model.Item
+import com.roguelike.core.model.KeyItem
 import com.roguelike.utils.AssetLoader
-import com.roguelike.world.Item
-import com.roguelike.world.KeyItem
 
 class ItemRenderer(val assetLoader: AssetLoader) {
     private val keyModel: Model by lazy { assetLoader.loadModel("item_key", "objects/key.obj") }
@@ -36,7 +37,7 @@ class ItemRenderer(val assetLoader: AssetLoader) {
                 instance.transform.translate(-keyCenter.x, -keyCenter.y, -keyCenter.z)
                 
                 if (instance.materials.size > 0) {
-                    instance.materials.get(0).set(ColorAttribute.createDiffuse(item.color))
+                    instance.materials.get(0).set(ColorAttribute.createDiffuse(Color.valueOf(item.colorHex)))
                 }
                 batch.render(instance, environment)
             }

@@ -15,6 +15,7 @@ import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder
 import com.badlogic.gdx.scenes.scene2d.Stage
 import com.badlogic.gdx.scenes.scene2d.ui.Skin
 import com.badlogic.gdx.utils.viewport.ScreenViewport
+import com.roguelike.core.math.Vec3
 import com.roguelike.rendering.InventoryUI
 import com.roguelike.rendering.ItemRenderer
 import com.roguelike.rendering.WorldRenderer
@@ -28,8 +29,9 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
     private lateinit var modelBatch: ModelBatch
     private lateinit var environment: Environment
 
-    // Player
+    // Player logic (pure core) + its visual representation (view layer)
     private lateinit var player: Player
+    private lateinit var playerInstance: ModelInstance   // owned by this screen, not by Player
     private val moveSpeed = 5f
 
     // Systems & Renderers
@@ -84,14 +86,12 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         // UI Setup
         stage = Stage(ScreenViewport())
         skin = Skin()
-        // We need a font and white texture for InventoryUI (similar to MapEditor)
         val font = com.badlogic.gdx.graphics.g2d.BitmapFont()
         skin.add("default", font)
         val pixmap = com.badlogic.gdx.graphics.Pixmap(1, 1, com.badlogic.gdx.graphics.Pixmap.Format.RGBA8888)
         pixmap.setColor(Color.WHITE)
         pixmap.fill()
         skin.add("white", com.badlogic.gdx.graphics.Texture(pixmap))
-        
         val labelStyle = com.badlogic.gdx.scenes.scene2d.ui.Label.LabelStyle(font, Color.WHITE)
         skin.add("default", labelStyle)
 
@@ -99,75 +99,82 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         inventoryUI.setFillParent(true)
         stage.addActor(inventoryUI)
 
-        // Create Player
+        // Player — pure logic object, no LibGDX
+        player = Player()
+
+        // Player visual — sphere mesh owned here in the view layer
         val modelBuilder = ModelBuilder()
         val sphereModel = modelBuilder.createSphere(
             0.8f, 0.8f, 0.8f, 20, 20,
             Material(ColorAttribute.createDiffuse(Color.BLUE)),
             (VertexAttributes.Usage.Position or VertexAttributes.Usage.Normal).toLong()
         )
-        player = Player(ModelInstance(sphereModel))
+        playerInstance = ModelInstance(sphereModel)
 
-        // Create Debug Axes
+        // Debug Axes
         modelBuilder.begin()
-        val part = modelBuilder.part("axes", GL20.GL_LINES, 
-            (VertexAttributes.Usage.Position or VertexAttributes.Usage.ColorPacked).toLong(), Material())
-        part.setColor(Color.RED)
-        part.line(0f, 0f, 0f, 2f, 0f, 0f)
-        part.setColor(Color.GREEN)
-        part.line(0f, 0f, 0f, 0f, 2f, 0f)
-        part.setColor(Color.BLUE)
-        part.line(0f, 0f, 0f, 0f, 0f, 2f)
+        val part = modelBuilder.part(
+            "axes", GL20.GL_LINES,
+            (VertexAttributes.Usage.Position or VertexAttributes.Usage.ColorPacked).toLong(), Material()
+        )
+        part.setColor(Color.RED);   part.line(0f, 0f, 0f, 2f, 0f, 0f)
+        part.setColor(Color.GREEN); part.line(0f, 0f, 0f, 0f, 2f, 0f)
+        part.setColor(Color.BLUE);  part.line(0f, 0f, 0f, 0f, 0f, 2f)
         axesInstance = ModelInstance(modelBuilder.end()!!)
 
-        // Spawn player
+        // Spawn player at tagged node
         world.getNodesWithTag(WorldNode.Tags.PLAYER_SPAWN).firstOrNull()?.let { node ->
             player.position.set(node.x.toFloat(), node.y.toFloat(), node.z.toFloat())
         }
     }
 
     private fun loadWorld(path: String) {
-        val loadedWorld = WorldIO.loadWorld(path, { w, h, d -> World(w, h, d) }, { type -> modelLoader.createTile(type) })
-        if (loadedWorld != null) {
-            world = loadedWorld
-        } else {
-            world = World(10, 10, 1)
-            WorldGenerator(world, modelLoader).generate()
+        val loadedWorld = WorldIO.loadWorld(
+            path,
+            { w, h, d -> World(w, h, d) },
+            { type -> modelLoader.createTile(type) }
+        )
+        world = loadedWorld ?: run {
+            World(10, 10, 1).also { WorldGenerator(it, modelLoader).generate() }
         }
     }
 
     override fun render(delta: Float) {
-        // Input & Logic
-        val moveDir = inputHandler.getMovementDirection(camera)
+        // ── Input & Logic ────────────────────────────────────────────────────
+        val moveDir = inputHandler.getMovementDirection()
         movementSystem.move(player, moveDir, delta, moveSpeed)
 
         cameraManager.cameraYaw += inputHandler.getCameraYawChange(delta)
         cameraManager.update(player.position)
 
         if (inputHandler.isDebugToggleJustPressed()) debugMode = !debugMode
-        
+
         if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
             game.screen = MainMenuScreen(game)
         }
 
         if (inputHandler.isInteractionJustPressed()) {
-            interactionSystem.interact(player, camera)
+            // Extract camera direction as core Vec3 — the only LibGDX-to-core bridge here
+            val camDir = Vec3(camera.direction.x, camera.direction.y, camera.direction.z)
+            interactionSystem.interact(player, camDir)
         }
-
 
         player.update(delta)
         inventoryUI.update(player)
 
-        // Rendering
+        // ── Rendering ────────────────────────────────────────────────────────
         Gdx.gl.glViewport(0, 0, Gdx.graphics.backBufferWidth, Gdx.graphics.backBufferHeight)
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT or GL20.GL_DEPTH_BUFFER_BIT)
 
+        // Sync player visual to logic position
+        playerInstance.transform.setTranslation(player.position.x, player.position.y, player.position.z)
+
         modelBatch.begin(camera)
         worldRenderer.render(world, modelBatch, environment)
-        player.modelInstance?.let { modelBatch.render(it, environment) }
-        
+        modelBatch.render(playerInstance, environment)
+
         if (debugMode) {
-            axesInstance.transform.setTranslation(player.position)
+            axesInstance.transform.setTranslation(player.position.x, player.position.y, player.position.z)
             modelBatch.render(axesInstance)
         }
         modelBatch.end()

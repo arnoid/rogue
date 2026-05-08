@@ -83,7 +83,7 @@ class MapEditor(private val game: Game) : Screen {
     // Unified palette selection — only one item (tile, item, or tag) can be active at a time
     private sealed class PaletteSelection {
         data class Tile(val type: String) : PaletteSelection()
-        data class Item(val name: String, val color: Color) : PaletteSelection()
+        data class Item(val name: String, val colorHex: String) : PaletteSelection()
         data class Tag(val tag: String) : PaletteSelection()
     }
     private var paletteSelection: PaletteSelection? = null
@@ -348,21 +348,21 @@ class MapEditor(private val game: Game) : Screen {
         paletteContent.add(itemsGrid).fillX().expandX().row()
 
         val items = listOf(
-            Triple(Color.BLUE,  "Blue Key",  "Key"),
-            Triple(Color.GREEN, "Green Key", "Key"),
-            Triple(Color.RED,   "Red Key",   "Key")
+            Triple(Color.BLUE.toString(),  "Blue Key",  "Key"),
+            Triple(Color.GREEN.toString(), "Green Key", "Key"),
+            Triple(Color.RED.toString(),   "Red Key",   "Key")
         )
-        items.forEachIndexed { index, (color, name, _) ->
+        items.forEachIndexed { index, (colorHex, name, _) ->
             val container = SelectionBorderGroup {
                 paletteSelection.let { it is PaletteSelection.Item && it.name == name }
             }
             val preview = Image(VisUI.getSkin().getDrawable("white"))
-            preview.color = color
+            preview.color = Color.valueOf(colorHex)
             container.add(preview).size(32f).pad(5f).row()
             container.add(VisLabel(name)).expandX().center()
             container.addListener(object : ClickListener() {
                 override fun clicked(event: InputEvent, x: Float, y: Float) {
-                    val sel = PaletteSelection.Item(name, color)
+                    val sel = PaletteSelection.Item(name, colorHex)
                     paletteSelection = if (paletteSelection == sel) null else sel
                     refreshPaletteHighlights()
                     val state = if (paletteSelection != null) "selected" else "deselected"
@@ -929,7 +929,7 @@ class MapEditor(private val game: Game) : Screen {
                     // Apply to each new node the cursor enters while LMB is held
                     if (node != null && isNewNode) {
                         node.items.removeIf { it is KeyItem }
-                        node.items.add(KeyItem(color = sel.color, name = sel.name))
+                        node.items.add(KeyItem(colorHex = sel.colorHex, name = sel.name))
                         Gdx.app.log("MapEditor", "Placed ${sel.name} → ($hoveredX, $hoveredY, $hoveredZ)")
                         lastPaintX = hoveredX; lastPaintY = hoveredY; lastPaintZ = hoveredZ
                     }

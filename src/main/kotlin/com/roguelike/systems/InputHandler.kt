@@ -2,24 +2,24 @@ package com.roguelike.systems
 
 import com.badlogic.gdx.Gdx
 import com.badlogic.gdx.Input
-import com.badlogic.gdx.graphics.Camera
-import com.badlogic.gdx.math.Vector3
+import com.roguelike.core.math.Vec3
 
+/** Translates raw keyboard state into abstract movement/action intents. */
 class InputHandler {
-    fun getMovementDirection(camera: Camera): Vector3 {
-        val moveDir = Vector3(0f, 0f, 0f)
-        if (Gdx.input.isKeyPressed(Input.Keys.W)) moveDir.y += 1f
-        if (Gdx.input.isKeyPressed(Input.Keys.S)) moveDir.y -= 1f
-        if (Gdx.input.isKeyPressed(Input.Keys.A)) moveDir.x -= 1f
-        if (Gdx.input.isKeyPressed(Input.Keys.D)) moveDir.x += 1f
-        
-        return moveDir
-    }
 
+    /** Returns a direction vector based on WASD keys. No LibGDX Camera needed. */
+    fun getMovementDirection(): Vec3 {
+        val dir = Vec3()
+        if (Gdx.input.isKeyPressed(Input.Keys.W)) dir.y += 1f
+        if (Gdx.input.isKeyPressed(Input.Keys.S)) dir.y -= 1f
+        if (Gdx.input.isKeyPressed(Input.Keys.A)) dir.x -= 1f
+        if (Gdx.input.isKeyPressed(Input.Keys.D)) dir.x += 1f
+        return dir
+    }
 
     fun isInteractionJustPressed(): Boolean = Gdx.input.isKeyJustPressed(Input.Keys.F)
     fun isDebugToggleJustPressed(): Boolean = Gdx.input.isKeyJustPressed(Input.Keys.F3)
-    
+
     fun getCameraYawChange(delta: Float): Float {
         var change = 0f
         if (Gdx.input.isKeyPressed(Input.Keys.Q)) change -= 90f * delta

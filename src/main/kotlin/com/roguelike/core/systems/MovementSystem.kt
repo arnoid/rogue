@@ -1,9 +1,12 @@
-package com.roguelike.systems
+package com.roguelike.core.systems
 
 import com.roguelike.core.math.Vec3
-import com.roguelike.world.Actor
-import com.roguelike.world.World
+import com.roguelike.core.model.*
 
+/**
+ * Moves actors through the world, enforcing box-based collision.
+ * No LibGDX dependency.
+ */
 class MovementSystem(private val world: World) {
 
     fun move(actor: Actor, moveDir: Vec3, delta: Float, speed: Float) {
@@ -18,7 +21,6 @@ class MovementSystem(private val world: World) {
             actor.position.x = nextX
             actor.position.y = nextY
         } else {
-            // Sliding collision — try each axis independently
             if (canMove(nextX, actor.position.y, actor.position.z, actor.collisionSize)) {
                 actor.position.x = nextX
             } else if (canMove(actor.position.x, nextY, actor.position.z, actor.collisionSize)) {
