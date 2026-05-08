@@ -8,6 +8,9 @@ nodes: [
 			{
 				type: FloorTile
 			}
+			{
+				type: CornerNETile
+			}
 		]
 	}
 	{
@@ -15,6 +18,10 @@ nodes: [
 		tiles: [
 			{
 				type: FloorTile
+			}
+			{
+				type: WallVerticalTile
+				rotY: -90
 			}
 		]
 	}
@@ -24,6 +31,10 @@ nodes: [
 			{
 				type: FloorTile
 			}
+			{
+				type: WallTsplitETile
+				rotY: 90
+			}
 		]
 	}
 	{
@@ -31,6 +42,10 @@ nodes: [
 		tiles: [
 			{
 				type: FloorTile
+			}
+			{
+				type: WallVerticalTile
+				rotY: -90
 			}
 		]
 	}
@@ -40,6 +55,10 @@ nodes: [
 			{
 				type: FloorTile
 			}
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
 		]
 	}
 	{
@@ -47,6 +66,10 @@ nodes: [
 		tiles: [
 			{
 				type: FloorTile
+			}
+			{
+				type: WallVerticalTile
+				rotY: -90
 			}
 		]
 	}
@@ -56,6 +79,10 @@ nodes: [
 			{
 				type: FloorTile
 			}
+			{
+				type: CornerSETile
+				rotY: 90
+			}
 		]
 	}
 	{
@@ -63,6 +90,9 @@ nodes: [
 		tiles: [
 			{
 				type: FloorTile
+			}
+			{
+				type: WallHorizontalTile
 			}
 		]
 	}
@@ -78,9 +108,15 @@ nodes: [
 	{
 		x: 1
 		y: 2
+		tags: [
+			door_manual
+		]
 		tiles: [
 			{
 				type: FloorTile
+			}
+			{
+				type: DoorHorizontalTile
 			}
 		]
 	}
@@ -118,6 +154,9 @@ nodes: [
 			{
 				type: FloorTile
 			}
+			{
+				type: WallHorizontalTile
+			}
 		]
 	}
 	{
@@ -126,14 +165,24 @@ nodes: [
 			{
 				type: FloorTile
 			}
+			{
+				type: WallTsplitNTile
+			}
 		]
 	}
 	{
 		x: 2
 		y: 1
+		tags: [
+			door_manual
+		]
 		tiles: [
 			{
 				type: FloorTile
+			}
+			{
+				type: DoorVerticalTile
+				rotY: 90
 			}
 		]
 	}
@@ -144,6 +193,10 @@ nodes: [
 			{
 				type: FloorTile
 			}
+			{
+				type: WallTsplitSTile
+				rotY: 180
+			}
 		]
 	}
 	{
@@ -158,6 +211,9 @@ nodes: [
 	{
 		x: 2
 		y: 4
+		tags: [
+			player_spawn
+		]
 		tiles: [
 			{
 				type: FloorTile
@@ -180,6 +236,9 @@ nodes: [
 			{
 				type: FloorTile
 			}
+			{
+				type: WallHorizontalTile
+			}
 		]
 	}
 	{
@@ -187,6 +246,9 @@ nodes: [
 		tiles: [
 			{
 				type: FloorTile
+			}
+			{
+				type: WallHorizontalTile
 			}
 		]
 	}
@@ -202,9 +264,15 @@ nodes: [
 	{
 		x: 3
 		y: 2
+		tags: [
+			door_manual
+		]
 		tiles: [
 			{
 				type: FloorTile
+			}
+			{
+				type: DoorHorizontalTile
 			}
 		]
 	}
@@ -242,6 +310,9 @@ nodes: [
 			{
 				type: FloorTile
 			}
+			{
+				type: WallHorizontalTile
+			}
 		]
 	}
 	{
@@ -249,6 +320,10 @@ nodes: [
 		tiles: [
 			{
 				type: FloorTile
+			}
+			{
+				type: CornerNWTile
+				rotY: -90
 			}
 		]
 	}
@@ -259,6 +334,10 @@ nodes: [
 			{
 				type: FloorTile
 			}
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
 		]
 	}
 	{
@@ -267,6 +346,9 @@ nodes: [
 		tiles: [
 			{
 				type: FloorTile
+			}
+			{
+				type: WallCrossingTile
 			}
 		]
 	}
@@ -277,6 +359,10 @@ nodes: [
 			{
 				type: FloorTile
 			}
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
 		]
 	}
 	{
@@ -285,6 +371,10 @@ nodes: [
 		tiles: [
 			{
 				type: FloorTile
+			}
+			{
+				type: WallVerticalTile
+				rotY: -90
 			}
 		]
 	}
@@ -295,6 +385,10 @@ nodes: [
 			{
 				type: FloorTile
 			}
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
 		]
 	}
 	{
@@ -303,6 +397,10 @@ nodes: [
 		tiles: [
 			{
 				type: FloorTile
+			}
+			{
+				type: CornerSWTile
+				rotY: 180
 			}
 		]
 	}

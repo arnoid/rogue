@@ -12,6 +12,5 @@ typealias World     = com.roguelike.core.model.World
 typealias WorldNode = com.roguelike.core.model.WorldNode
 typealias Actor     = com.roguelike.core.model.Actor
 typealias Player    = com.roguelike.core.model.Player
-typealias Tile      = com.roguelike.core.model.Tile
 typealias Item      = com.roguelike.core.model.Item
 typealias KeyItem   = com.roguelike.core.model.KeyItem

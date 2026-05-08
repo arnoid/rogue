@@ -5,7 +5,7 @@ import com.badlogic.gdx.graphics.g3d.ModelBatch
 import com.roguelike.world.World
 
 class WorldRenderer(
-    private val tileRenderer: TileRenderer = TileRenderer(),
+    private val tileRenderer: TileRenderer,
     private val itemRenderer: ItemRenderer? = null
 ) {
 

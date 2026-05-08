@@ -24,7 +24,8 @@ import com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable
 import com.badlogic.gdx.utils.viewport.ScreenViewport
 import com.kotcrab.vis.ui.VisUI
 import com.kotcrab.vis.ui.widget.*
-import com.kotcrab.vis.ui.widget.color.ColorPicker
+import com.roguelike.core.model.Tile
+import com.roguelike.core.model.WorldNode.Tags as NodeTags
 import com.roguelike.rendering.*
 import com.roguelike.serialization.WorldIO
 import com.roguelike.utils.*
@@ -44,7 +45,7 @@ class MapEditor(private val game: Game) : Screen {
     private lateinit var stage: Stage
     private lateinit var skin: Skin
 
-    private val tileRenderer = TileRenderer()
+    private lateinit var tileRenderer: TileRenderer
     private lateinit var worldRenderer: WorldRenderer
     private lateinit var itemRenderer: ItemRenderer
 
@@ -115,16 +116,26 @@ class MapEditor(private val game: Game) : Screen {
     private val tileContainers = HashMap<String, Table>()
     private val itemContainers = HashMap<String, Table>()  // key = item name
 
+    /** Tracks tile group grids and their items for dynamic column re-layout. */
+    private val tileGrids = mutableListOf<Pair<VisTable, List<Table>>>()  // grid → ordered containers
+    private val itemGrid = mutableListOf<Table>()  // ordered item containers
+    private lateinit var itemGridTable: VisTable
+    private var lastPaletteWidth = -1f
+    private val tilePreviewSize = 64f
+    private val tileCellPad = 5f
+
     private val tagButtons = HashMap<String, TextButton>()
     private var cameraPitch = 45f
     private var cameraYaw = 0f
     private lateinit var orientationGizmo: OrientationGizmo
     private lateinit var rootTable: VisTable
     private lateinit var viewportArea: VisTable
+    private lateinit var paletteScroll: VisScrollPane
     private var lastViewX = 0
     private var lastViewY = 0
     private var lastViewW = 0
     private var lastViewH = 0
+    private var scrolledThisFrame = false
 
     override fun show() {
         modelBatch = ModelBatch()
@@ -132,6 +143,7 @@ class MapEditor(private val game: Game) : Screen {
         assetLoader = AssetLoader()
         modelLoader = ModelLoader(assetLoader)
         itemRenderer = ItemRenderer(assetLoader)
+        tileRenderer = TileRenderer(modelLoader.renderRegistry)
         worldRenderer = WorldRenderer(tileRenderer, itemRenderer)
         world = World(1, 1, 1)
         maxRenderZ = (world.depth - 1).coerceAtLeast(0)
@@ -162,6 +174,7 @@ class MapEditor(private val game: Game) : Screen {
             override fun scrolled(amountX: Float, amountY: Float): Boolean {
                 cameraDistance = (cameraDistance + amountY * 1.5f).coerceIn(2f, 100f)
                 updateCamera()
+                scrolledThisFrame = true
                 return true
             }
         }
@@ -254,6 +267,7 @@ class MapEditor(private val game: Game) : Screen {
         fileMenu.addItem(MenuItem("New").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { newWorld() } }) })
         fileMenu.addItem(MenuItem("Open").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { openWorld() } }) })
         fileMenu.addItem(MenuItem("Save").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { saveWorld() } }) })
+        fileMenu.addItem(MenuItem("Save As...").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { saveWorldAs() } }) })
         fileMenu.addItem(MenuItem("Exit").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { game.screen = MainMenuScreen(game) } }) })
 
         // ── Row 2: Main Area ─────────────────────────────────────────────────
@@ -285,28 +299,35 @@ class MapEditor(private val game: Game) : Screen {
         })
         toolColumn.add(gridToggle).size(48f).pad(8f).row()
 
-        // ── Viewport | Palette: two plain cells, no draggable handle ─────────
+        // ── Viewport | Palette: split pane with draggable handle ─────────
 
         // Left: viewport placeholder — 3D rendering fills this area via GL viewport
         viewportArea = VisTable()
         viewportArea.add(orientationGizmo).size(100f).top().left().pad(10f).expand().top().left()
-        mainRow.add(viewportArea).fill().expand()
 
-        // Right: scrollable palette (fixed width, no split-pane handle intercepting clicks)
+        // Right: scrollable palette with dynamic column layout
         val paletteContent = VisTable()
         paletteContent.top()
-        val paletteScroll = VisScrollPane(paletteContent)
+        paletteScroll = VisScrollPane(paletteContent)
         paletteScroll.setFadeScrollBars(false)
         paletteScroll.setScrollingDisabled(true, false)
         paletteScroll.setCancelTouchFocus(false)  // allow child ClickListeners to receive touchUp
-        mainRow.add(paletteScroll).width(260f).fillY()
+
+        val splitPane = VisSplitPane(viewportArea, paletteScroll, false)
+        splitPane.setSplitAmount(0.75f)   // 75% viewport, 25% palette initially
+        splitPane.setMinSplitAmount(0.5f)
+        splitPane.setMaxSplitAmount(0.92f)
+        mainRow.add(splitPane).fill().expand()
 
         // ── Palette: Tiles (grouped) ─────────────────────────────────────────
         val tileGroups = listOf(
             "Floors"      to listOf(FloorTile.TYPE),
             "Walls"       to listOf(WallHorizontalTile.TYPE, WallVerticalTile.TYPE,
-                                    CornerNETile.TYPE, CornerESTile.TYPE,
-                                    CornerSWTile.TYPE, CornerWNTile.TYPE),
+                                    WallArchedTile.TYPE, WallCrossingTile.TYPE,
+                                    WallTsplitNTile.TYPE, WallTsplitETile.TYPE,
+                                    WallTsplitSTile.TYPE, WallTsplitWTile.TYPE,
+                                    CornerNETile.TYPE, CornerSETile.TYPE,
+                                    CornerSWTile.TYPE, CornerNWTile.TYPE),
             "Doors"       to listOf(DoorHorizontalTile.TYPE, DoorVerticalTile.TYPE),
             "Interaction" to listOf(ToggleTile.TYPE)
         )
@@ -316,12 +337,13 @@ class MapEditor(private val game: Game) : Screen {
             paletteContent.add(VisLabel(groupName)).padLeft(8f).padBottom(2f).left().row()
             val grid = VisTable()
             paletteContent.add(grid).fillX().expandX().row()
-            types.forEachIndexed { index, type ->
+            val containers = mutableListOf<Table>()
+            types.forEach { type ->
                 val tile = modelLoader.createTile(type)!!
                 val container = SelectionBorderGroup {
                     paletteSelection.let { it is PaletteSelection.Tile && it.type == type }
                 }
-                container.add(TilePreviewActor(tile)).size(64f).pad(5f).row()
+                container.add(TilePreviewActor(tile)).size(tilePreviewSize).pad(tileCellPad).row()
                 container.add(VisLabel(type.removeSuffix("Tile"))).expandX().center()
                 container.addListener(object : ClickListener() {
                     override fun clicked(event: InputEvent, x: Float, y: Float) {
@@ -332,10 +354,10 @@ class MapEditor(private val game: Game) : Screen {
                         Gdx.app.log("Palette", "Tile $state: $type")
                     }
                 })
-                grid.add(container).pad(5f)
-                if ((index + 1) % 3 == 0) grid.row()
+                containers.add(container)
                 tileContainers[type] = container
             }
+            tileGrids.add(grid to containers)
         }
 
         paletteContent.add(VisLabel("TILES")).pad(10f).row()
@@ -344,15 +366,15 @@ class MapEditor(private val game: Game) : Screen {
         // ── Palette: Items ───────────────────────────────────────────────────
         paletteContent.addSeparator().padTop(10f).padBottom(4f)
         paletteContent.add(VisLabel("ITEMS")).pad(10f).row()
-        val itemsGrid = VisTable()
-        paletteContent.add(itemsGrid).fillX().expandX().row()
+        itemGridTable = VisTable()
+        paletteContent.add(itemGridTable).fillX().expandX().row()
 
         val items = listOf(
             Triple(Color.BLUE.toString(),  "Blue Key",  "Key"),
             Triple(Color.GREEN.toString(), "Green Key", "Key"),
             Triple(Color.RED.toString(),   "Red Key",   "Key")
         )
-        items.forEachIndexed { index, (colorHex, name, _) ->
+        items.forEach { (colorHex, name, _) ->
             val container = SelectionBorderGroup {
                 paletteSelection.let { it is PaletteSelection.Item && it.name == name }
             }
@@ -369,21 +391,20 @@ class MapEditor(private val game: Game) : Screen {
                     Gdx.app.log("Palette", "Item $state: $name")
                 }
             })
-            itemsGrid.add(container).pad(5f)
-            if ((index + 1) % 3 == 0) itemsGrid.row()
+            itemGrid.add(container)
             itemContainers[name] = container
         }
 
         // ── Palette: Tags ────────────────────────────────────────────────────
         paletteContent.addSeparator().padTop(10f).padBottom(4f)
         paletteContent.add(VisLabel("TAGS")).pad(10f).row()
-        val tags = listOf(
-            WorldNode.Tags.PLAYER_SPAWN, WorldNode.Tags.ENEMY_SPAWN,
-            WorldNode.Tags.ITEM_SPAWN,   WorldNode.Tags.EXIT,
-            WorldNode.Tags.DOOR_MANUAL,  WorldNode.Tags.DOOR_KEY,
-            WorldNode.Tags.DOOR_TOGGLE,  WorldNode.Tags.TOGGLE
+        val nodeTags = listOf(
+            NodeTags.PLAYER_SPAWN, NodeTags.ENEMY_SPAWN,
+            NodeTags.ITEM_SPAWN,   NodeTags.EXIT,
+            NodeTags.DOOR_MANUAL,  NodeTags.DOOR_KEY,
+            NodeTags.DOOR_TOGGLE,  NodeTags.TOGGLE
         )
-        tags.forEach { tag ->
+        nodeTags.forEach { tag ->
             val btn = VisTextButton(tag, "toggle")
             btn.addListener(object : ClickListener() {
                 override fun clicked(event: InputEvent, x: Float, y: Float) {
@@ -453,7 +474,7 @@ class MapEditor(private val game: Game) : Screen {
                 for (z in 0 until minOf(oldWorld.depth, world.depth)) {
                     val oldNode = oldWorld.getNode(x, y, z)!!
                     val newNode = world.getNode(x, y, z)!!
-                    newNode.tiles.addAll(oldNode.tiles)
+                    oldNode.tiles.forEach { newNode.setTile(it) }
                     oldNode.tags.forEach { world.addTag(newNode, it) }
                 }
             }
@@ -494,7 +515,7 @@ class MapEditor(private val game: Game) : Screen {
         // SelectionBorderGroup draws cyan border automatically; only set dark-gray for "node has tile" state
         val darkGray = VisUI.getSkin().newDrawable("white", Color.DARK_GRAY)
         tileContainers.forEach { (type, table) ->
-            table.background = if (node.tiles.any { it.type == type } &&
+            table.background = if (node.hasTileType(type) &&
                                    !(sel is PaletteSelection.Tile && sel.type == type)) darkGray
                                else null
         }
@@ -504,7 +525,37 @@ class MapEditor(private val game: Game) : Screen {
         }
     }
 
-    inner class TilePreviewActor(val tile: Tile) : S2DActor() {
+    /**
+     * Re-lays out tile and item grids based on the current palette width.
+     * Computes how many columns fit and rebuilds each grid table.
+     */
+    private fun relayoutPaletteGrids(paletteWidth: Float) {
+        if (paletteWidth == lastPaletteWidth || paletteWidth <= 0f) return
+        lastPaletteWidth = paletteWidth
+
+        val cellWidth = tilePreviewSize + tileCellPad * 2  // size + pad on each side
+        val cols = maxOf(1, (paletteWidth / cellWidth).toInt())
+
+        // Re-layout tile grids
+        for ((grid, containers) in tileGrids) {
+            grid.clearChildren()
+            containers.forEachIndexed { index, container ->
+                grid.add(container).pad(tileCellPad)
+                if ((index + 1) % cols == 0) grid.row()
+            }
+        }
+
+        // Re-layout item grid
+        val itemCellWidth = 32f + tileCellPad * 2
+        val itemCols = maxOf(1, (paletteWidth / itemCellWidth).toInt())
+        itemGridTable.clearChildren()
+        itemGrid.forEachIndexed { index, container ->
+            itemGridTable.add(container).pad(tileCellPad)
+            if ((index + 1) % itemCols == 0) itemGridTable.row()
+        }
+    }
+
+    inner class TilePreviewActor(val tile: com.roguelike.core.model.Tile) : S2DActor() {
         init { touchable = Touchable.disabled }  // clicks fall through to the container's listener
         override fun draw(batch: com.badlogic.gdx.graphics.g2d.Batch, parentAlpha: Float) {
             // Save scissor state so the ScrollPane's clipping is preserved after our GL work
@@ -566,14 +617,25 @@ class MapEditor(private val game: Game) : Screen {
     }
 
     private fun updateCamera() {
-        val pitchRad = Math.toRadians(cameraPitch.toDouble()).toFloat()
-        val yawRad = Math.toRadians(cameraYaw.toDouble()).toFloat()
-        val offsetX = cameraDistance * Math.cos(pitchRad.toDouble()).toFloat() * Math.sin(yawRad.toDouble()).toFloat()
-        val offsetZ = cameraDistance * Math.cos(pitchRad.toDouble()).toFloat() * Math.cos(yawRad.toDouble()).toFloat()
-        val offsetY = cameraDistance * Math.sin(pitchRad.toDouble()).toFloat()
-        camera.position.set(cameraTarget.x + offsetX, cameraTarget.y + offsetY, cameraTarget.z + offsetZ)
-        val isUpsideDown = Math.abs(cameraPitch) > 90f
-        camera.up.set(0f, if (isUpsideDown) -1f else 1f, 0f)
+        // Standard orbit camera: Y is up, pitch is elevation from XZ plane, yaw rotates around Y
+        val pitchRad = Math.toRadians(cameraPitch.toDouble())
+        val yawRad = Math.toRadians(cameraYaw.toDouble())
+
+        val cosPitch = Math.cos(pitchRad).toFloat()
+        val sinPitch = Math.sin(pitchRad).toFloat()
+        val sinYaw = Math.sin(yawRad).toFloat()
+        val cosYaw = Math.cos(yawRad).toFloat()
+
+        val offsetX = cameraDistance * cosPitch * sinYaw
+        val offsetY = cameraDistance * sinPitch
+        val offsetZ = cameraDistance * cosPitch * cosYaw
+
+        camera.position.set(
+            cameraTarget.x + offsetX,
+            cameraTarget.y + offsetY,
+            cameraTarget.z + offsetZ
+        )
+        camera.up.set(0f, 1f, 0f)
         camera.lookAt(cameraTarget)
         camera.update()
     }
@@ -585,6 +647,8 @@ class MapEditor(private val game: Game) : Screen {
         selectedX = -1
         selectedY = -1
         selectedZ = -1
+        cameraPitch = 45f
+        cameraYaw = 0f
         cameraTarget.set((world.width / 2f), (world.height / 2f), (world.depth / 2f))
         updateCamera()
     }
@@ -606,6 +670,8 @@ class MapEditor(private val game: Game) : Screen {
                             yLabel.setText(world.height.toString())
                             zLabel.setText(world.depth.toString())
                             layerLabel.setText(maxRenderZ.toString())
+                            cameraPitch = 45f
+                            cameraYaw = 0f
                             cameraTarget.set(world.width / 2f, world.height / 2f, world.depth / 2f)
                             updateCamera()
                         }
@@ -643,7 +709,7 @@ class MapEditor(private val game: Game) : Screen {
     override fun render(delta: Float) {
         handleInput(delta)
         updateHover()
-
+        relayoutPaletteGrids(paletteScroll.width)
 
         val bw = Gdx.graphics.backBufferWidth.toFloat()
         val bh = Gdx.graphics.backBufferHeight.toFloat()
@@ -683,22 +749,11 @@ class MapEditor(private val game: Game) : Screen {
             modelBatch.begin(camera)
             worldRenderer.render(world, modelBatch, environment, maxRenderZ)
 
-            // ── Hover + selection indicators — always visible ─────────────────
-            if (hoveredX != -1) {
-                hoverFrameInstance.transform.setToTranslation(hoveredX.toFloat(), hoveredY.toFloat(), hoveredZ.toFloat())
-                modelBatch.render(hoverFrameInstance)
-            }
-            if (selectedX != -1) {
-                selectedFrameInstance.transform.setToTranslation(selectedX.toFloat(), selectedY.toFloat(), selectedZ.toFloat())
-                modelBatch.render(selectedFrameInstance)
-            }
-
             // ── Full grid — only when grid toggle is on ───────────────────────
             if (showFrames) {
                 for (x in 0 until world.width) {
                     for (y in 0 until world.height) {
                         for (z in 0..maxRenderZ.coerceAtMost(world.depth - 1)) {
-                            // skip: already rendered above
                             if (x == selectedX && y == selectedY && z == selectedZ) continue
                             if (x == hoveredX  && y == hoveredY  && z == hoveredZ)  continue
                             frameInstance.transform.setToTranslation(x.toFloat(), y.toFloat(), z.toFloat())
@@ -708,6 +763,20 @@ class MapEditor(private val game: Game) : Screen {
                 }
             }
             modelBatch.end()
+
+            // ── Hover + selection indicators — rendered with thicker lines ─────
+            Gdx.gl.glLineWidth(3f)
+            modelBatch.begin(camera)
+            if (hoveredX != -1) {
+                hoverFrameInstance.transform.setToTranslation(hoveredX.toFloat(), hoveredY.toFloat(), hoveredZ.toFloat())
+                modelBatch.render(hoverFrameInstance)
+            }
+            if (selectedX != -1) {
+                selectedFrameInstance.transform.setToTranslation(selectedX.toFloat(), selectedY.toFloat(), selectedZ.toFloat())
+                modelBatch.render(selectedFrameInstance)
+            }
+            modelBatch.end()
+            Gdx.gl.glLineWidth(1f)
 
             // ── Tag spheres — one per tagged node ────────────────────────────
             modelBatch.begin(camera)
@@ -839,6 +908,17 @@ class MapEditor(private val game: Game) : Screen {
 
     private fun handleInput(delta: Float) {
         val dragging = Math.abs(Gdx.input.deltaX) > 1 || Math.abs(Gdx.input.deltaY) > 1
+
+        // Middle mouse button drag → rotate (skip if scroll wheel just fired to avoid false orbit)
+        if (Gdx.input.isButtonPressed(Input.Buttons.MIDDLE) && dragging && !scrolledThisFrame) {
+            val dx = Gdx.input.deltaX.toFloat()
+            val dy = Gdx.input.deltaY.toFloat()
+            cameraYaw   = wrapAngle(cameraYaw   - dx * 0.5f)
+            cameraPitch = (cameraPitch + dy * 0.5f).coerceIn(-89f, 89f)
+            updateCamera()
+        }
+        scrolledThisFrame = false
+
         if (Gdx.input.isButtonPressed(Input.Buttons.LEFT) && dragging) {
             val dx = Gdx.input.deltaX.toFloat()
             val dy = Gdx.input.deltaY.toFloat()
@@ -849,7 +929,7 @@ class MapEditor(private val game: Game) : Screen {
                 isAlt -> {
                     // Alt/Option + drag → rotate
                     cameraYaw   = wrapAngle(cameraYaw   - dx * 0.5f)
-                    cameraPitch = wrapAngle(cameraPitch  + dy * 0.5f)
+                    cameraPitch = (cameraPitch + dy * 0.5f).coerceIn(-89f, 89f)
                     updateCamera()
                 }
                 isShift -> {
@@ -879,7 +959,7 @@ class MapEditor(private val game: Game) : Screen {
             when (val sel = paletteSelection) {
                 is PaletteSelection.Tile -> {
                     // Continuous erase: remove tile from every node the cursor passes over
-                    if (node != null && node.tiles.removeIf { it.type == sel.type }) {
+                    if (node != null && node.removeTileByType(sel.type)) {
                         Gdx.app.log("MapEditor", "Erased ${sel.type} from ($hoveredX, $hoveredY, $hoveredZ)")
                         lastEraseX = hoveredX; lastEraseY = hoveredY; lastEraseZ = hoveredZ
                     }
@@ -919,8 +999,8 @@ class MapEditor(private val game: Game) : Screen {
             when (val sel = paletteSelection) {
                 is PaletteSelection.Tile -> {
                     // Continuous paint: add tile to every node the cursor passes over
-                    if (node != null && node.tiles.none { it.type == sel.type }) {
-                        node.tiles.add(modelLoader.createTile(sel.type)!!)
+                    if (node != null && !node.hasTileType(sel.type)) {
+                        node.setTile(modelLoader.createTile(sel.type)!!)
                         Gdx.app.log("MapEditor", "Painted ${sel.type} → ($hoveredX, $hoveredY, $hoveredZ)")
                         lastPaintX = hoveredX; lastPaintY = hoveredY; lastPaintZ = hoveredZ
                     }
@@ -974,7 +1054,7 @@ class MapEditor(private val game: Game) : Screen {
                     var assocData: String? = null
                     val type = if (target.items.any { it is KeyItem }) {
                         assocData = target.items.firstOrNull { it is KeyItem }?.name; "key"
-                    } else if (target.tags.contains(WorldNode.Tags.TOGGLE)) "toggle" else null
+                    } else if (target.tags.contains(NodeTags.TOGGLE)) "toggle" else null
                     if (type != null) world.addAssociation(source, target, type, assocData)
                 }
             }

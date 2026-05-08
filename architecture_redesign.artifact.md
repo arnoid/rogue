@@ -2,59 +2,69 @@
 
 This document outlines the proposed architectural changes to the Roguelike project to adhere to SOLID principles and improve testability and maintainability.
 
-## Current Weaknesses
-- **Tight Coupling**: Core classes like `Tile`, `Actor`, and `World` depend directly on LibGDX graphics classes (`ModelInstance`, `Color`).
-- **SRP Violations**: `RoguelikeGame` and `MapEditor` handle input, rendering, and logic simultaneously.
-- **OCP Violations**: Adding new game elements often requires modifying central loaders or renderers.
-- **Lack of Testability**: Business logic is entangled with the graphics pipeline.
+## ✅ Completed Migration Steps
 
-## Proposed Architecture
+### Step 1: Abstract Math (DONE — prior)
+- `com.roguelike.core.math.Vec3` — lightweight pure Kotlin vector, no LibGDX dependency.
+- `com.roguelike.utils.Vec3GdxBridge` — extension functions converting between core `Vec3` and LibGDX `Vector3`.
 
-### 1. Separation of Concerns (SRP)
-We will split the project into three distinct layers:
-- **Core (Logic)**: Pure Kotlin/Java. Contains the world state, entity rules, and interaction logic. No LibGDX dependencies.
-- **Systems (Infrastructure)**: Bridges Core and LibGDX. Handles input mapping, asset loading, and world serialization.
-- **Rendering (View)**: Translates the world state into pixels. Contains all `ModelBatch` and `ModelInstance` logic.
+### Step 2: Pure Data Tiles (DONE)
+- **`world/Tiles.kt`** — `BaseTile` and all subclasses (`FloorTile`, `WallTile`, `DoorTile`, etc.) are now pure data classes with zero LibGDX imports. Removed `Model`, `ModelInstance`, `Color`, and `applyColor()`.
+- Duplicate `Tile` interface removed from `world` package; all tiles implement `core.model.Tile` directly.
+- `CoreAliases.kt` — removed the redundant `Tile` typealias.
 
-### 2. Entity-Component Pattern (DIP/ISP)
-Replace inheritance-based actors with a composition-based system:
-- **Component**: Pure data (e.g., `Position`, `Health`, `Inventory`).
-- **Entity**: A collection of Components.
-- **System**: Logic that operates on Entities with specific Components (e.g., `CollisionSystem`, `InteractionSystem`).
+### Step 3: Core World (DONE — prior)
+- `core.model.World`, `WorldNode`, `Actor`, `Player`, `Item`, `KeyItem` — all LibGDX-free.
 
-### 3. Decoupled Tile System (OCP)
-- `Tile` will be a pure data class or enum.
-- `TileRenderer` will map `Tile` types to `Model` assets using a `TileRegistry`.
-- Logic like "Door Opening" will be handled by a `TileBehavior` or a specialized system.
+### Step 4: Logic Systems (DONE)
+- **`core.systems.InteractionSystem`** — moved from `com.roguelike.systems` to `com.roguelike.core.systems`. Replaced `Gdx.app.log` with injectable `GameLogger` interface. Zero LibGDX imports.
+- **`core.systems.MovementSystem`** — already pure (no LibGDX). Duplicate in `com.roguelike.systems` replaced with a backward-compatibility typealias.
+- **`core.model.GameLogger`** — new `fun interface` for logging, with `NOOP` companion for tests.
 
-### 4. Command Pattern for Input & Editor
-- Translate user input (keys/mouse) into `Action` objects (e.g., `MoveAction`, `InteractAction`, `PlaceTileAction`).
-- This allows for easy Undo/Redo in the editor and replay/network synchronization in the game.
+### Step 5: Render Bridge (DONE)
+- **`rendering/TileRenderRegistry`** — maps tile instances → `TileRenderData(model, scale, center, altModel?)`.
+- **`rendering/TileRenderer`** — now takes `TileRenderRegistry` as constructor parameter; looks up `Model`, `scale`, and `center` from the registry instead of from tile fields.
+- **`utils/ModelLoader`** — now takes optional `TileRenderRegistry`; registers render data for each tile it creates. Pure-data tiles are returned.
 
-### 5. Modular UI (MVP Pattern)
-- Break `MapEditor` and `RoguelikeGame` into smaller UI components (e.g., `PaletteView`, `StatusBarView`).
-- Use `Presenter` classes to handle logic between the World state and the UI.
+### Step 6: Editor Decomposition (DONE)
+- **`editor/EditorPalettePanel`** — extracted tile/item/tag palette UI, `TilePreviewActor`, `SelectionBorderGroup`, and `PaletteSelection` sealed class.
+- **`editor/EditorStatusBar`** — extracted bottom bar with X/Y/Z dimension and layer controls.
+- **`editor/EditorInputHandler`** — extracted all paint/erase/select/association input handling.
+- `MapEditor` remains the orchestrator but the building blocks are modular and independently testable.
 
-## Detailed Package Structure
+## Architecture Summary
+
 ```
 com.roguelike
-├── core
-│   ├── model       // World, Node, Tile, Item (Pure Logic)
-│   ├── components  // Entity components
-│   └── systems     // Logic systems (Interaction, Movement)
-├── infra
-│   ├── input       // Input mapping
-│   ├── persistence // Serialization (WorldIO)
-│   └── assets      // Asset management
-└── view
-    ├── renderers   // WorldRenderer, EntityRenderer
-    └── ui          // Scene2D UI components
+├── core                          # Pure Kotlin — NO LibGDX
+│   ├── math/Vec3                 # Lightweight 3D vector
+│   ├── model/                    # World, WorldNode, Actor, Player, Tile, Item, GameLogger
+│   └── systems/                  # MovementSystem, InteractionSystem
+├── world                         # Concrete tile data classes (BaseTile, FloorTile, DoorTile, …)
+│   ├── Tiles.kt                  # Pure data — implements core.model.Tile
+│   ├── CoreAliases.kt            # Backward-compat typealiases (to be removed)
+│   └── WorldGenerator.kt
+├── rendering                     # LibGDX view layer
+│   ├── TileRenderRegistry.kt    # Maps tiles → Model/scale/center
+│   ├── TileRenderer.kt          # Creates & caches ModelInstances via registry
+│   ├── WorldRenderer.kt
+│   ├── ItemRenderer.kt
+│   ├── InventoryUI.kt
+│   └── OrientationGizmo.kt
+├── editor                        # Decomposed editor components
+│   ├── EditorPalettePanel.kt
+│   ├── EditorStatusBar.kt
+│   └── EditorInputHandler.kt
+├── systems                       # LibGDX infrastructure (input, camera)
+│   ├── InputHandler.kt
+│   ├── CameraManager.kt
+│   ├── MovementSystem.kt         # typealias → core.systems
+│   └── InteractionSystem.kt      # typealias → core.systems
+├── serialization/                # WorldIO, WorldData
+├── utils/                        # AssetLoader, ModelLoader, Vec3GdxBridge
+├── MapEditor.kt                  # Orchestrator screen
+├── RoguelikeGame.kt             # Game screen
+├── MainMenuScreen.kt
+├── RoguelikeLauncher.kt
+└── Main.kt
 ```
-
-## Migration Steps
-1. **Abstract Math**: Create or use a lightweight `Vector3` abstraction to remove `com.badlogic.gdx.math.Vector3` from the core.
-2. **Pure Data Tiles**: Refactor `Tile` and `BaseTile` to remove `ModelInstance`.
-3. **Core World**: Move `World` and `WorldNode` to a `core` package and remove LibGDX imports.
-4. **Logic Systems**: Refactor `InteractionSystem` and `MovementSystem` to operate on core data only.
-5. **Render Bridge**: Create a `RenderMapper` that maintains the link between core Entities/Tiles and LibGDX `ModelInstance` objects.
-6. **Editor Decomposition**: Extract UI panels from `MapEditor.kt` into separate classes.

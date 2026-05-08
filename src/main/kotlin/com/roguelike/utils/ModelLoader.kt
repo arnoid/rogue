@@ -1,13 +1,15 @@
 package com.roguelike.utils
 
-
 import com.badlogic.gdx.graphics.g3d.Model
 import com.badlogic.gdx.math.collision.BoundingBox
 import com.roguelike.core.math.Vec3
+import com.roguelike.core.model.Tile
+import com.roguelike.rendering.TileRenderData
+import com.roguelike.rendering.TileRenderRegistry
 import com.roguelike.world.*
 
 /** Handles the loading and instantiation of tiles with their corresponding models. */
-class ModelLoader(val assetLoader: AssetLoader) {
+class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRegistry = TileRenderRegistry()) {
 
     private val factories = mutableMapOf<String, () -> Tile>()
 
@@ -19,9 +21,15 @@ class ModelLoader(val assetLoader: AssetLoader) {
         register(DoorVerticalTile.TYPE)   { createDoorVerticalTile() }
         register(ToggleTile.TYPE)         { createToggleTile() }
         register(CornerNETile.TYPE)       { createCornerNETile() }
-        register(CornerESTile.TYPE)       { createCornerESTile() }
+        register(CornerSETile.TYPE)       { createCornerSETile() }
         register(CornerSWTile.TYPE)       { createCornerSWTile() }
-        register(CornerWNTile.TYPE)       { createCornerWNTile() }
+        register(CornerNWTile.TYPE)       { createCornerNWTile() }
+        register(WallArchedTile.TYPE)     { createWallArchedTile() }
+        register(WallCrossingTile.TYPE)   { createWallCrossingTile() }
+        register(WallTsplitNTile.TYPE)    { createWallTsplitNTile() }
+        register(WallTsplitETile.TYPE)    { createWallTsplitETile() }
+        register(WallTsplitSTile.TYPE)    { createWallTsplitSTile() }
+        register(WallTsplitWTile.TYPE)    { createWallTsplitWTile() }
     }
 
     fun register(typeName: String, factory: () -> Tile) {
@@ -42,33 +50,43 @@ class ModelLoader(val assetLoader: AssetLoader) {
     fun createFloorTile(): FloorTile {
         val model = assetLoader.loadModel("floor", "models/tiles/obj/floor_dirt_large.obj")
         val (scale, center) = getModelData(model)
-        return FloorTile(model, scale, center).also { it.zOffset = 0f }
+        val tile = FloorTile().also { it.zOffset = 0f }
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        return tile
     }
 
     fun createWallHorizontalTile(): WallHorizontalTile {
         val model = assetLoader.loadModel("wall", "models/tiles/obj/wall.obj")
         val (scale, center) = getModelData(model)
-        return WallHorizontalTile(model, scale, center)
+        val tile = WallHorizontalTile()
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        return tile
     }
 
     fun createWallVerticalTile(): WallVerticalTile {
         val model = assetLoader.loadModel("wall", "models/tiles/obj/wall.obj")
         val (scale, center) = getModelData(model)
-        return WallVerticalTile(model, scale, center).also { it.rotationZ = 90f }
+        val tile = WallVerticalTile().also { it.rotationY = -90f}
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        return tile
     }
 
     fun createDoorHorizontalTile(): DoorHorizontalTile {
         val closed = assetLoader.loadModel("door_closed", "models/tiles/obj/wall_doorway_door.obj")
         val open   = assetLoader.loadModel("door_open",   "models/tiles/obj/wall_doorway.obj")
         val (scale, center) = getModelData(closed)
-        return DoorHorizontalTile(closed, open, scale, center)
+        val tile = DoorHorizontalTile()
+        renderRegistry.register(tile, TileRenderData(closed, scale, center, altModel = open))
+        return tile
     }
 
     fun createDoorVerticalTile(): DoorVerticalTile {
         val closed = assetLoader.loadModel("door_closed", "models/tiles/obj/wall_doorway_door.obj")
         val open   = assetLoader.loadModel("door_open",   "models/tiles/obj/wall_doorway.obj")
         val (scale, center) = getModelData(closed)
-        return DoorVerticalTile(closed, open, scale, center).also { it.rotationY = 90f }
+        val tile = DoorVerticalTile().also { it.rotationY = 90f }
+        renderRegistry.register(tile, TileRenderData(closed, scale, center, altModel = open))
+        return tile
     }
 
     fun createToggleTile(): ToggleTile {
@@ -79,37 +97,97 @@ class ModelLoader(val assetLoader: AssetLoader) {
         box.getCenter(gdxCenter)
         val center = Vec3(gdxCenter.x, gdxCenter.y, gdxCenter.z)
         val scale  = 0.5f / center.len()
-        return ToggleTile(model, scale, center)
+        val tile = ToggleTile()
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        return tile
     }
 
     fun createCornerNETile(): CornerNETile {
         val model = assetLoader.loadModel("wall_corner", "models/tiles/obj/wall_corner.obj")
         val (scale, center) = getModelData(model)
-        return CornerNETile(model, scale, center)
+        val tile = CornerNETile()
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        return tile
     }
 
-    fun createCornerESTile(): CornerESTile {
+    fun createCornerSETile(): CornerSETile {
         val model = assetLoader.loadModel("wall_corner", "models/tiles/obj/wall_corner.obj")
         val (scale, center) = getModelData(model)
-        return CornerESTile(model, scale, center)
+        val tile = CornerSETile().also { it.rotationY = 90f }
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        return tile
     }
 
     fun createCornerSWTile(): CornerSWTile {
         val model = assetLoader.loadModel("wall_corner", "models/tiles/obj/wall_corner.obj")
         val (scale, center) = getModelData(model)
-        return CornerSWTile(model, scale, center)
+        val tile = CornerSWTile().also { it.rotationY = 180f }
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        return tile
     }
 
-    fun createCornerWNTile(): CornerWNTile {
+    fun createCornerNWTile(): CornerNWTile {
         val model = assetLoader.loadModel("wall_corner", "models/tiles/obj/wall_corner.obj")
         val (scale, center) = getModelData(model)
-        return CornerWNTile(model, scale, center)
+        val tile = CornerNWTile().also { it.rotationY = -90f }
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        return tile
+    }
+
+    fun createWallArchedTile(): WallArchedTile {
+        val model = assetLoader.loadModel("wall_arched", "models/tiles/obj/wall_arched.obj")
+        val (scale, center) = getModelData(model)
+        val tile = WallArchedTile()
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        return tile
+    }
+
+    fun createWallCrossingTile(): WallCrossingTile {
+        val model = assetLoader.loadModel("wall_crossing", "models/tiles/obj/wall_crossing.obj")
+        val (scale, center) = getModelData(model)
+        val tile = WallCrossingTile()
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        return tile
+    }
+
+    fun createWallTsplitNTile(): WallTsplitNTile {
+        val model = assetLoader.loadModel("wall_Tsplit", "models/tiles/obj/wall_Tsplit.obj")
+        val (scale, center) = getModelData(model)
+        val tile = WallTsplitNTile()
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        return tile
+    }
+
+    fun createWallTsplitETile(): WallTsplitETile {
+        val model = assetLoader.loadModel("wall_Tsplit", "models/tiles/obj/wall_Tsplit.obj")
+        val (scale, center) = getModelData(model)
+        val tile = WallTsplitETile().also { it.rotationY = 90f }
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        return tile
+    }
+
+    fun createWallTsplitSTile(): WallTsplitSTile {
+        val model = assetLoader.loadModel("wall_Tsplit", "models/tiles/obj/wall_Tsplit.obj")
+        val (scale, center) = getModelData(model)
+        val tile = WallTsplitSTile().also { it.rotationY = 180f }
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        return tile
+    }
+
+    fun createWallTsplitWTile(): WallTsplitWTile {
+        val model = assetLoader.loadModel("wall_Tsplit", "models/tiles/obj/wall_Tsplit.obj")
+        val (scale, center) = getModelData(model)
+        val tile = WallTsplitWTile().also { it.rotationY = -90f }
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        return tile
     }
 
     fun createGenericTile(modelFile: String): GenericTile {
         val model = assetLoader.loadModel(modelFile, "models/tiles/obj/$modelFile")
         val (scale, center) = getModelData(model)
-        return GenericTile(modelFile, model, scale, center)
+        val tile = GenericTile(modelFile)
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        return tile
     }
 
     fun createTile(typeName: String): Tile? {

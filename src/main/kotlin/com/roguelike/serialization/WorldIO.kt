@@ -1,14 +1,12 @@
 package com.roguelike.serialization
 
 import com.badlogic.gdx.Gdx
-import com.badlogic.gdx.graphics.Color
-import com.badlogic.gdx.utils.Json
 import com.roguelike.core.model.*
 import com.roguelike.world.BaseTile
 import java.io.File
 
 object WorldIO {
-    private val json = Json()
+    private val json = com.badlogic.gdx.utils.Json()
 
     fun loadWorld(
         path: String,
@@ -30,7 +28,7 @@ object WorldIO {
                             tile.rotationY = tData.rotY
                             tile.rotationZ = tData.rotZ
                         }
-                        node.tiles.add(tile)
+                        node.setTile(tile)
                     }
                 }
                 nodeData.items.forEach { itemData ->

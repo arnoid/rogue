@@ -16,11 +16,17 @@ import com.badlogic.gdx.scenes.scene2d.Stage
 import com.badlogic.gdx.scenes.scene2d.ui.Skin
 import com.badlogic.gdx.utils.viewport.ScreenViewport
 import com.roguelike.core.math.Vec3
+import com.roguelike.core.model.GameLogger
+import com.roguelike.core.systems.InteractionSystem
+import com.roguelike.core.systems.MovementSystem
 import com.roguelike.rendering.InventoryUI
 import com.roguelike.rendering.ItemRenderer
+import com.roguelike.rendering.TileRenderer
 import com.roguelike.rendering.WorldRenderer
 import com.roguelike.serialization.WorldIO
-import com.roguelike.systems.*
+import com.roguelike.systems.CameraManager
+import com.roguelike.systems.InputHandler
+import com.roguelike.core.model.WorldNode.Tags as NodeTags
 import com.roguelike.utils.*
 import com.roguelike.world.*
 
@@ -56,10 +62,14 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
     private var debugMode = false
     private lateinit var axesInstance: ModelInstance
 
+    /** Bridge GameLogger that delegates to LibGDX Gdx.app.log(). */
+    private val gdxLogger = GameLogger { tag, msg -> Gdx.app?.log(tag, msg) }
+
     override fun show() {
         modelBatch = ModelBatch()
         itemRenderer = ItemRenderer(assetLoader)
-        worldRenderer = WorldRenderer(itemRenderer = itemRenderer)
+        val tileRenderer = TileRenderer(modelLoader.renderRegistry)
+        worldRenderer = WorldRenderer(tileRenderer, itemRenderer)
 
         // --- World Generation or Loading ---
         if (worldPath != null) {
@@ -70,7 +80,7 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         }
 
         movementSystem = MovementSystem(world)
-        interactionSystem = InteractionSystem(world)
+        interactionSystem = InteractionSystem(world, gdxLogger)
 
         camera = PerspectiveCamera(67f, Gdx.graphics.width.toFloat(), Gdx.graphics.height.toFloat())
         camera.near = 0.1f
@@ -123,7 +133,7 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         axesInstance = ModelInstance(modelBuilder.end()!!)
 
         // Spawn player at tagged node
-        world.getNodesWithTag(WorldNode.Tags.PLAYER_SPAWN).firstOrNull()?.let { node ->
+        world.getNodesWithTag(NodeTags.PLAYER_SPAWN).firstOrNull()?.let { node ->
             player.position.set(node.x.toFloat(), node.y.toFloat(), node.z.toFloat())
         }
     }

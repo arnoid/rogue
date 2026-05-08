@@ -1,6 +1,7 @@
 package com.roguelike.serialization
 
-import com.roguelike.world.Tile
+import com.roguelike.core.model.TileSlot
+import com.roguelike.core.model.Tile
 import com.roguelike.world.World
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
@@ -8,7 +9,7 @@ import java.io.File
 
 class WorldIOTest {
 
-    class MockTile(override val type: String) : Tile
+    class MockTile(override val type: String, override val slot: TileSlot = TileSlot.FLOOR) : Tile
 
     @Test
     fun testSaveAndLoad() {
@@ -16,7 +17,7 @@ class WorldIOTest {
         try {
             val world = World(3, 1, 3)
             val node = world.getNode(1, 0, 1)!!
-            node.tiles.add(MockTile("TestTile"))
+            node.setTile(MockTile("TestTile"))
             world.addTag(node, "TestTag")
 
             WorldIO.saveWorld(tempFile.absolutePath, world)
@@ -31,7 +32,7 @@ class WorldIOTest {
             assertEquals(3, loadedWorld!!.width)
             val loadedNode = loadedWorld.getNode(1, 0, 1)!!
             assertEquals(1, loadedNode.tiles.size)
-            assertEquals("TestTile", loadedNode.tiles[0].type)
+            assertEquals("TestTile", loadedNode.tiles.first().type)
             assertTrue(loadedNode.tags.contains("TestTag"))
         } finally {
             tempFile.delete()

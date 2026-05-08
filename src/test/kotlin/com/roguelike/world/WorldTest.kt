@@ -1,11 +1,13 @@
 package com.roguelike.world
 
+import com.roguelike.core.model.Tile
+import com.roguelike.core.model.TileSlot
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
 class WorldTest {
 
-    class MockTile(override val type: String, private val blocking: Boolean) : Tile {
+    class MockTile(override val type: String, private val blocking: Boolean, override val slot: TileSlot = TileSlot.FLOOR) : Tile {
         override fun isBlocking(): Boolean = blocking
     }
 
@@ -14,16 +16,14 @@ class WorldTest {
         val world = World(5, 1, 5)
         val node = world.getNode(2, 0, 2)!!
         
-        // Empty node should be walkable if we follow the logic (node.tiles.none { it.isBlocking() })
-        // Wait, current logic in World.isWalkable:
-        // return node.tiles.none { it.isBlocking() }
+        // Empty node should be walkable
         assertTrue(world.isWalkable(2f, 0f, 2f))
         
-        node.tiles.add(MockTile("Wall", true))
+        node.setTile(MockTile("Wall", true, TileSlot.WALL))
         assertFalse(world.isWalkable(2f, 0f, 2f))
         
-        node.tiles.clear()
-        node.tiles.add(MockTile("Floor", false))
+        node.clear()
+        node.setTile(MockTile("Floor", false, TileSlot.FLOOR))
         assertTrue(world.isWalkable(2f, 0f, 2f))
     }
 
