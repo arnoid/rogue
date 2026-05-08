@@ -280,8 +280,7 @@ class MapEditor(private val game: Game) : Screen {
         toolColumn.top()
         mainRow.add(toolColumn).width(60f).fillY()
 
-        val gridIconPath = "/Users/sarnaut/work/workspace/roguelike/src/main/resources/icons/view-grid-outline.png"
-        val gridIconFile = Gdx.files.absolute(gridIconPath)
+        val gridIconFile = Gdx.files.internal("icons/view-grid-outline.png")
         val gridToggleStyle = ImageButton.ImageButtonStyle(VisUI.getSkin().get(ImageButton.ImageButtonStyle::class.java))
         gridToggleStyle.up = VisUI.getSkin().newDrawable("white", Color.DARK_GRAY)
         gridToggleStyle.checked = VisUI.getSkin().newDrawable("white", Color.valueOf("4444FF"))
@@ -308,6 +307,7 @@ class MapEditor(private val game: Game) : Screen {
         // Right: scrollable palette with dynamic column layout
         val paletteContent = VisTable()
         paletteContent.top()
+        paletteContent.pad(0f, 8f, 0f, 8f)
         paletteScroll = VisScrollPane(paletteContent)
         paletteScroll.setFadeScrollBars(false)
         paletteScroll.setScrollingDisabled(true, false)
@@ -571,6 +571,8 @@ class MapEditor(private val game: Game) : Screen {
             val bh = height * (Gdx.graphics.backBufferHeight.toFloat() / stage.height)
             Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST)
             Gdx.gl.glViewport(bx.toInt(), by.toInt(), bw.toInt(), bh.toInt())
+            Gdx.gl.glEnable(GL20.GL_DEPTH_TEST)
+            Gdx.gl.glClear(GL20.GL_DEPTH_BUFFER_BIT)
             modelBatch.begin(previewCamera)
             tileRenderer.render(tile, modelBatch, previewEnvironment, 0f, 0f, 0f, ignoreYRotation = true)
             modelBatch.end()

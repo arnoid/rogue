@@ -109,7 +109,7 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
     fun createCornerNETile(): CornerNETile {
         val model = assetLoader.loadModel("wall_corner", "models/tiles/obj/wall_corner.obj")
         val (scale, center) = getModelData(model)
-        val tile = CornerNETile()
+        val tile = CornerNETile().also { it.xOffset = WALL_TSPLIT_OFFSET; it.yOffset = WALL_TSPLIT_OFFSET }
         renderRegistry.register(tile, TileRenderData(model, scale, center))
         return tile
     }
@@ -117,7 +117,7 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
     fun createCornerSETile(): CornerSETile {
         val model = assetLoader.loadModel("wall_corner", "models/tiles/obj/wall_corner.obj")
         val (scale, center) = getModelData(model)
-        val tile = CornerSETile().also { it.rotationY = 90f }
+        val tile = CornerSETile().also { it.rotationY = 90f; it.xOffset = WALL_TSPLIT_OFFSET; it.yOffset = -WALL_TSPLIT_OFFSET }
         renderRegistry.register(tile, TileRenderData(model, scale, center))
         return tile
     }
@@ -125,7 +125,7 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
     fun createCornerSWTile(): CornerSWTile {
         val model = assetLoader.loadModel("wall_corner", "models/tiles/obj/wall_corner.obj")
         val (scale, center) = getModelData(model)
-        val tile = CornerSWTile().also { it.rotationY = 180f }
+        val tile = CornerSWTile().also { it.rotationY = 180f; it.xOffset = -WALL_TSPLIT_OFFSET; it.yOffset = -WALL_TSPLIT_OFFSET }
         renderRegistry.register(tile, TileRenderData(model, scale, center))
         return tile
     }
@@ -133,7 +133,7 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
     fun createCornerNWTile(): CornerNWTile {
         val model = assetLoader.loadModel("wall_corner", "models/tiles/obj/wall_corner.obj")
         val (scale, center) = getModelData(model)
-        val tile = CornerNWTile().also { it.rotationY = -90f }
+        val tile = CornerNWTile().also { it.rotationY = -90f; it.xOffset = -WALL_TSPLIT_OFFSET; it.yOffset = WALL_TSPLIT_OFFSET }
         renderRegistry.register(tile, TileRenderData(model, scale, center))
         return tile
     }
@@ -165,7 +165,7 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
     fun createWallTsplitETile(): WallTsplitETile {
         val model = assetLoader.loadModel("wall_Tsplit", "models/tiles/obj/wall_Tsplit.obj")
         val (scale, center) = getModelData(model)
-        val tile = WallTsplitETile().also { it.rotationY = 90f }
+        val tile = WallTsplitETile().also { it.rotationY = 90f; it.xOffset = WALL_TSPLIT_OFFSET }
         renderRegistry.register(tile, TileRenderData(model, scale, center))
         return tile
     }
