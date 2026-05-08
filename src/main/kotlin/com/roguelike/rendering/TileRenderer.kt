@@ -88,9 +88,11 @@ class TileRenderer(private val registry: TileRenderRegistry) {
         rotZ += tile.rotationZ + additionalRotZ
 
         val baseZ = tile.fixedZ ?: z
+        val tx = x + tile.xOffset
+        val ty = y + tile.yOffset
         val tz = baseZ + tile.zOffset
 
-        instance.transform.setToTranslation(x, y, tz)
+        instance.transform.setToTranslation(tx, ty, tz)
         instance.transform.scale(renderData.scale, renderData.scale, renderData.scale)
         if (rotX != 0f)                       instance.transform.rotate(Vector3.X, rotX)
         if (!ignoreYRotation && rotY != 0f)   instance.transform.rotate(Vector3.Y, rotY)

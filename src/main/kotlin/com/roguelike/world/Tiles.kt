@@ -11,6 +11,8 @@ abstract class BaseTile : Tile {
     var rotationX = 0f
     var rotationY = 0f
     var rotationZ = 0f
+    var xOffset   = 0f
+    var yOffset   = 0f
     var zOffset   = 0f
 }
 

@@ -13,6 +13,10 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
 
     private val factories = mutableMapOf<String, () -> Tile>()
 
+    companion object {
+        const val WALL_TSPLIT_OFFSET = 0.19f
+    }
+
     init {
         register(FloorTile.TYPE)          { createFloorTile() }
         register(WallHorizontalTile.TYPE) { createWallHorizontalTile() }
@@ -153,7 +157,7 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
     fun createWallTsplitNTile(): WallTsplitNTile {
         val model = assetLoader.loadModel("wall_Tsplit", "models/tiles/obj/wall_Tsplit.obj")
         val (scale, center) = getModelData(model)
-        val tile = WallTsplitNTile()
+        val tile = WallTsplitNTile().also { it.yOffset = 0.19f }
         renderRegistry.register(tile, TileRenderData(model, scale, center))
         return tile
     }
@@ -169,7 +173,7 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
     fun createWallTsplitSTile(): WallTsplitSTile {
         val model = assetLoader.loadModel("wall_Tsplit", "models/tiles/obj/wall_Tsplit.obj")
         val (scale, center) = getModelData(model)
-        val tile = WallTsplitSTile().also { it.rotationY = 180f }
+        val tile = WallTsplitSTile().also { it.rotationY = 180f; it.yOffset = -WALL_TSPLIT_OFFSET }
         renderRegistry.register(tile, TileRenderData(model, scale, center))
         return tile
     }
@@ -177,7 +181,7 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
     fun createWallTsplitWTile(): WallTsplitWTile {
         val model = assetLoader.loadModel("wall_Tsplit", "models/tiles/obj/wall_Tsplit.obj")
         val (scale, center) = getModelData(model)
-        val tile = WallTsplitWTile().also { it.rotationY = -90f }
+        val tile = WallTsplitWTile().also { it.rotationY = -90f; it.xOffset = -WALL_TSPLIT_OFFSET }
         renderRegistry.register(tile, TileRenderData(model, scale, center))
         return tile
     }
