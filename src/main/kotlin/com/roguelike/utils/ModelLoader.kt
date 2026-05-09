@@ -8,6 +8,7 @@ import com.roguelike.rendering.TileRenderData
 import com.roguelike.rendering.TileRenderRegistry
 import com.roguelike.world.*
 
+
 /** Handles the loading and instantiation of tiles with their corresponding models. */
 class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRegistry = TileRenderRegistry()) {
 
@@ -15,6 +16,7 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
 
     companion object {
         const val WALL_TSPLIT_OFFSET = 0.19f
+        private const val STAIRS_Z_OFFSET = 0.13f
     }
 
     init {
@@ -51,6 +53,17 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
         model.calculateBoundingBox(box)
         val maxDim = maxOf(box.width, maxOf(box.height, box.depth))
         val scale  = if (maxDim > 0f) 1.0f / maxDim else 1.0f
+        val gdxCenter = com.badlogic.gdx.math.Vector3()
+        box.getCenter(gdxCenter)
+        return scale to Vec3(gdxCenter.x, gdxCenter.y, gdxCenter.z)
+    }
+
+    /** Computes scale to fill a 1x1 footprint (based on width and depth, ignoring height). */
+    private fun getModelDataFitFootprint(model: Model): Pair<Float, Vec3> {
+        val box = BoundingBox()
+        model.calculateBoundingBox(box)
+        val footprint = maxOf(box.width, box.depth)
+        val scale = if (footprint > 0f) 1.0f / footprint else 1.0f
         val gdxCenter = com.badlogic.gdx.math.Vector3()
         box.getCenter(gdxCenter)
         return scale to Vec3(gdxCenter.x, gdxCenter.y, gdxCenter.z)
@@ -199,32 +212,32 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
 
     fun createStairsNTile(): StairsNTile {
         val model = assetLoader.loadModel("stairs_narrow", "models/tiles/obj/stairs_narrow.obj")
-        val (scale, center) = getModelData(model)
-        val tile = StairsNTile().also { it.rotationY = 180f }
+        val (scale, center) = getModelDataFitFootprint(model)
+        val tile = StairsNTile().also { it.rotationY = 180f; it.zOffset = STAIRS_Z_OFFSET }
         renderRegistry.register(tile, TileRenderData(model, scale, center))
         return tile
     }
 
     fun createStairsETile(): StairsETile {
         val model = assetLoader.loadModel("stairs_narrow", "models/tiles/obj/stairs_narrow.obj")
-        val (scale, center) = getModelData(model)
-        val tile = StairsETile().also { it.rotationY = -90f }
+        val (scale, center) = getModelDataFitFootprint(model)
+        val tile = StairsETile().also { it.rotationY = -90f; it.zOffset = STAIRS_Z_OFFSET }
         renderRegistry.register(tile, TileRenderData(model, scale, center))
         return tile
     }
 
     fun createStairsSTile(): StairsSTile {
         val model = assetLoader.loadModel("stairs_narrow", "models/tiles/obj/stairs_narrow.obj")
-        val (scale, center) = getModelData(model)
-        val tile = StairsSTile().also { it.rotationY = 0f }
+        val (scale, center) = getModelDataFitFootprint(model)
+        val tile = StairsSTile().also { it.rotationY = 0f; it.zOffset = STAIRS_Z_OFFSET }
         renderRegistry.register(tile, TileRenderData(model, scale, center))
         return tile
     }
 
     fun createStairsWTile(): StairsWTile {
         val model = assetLoader.loadModel("stairs_narrow", "models/tiles/obj/stairs_narrow.obj")
-        val (scale, center) = getModelData(model)
-        val tile = StairsWTile().also { it.rotationY = 90f }
+        val (scale, center) = getModelDataFitFootprint(model)
+        val tile = StairsWTile().also { it.rotationY = 90f; it.zOffset = STAIRS_Z_OFFSET }
         renderRegistry.register(tile, TileRenderData(model, scale, center))
         return tile
     }

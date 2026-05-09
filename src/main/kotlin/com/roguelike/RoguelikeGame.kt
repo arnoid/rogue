@@ -357,6 +357,36 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
                 )
             }
             debugShapeRenderer.end()
+
+            // ── Stairs direction arrows ───────────────────────────────────────
+            Gdx.gl.glLineWidth(3f)
+            debugShapeRenderer.projectionMatrix = camera.combined
+            debugShapeRenderer.begin(com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType.Line)
+            debugShapeRenderer.color = Color(0.2f, 0.5f, 1f, 1f)
+            for (x in 0 until world.width) {
+                for (y in 0 until world.height) {
+                    for (z in 0 until world.depth) {
+                        val node = world.getNode(x, y, z) ?: continue
+                        node.tiles.filterIsInstance<StairsTile>().forEach { stair ->
+                            val fx = x.toFloat(); val fy = y.toFloat(); val fz = z.toFloat() + 0.05f
+                            val (dx, dy) = when (stair) {
+                                is StairsNTile -> 0f to 1f
+                                is StairsSTile -> 0f to -1f
+                                is StairsETile -> 1f to 0f
+                                is StairsWTile -> -1f to 0f
+                                else -> 0f to 0f
+                            }
+                            val len = 0.35f; val head = 0.12f
+                            val ex = fx + dx * len; val ey = fy + dy * len
+                            debugShapeRenderer.line(fx, fy, fz, ex, ey, fz)
+                            debugShapeRenderer.line(ex, ey, fz, ex - dx * head + dy * head, ey - dy * head + dx * head, fz)
+                            debugShapeRenderer.line(ex, ey, fz, ex - dx * head - dy * head, ey - dy * head - dx * head, fz)
+                        }
+                    }
+                }
+            }
+            debugShapeRenderer.end()
+            Gdx.gl.glLineWidth(1f)
             Gdx.gl.glDisable(GL20.GL_BLEND)
         }
 

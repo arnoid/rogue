@@ -12,7 +12,11 @@ data class TileRenderData(
     val scale: Float,
     val center: Vec3,
     /** Optional alternate model (e.g. open-door model). */
-    val altModel: Model? = null
+    val altModel: Model? = null,
+    /** Optional per-axis scale override. When set, used instead of uniform scale. */
+    val scaleX: Float? = null,
+    val scaleY: Float? = null,
+    val scaleZ: Float? = null
 )
 
 /**

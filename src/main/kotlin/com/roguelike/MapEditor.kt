@@ -645,9 +645,8 @@ class MapEditor(private val game: Game) : Screen {
     }
 
     private fun wrapAngle(angle: Float): Float {
-        var a = angle
-        while (a <= -180f) a += 360f
-        while (a > 180f) a -= 360f
+        var a = angle % 360f
+        if (a < 0f) a += 360f
         return a
     }
 
@@ -670,9 +669,13 @@ class MapEditor(private val game: Game) : Screen {
             cameraTarget.y + offsetY,
             cameraTarget.z + offsetZ
         )
-        // Smoothly blend the up vector: at pitch=90° use Y-up, at lower pitches use Z-up
-        val t = ((cameraPitch - 80f) / 10f).coerceIn(0f, 1f) // blend over 80°–90°
-        camera.up.set(0f, t, 1f - t).nor()
+        // Up vector: always perpendicular to view direction, pointing "up" relative to the orbit
+        // At any pitch, the up direction is the derivative of position w.r.t. pitch (normalized)
+        // This gives a smooth, flip-free up vector for all yaw/pitch combinations
+        val upX = -sinPitch * sinYaw
+        val upY = -sinPitch * cosYaw
+        val upZ = cosPitch
+        camera.up.set(upX, upY, upZ).nor()
         camera.lookAt(cameraTarget)
         camera.update()
     }
@@ -922,6 +925,36 @@ class MapEditor(private val game: Game) : Screen {
                 )
             }
             shapeRenderer.end()
+
+            // ── Stairs direction arrows ───────────────────────────────────────
+            Gdx.gl.glLineWidth(3f)
+            shapeRenderer.projectionMatrix = camera.combined
+            shapeRenderer.begin(com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType.Line)
+            shapeRenderer.color = Color(0.2f, 0.5f, 1f, 1f)
+            for (x in 0 until world.width) {
+                for (y in 0 until world.height) {
+                    for (z in 0..maxRenderZ.coerceAtMost(world.depth - 1)) {
+                        val node = world.getNode(x, y, z) ?: continue
+                        node.tiles.filterIsInstance<StairsTile>().forEach { stair ->
+                            val fx = x.toFloat(); val fy = y.toFloat(); val fz = z.toFloat() + 0.05f
+                            val (dx, dy) = when (stair) {
+                                is StairsNTile -> 0f to 1f
+                                is StairsSTile -> 0f to -1f
+                                is StairsETile -> 1f to 0f
+                                is StairsWTile -> -1f to 0f
+                                else -> 0f to 0f
+                            }
+                            val len = 0.35f; val head = 0.12f
+                            val ex = fx + dx * len; val ey = fy + dy * len
+                            shapeRenderer.line(fx, fy, fz, ex, ey, fz)
+                            shapeRenderer.line(ex, ey, fz, ex - dx * head + dy * head, ey - dy * head + dx * head, fz)
+                            shapeRenderer.line(ex, ey, fz, ex - dx * head - dy * head, ey - dy * head - dx * head, fz)
+                        }
+                    }
+                }
+            }
+            shapeRenderer.end()
+            Gdx.gl.glLineWidth(1f)
 
             // ── 2D crosshair at viewport centre (= rotation pivot) ────────────
             val cx = viewW / 2f
