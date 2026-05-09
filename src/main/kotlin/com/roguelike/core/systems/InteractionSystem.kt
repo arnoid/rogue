@@ -23,6 +23,11 @@ class InteractionSystem(
             val item = currentNode.items.removeAt(0)
             actor.inventory.add(item)
             logger.log("Interaction", "Picked up: ${item.name}")
+
+            // Remove item_key tag when no more keys remain on this node
+            if (item is KeyItem && currentNode.items.none { it is KeyItem }) {
+                currentNode.tags.remove(WorldNode.Tags.ITEM_KEY)
+            }
             return
         }
 
@@ -32,9 +37,15 @@ class InteractionSystem(
             return
         }
 
+        // 2. Check if actor is standing on a door node — interact ignoring facing
+        if (currentNode != null && currentNode.tiles.any { isDoorTile(it) }) {
+            handleDoorInteraction(actor, currentNode)
+            return
+        }
+
         val facingNode = getFacingNode(actor, cameraDir) ?: return
 
-        // 2. Check for door logic (detect door tiles directly)
+        // 3. Check for door logic on facing node
         val hasDoorTile = facingNode.tiles.any { isDoorTile(it) }
         if (hasDoorTile) {
             handleDoorInteraction(actor, facingNode)

@@ -968,5 +968,12 @@ associations: [
 		type: key
 		data: Green Key
 	}
+	{
+		sourceX: 6
+		sourceY: 2
+		targetX: 6
+		targetY: 5
+		type: toggle
+	}
 ]
 }

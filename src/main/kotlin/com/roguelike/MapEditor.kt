@@ -310,6 +310,7 @@ class MapEditor(private val game: Game) : Screen {
         val paletteContent = VisTable()
         paletteContent.top()
         paletteContent.pad(0f, 8f, 0f, 8f)
+        paletteContent.background = VisUI.getSkin().newDrawable("white", Color(0.2f, 0.2f, 0.2f, 1f))
         paletteScroll = VisScrollPane(paletteContent)
         paletteScroll.setFadeScrollBars(false)
         paletteScroll.setScrollingDisabled(true, false)
@@ -325,7 +326,7 @@ class MapEditor(private val game: Game) : Screen {
         val tileGroups = listOf(
             "Floors"      to listOf(FloorTile.TYPE),
             "Walls"       to listOf(WallHorizontalTile.TYPE, WallVerticalTile.TYPE,
-                                    WallArchedTile.TYPE, WallDoorwayHorizontalTile.TYPE, WallDoorwayVerticalTile.TYPE, WallCrossingTile.TYPE,
+                                    WallDoorwayHorizontalTile.TYPE, WallDoorwayVerticalTile.TYPE, WallCrossingTile.TYPE,
                                     WallTsplitNTile.TYPE, WallTsplitETile.TYPE,
                                     WallTsplitSTile.TYPE, WallTsplitWTile.TYPE,
                                     CornerNETile.TYPE, CornerSETile.TYPE,
@@ -346,7 +347,7 @@ class MapEditor(private val game: Game) : Screen {
                     paletteSelection.let { it is PaletteSelection.Tile && it.type == type }
                 }
                 container.add(TilePreviewActor(tile)).size(tilePreviewSize).pad(tileCellPad).row()
-                container.add(VisLabel(type.removeSuffix("Tile"))).expandX().center()
+                container.add(VisLabel(tileShortName(type))).expandX().center()
                 container.addListener(object : ClickListener() {
                     override fun clicked(event: InputEvent, x: Float, y: Float) {
                         val sel = PaletteSelection.Tile(type)
@@ -531,6 +532,27 @@ class MapEditor(private val game: Game) : Screen {
      * Re-lays out tile and item grids based on the current palette width.
      * Computes how many columns fit and rebuilds each grid table.
      */
+    private fun tileShortName(type: String): String = when (type) {
+        FloorTile.TYPE                  -> "Floor"
+        WallHorizontalTile.TYPE         -> "WallHor"
+        WallVerticalTile.TYPE           -> "WallVert"
+        WallDoorwayHorizontalTile.TYPE  -> "WallDoorH"
+        WallDoorwayVerticalTile.TYPE    -> "WallDoorV"
+        WallCrossingTile.TYPE           -> "WallCross"
+        WallTsplitNTile.TYPE            -> "WallTN"
+        WallTsplitETile.TYPE            -> "WallTE"
+        WallTsplitSTile.TYPE            -> "WallTS"
+        WallTsplitWTile.TYPE            -> "WallTW"
+        CornerNETile.TYPE               -> "CornNE"
+        CornerSETile.TYPE               -> "CornSE"
+        CornerSWTile.TYPE               -> "CornSW"
+        CornerNWTile.TYPE               -> "CornNW"
+        DoorHorizontalTile.TYPE         -> "DoorHor"
+        DoorVerticalTile.TYPE           -> "DoorVert"
+        ToggleTile.TYPE                 -> "Toggle"
+        else                            -> type.removeSuffix("Tile")
+    }
+
     private fun relayoutPaletteGrids(paletteWidth: Float) {
         if (paletteWidth == lastPaletteWidth || paletteWidth <= 0f) return
         lastPaletteWidth = paletteWidth
@@ -583,7 +605,7 @@ class MapEditor(private val game: Game) : Screen {
             Gdx.gl.glClear(GL20.GL_DEPTH_BUFFER_BIT)
 
             modelBatch.begin(previewCamera)
-            tileRenderer.render(tile, modelBatch, previewEnvironment, 0f, 0f, 0f, ignoreYRotation = true)
+            tileRenderer.render(tile, modelBatch, previewEnvironment, 0f, 0f, 0f, ignoreYRotation = false)
             modelBatch.end()
 
             Gdx.gl.glViewport(0, 0, Gdx.graphics.backBufferWidth, Gdx.graphics.backBufferHeight)

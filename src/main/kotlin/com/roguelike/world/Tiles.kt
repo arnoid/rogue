@@ -93,10 +93,6 @@ class CornerNWTile : CornerTile() {
     override val type: String get() = TYPE
 }
 
-class WallArchedTile : WallTile() {
-    companion object { const val TYPE = "WallArchedTile" }
-    override val type: String get() = TYPE
-}
 
 class WallDoorwayHorizontalTile : WallTile(passable = true) {
     companion object { const val TYPE = "WallDoorwayHorizontalTile" }

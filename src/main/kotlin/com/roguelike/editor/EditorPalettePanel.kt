@@ -77,7 +77,7 @@ class EditorPalettePanel(
         val tileGroups = listOf(
             "Floors"      to listOf(FloorTile.TYPE),
             "Walls"       to listOf(WallHorizontalTile.TYPE, WallVerticalTile.TYPE,
-                                    WallArchedTile.TYPE, WallDoorwayHorizontalTile.TYPE, WallDoorwayVerticalTile.TYPE, WallCrossingTile.TYPE,
+                                    WallDoorwayHorizontalTile.TYPE, WallDoorwayVerticalTile.TYPE, WallCrossingTile.TYPE,
                                     WallTsplitNTile.TYPE, WallTsplitETile.TYPE,
                                     WallTsplitSTile.TYPE, WallTsplitWTile.TYPE,
                                     CornerNETile.TYPE, CornerSETile.TYPE,
@@ -146,7 +146,7 @@ class EditorPalettePanel(
             val tile = modelLoader.createTile(type)!!
             val container = SelectionBorderGroup { paletteSelection.let { it is PaletteSelection.TileSel && it.type == type } }
             container.add(TilePreviewActor(tile)).size(64f).pad(5f).row()
-            container.add(VisLabel(type.removeSuffix("Tile"))).expandX().center()
+            container.add(VisLabel(tileShortName(type))).expandX().center()
             container.addListener(object : ClickListener() {
                 override fun clicked(event: InputEvent, x: Float, y: Float) {
                     toggleSelection(PaletteSelection.TileSel(type))
@@ -156,6 +156,27 @@ class EditorPalettePanel(
             if ((index + 1) % 2 == 0) grid.row()
             tileContainers[type] = container
         }
+    }
+
+    private fun tileShortName(type: String): String = when (type) {
+        FloorTile.TYPE                  -> "Floor"
+        WallHorizontalTile.TYPE         -> "WallHor"
+        WallVerticalTile.TYPE           -> "WallVert"
+        WallDoorwayHorizontalTile.TYPE  -> "WallDoorH"
+        WallDoorwayVerticalTile.TYPE    -> "WallDoorV"
+        WallCrossingTile.TYPE           -> "WallCross"
+        WallTsplitNTile.TYPE            -> "WallTN"
+        WallTsplitETile.TYPE            -> "WallTE"
+        WallTsplitSTile.TYPE            -> "WallTS"
+        WallTsplitWTile.TYPE            -> "WallTW"
+        CornerNETile.TYPE               -> "CornNE"
+        CornerSETile.TYPE               -> "CornSE"
+        CornerSWTile.TYPE               -> "CornSW"
+        CornerNWTile.TYPE               -> "CornNW"
+        DoorHorizontalTile.TYPE         -> "DoorHor"
+        DoorVerticalTile.TYPE           -> "DoorVert"
+        ToggleTile.TYPE                 -> "Toggle"
+        else                            -> type.removeSuffix("Tile")
     }
 
     fun refreshHighlights() {
@@ -198,7 +219,7 @@ class EditorPalettePanel(
             Gdx.gl.glViewport(bx, by, bw, bh)
 
             modelBatch.begin(previewCamera)
-            tileRenderer.render(tile, modelBatch, previewEnvironment, 0f, 0f, 0f, ignoreYRotation = true)
+            tileRenderer.render(tile, modelBatch, previewEnvironment, 0f, 0f, 0f, ignoreYRotation = false)
             modelBatch.end()
 
             Gdx.gl.glViewport(0, 0, Gdx.graphics.backBufferWidth, Gdx.graphics.backBufferHeight)

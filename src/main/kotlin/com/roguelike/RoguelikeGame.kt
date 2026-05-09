@@ -16,6 +16,7 @@ import com.badlogic.gdx.scenes.scene2d.Stage
 import com.badlogic.gdx.scenes.scene2d.ui.Skin
 import com.badlogic.gdx.utils.viewport.ScreenViewport
 import com.roguelike.core.model.GameLogger
+import com.roguelike.core.model.TileSlot
 import com.roguelike.core.systems.InteractionSystem
 import com.roguelike.core.systems.MovementSystem
 import com.roguelike.rendering.InventoryUI
@@ -62,6 +63,11 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
     // Debug
     private var debugMode = false
     private lateinit var axesInstance: ModelInstance
+    private lateinit var debugFrameModel: Model
+    private lateinit var debugFrameInstance: ModelInstance
+    private lateinit var debugShapeRenderer: com.badlogic.gdx.graphics.glutils.ShapeRenderer
+    private lateinit var debugSpriteBatch: com.badlogic.gdx.graphics.g2d.SpriteBatch
+    private lateinit var debugFont: com.badlogic.gdx.graphics.g2d.BitmapFont
 
     /** Bridge GameLogger that delegates to LibGDX Gdx.app.log(). */
     private val gdxLogger = GameLogger { tag, msg -> Gdx.app?.log(tag, msg) }
@@ -138,6 +144,37 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         part.setColor(Color.GREEN); part.line(0f, 0f, 0f, 0f, 2f, 0f)
         part.setColor(Color.BLUE);  part.line(0f, 0f, 0f, 0f, 0f, 2f)
         axesInstance = ModelInstance(modelBuilder.end()!!)
+
+        // Debug wireframe box for node frames
+        modelBuilder.begin()
+        val framePart = modelBuilder.part(
+            "frame", GL20.GL_LINES,
+            (VertexAttributes.Usage.Position or VertexAttributes.Usage.ColorPacked).toLong(), Material()
+        )
+        val s = 0.5f
+        framePart.setColor(Color.WHITE)
+        // Bottom face
+        framePart.line(-s, -s, -s, s, -s, -s)
+        framePart.line(s, -s, -s, s, s, -s)
+        framePart.line(s, s, -s, -s, s, -s)
+        framePart.line(-s, s, -s, -s, -s, -s)
+        // Top face
+        framePart.line(-s, -s, s, s, -s, s)
+        framePart.line(s, -s, s, s, s, s)
+        framePart.line(s, s, s, -s, s, s)
+        framePart.line(-s, s, s, -s, -s, s)
+        // Verticals
+        framePart.line(-s, -s, -s, -s, -s, s)
+        framePart.line(s, -s, -s, s, -s, s)
+        framePart.line(s, s, -s, s, s, s)
+        framePart.line(-s, s, -s, -s, s, s)
+        debugFrameModel = modelBuilder.end()!!
+        debugFrameInstance = ModelInstance(debugFrameModel)
+
+        // Debug text and shape renderers
+        debugShapeRenderer = com.badlogic.gdx.graphics.glutils.ShapeRenderer()
+        debugSpriteBatch = com.badlogic.gdx.graphics.g2d.SpriteBatch()
+        debugFont = com.badlogic.gdx.graphics.g2d.BitmapFont()
 
         // Spawn player at tagged node
         world.getNodesWithTag(NodeTags.PLAYER_SPAWN).firstOrNull()?.let { node ->
@@ -219,6 +256,110 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         }
         modelBatch.end()
 
+        if (debugMode) {
+            val playerNodeX = Math.round(player.position.x)
+            val playerNodeY = Math.round(player.position.y)
+            val playerNodeZ = Math.round(player.position.z)
+
+            // ── Node frames via ShapeRenderer ─────────────────────────────────
+            Gdx.gl.glEnable(GL20.GL_BLEND)
+            debugShapeRenderer.projectionMatrix = camera.combined
+            debugShapeRenderer.begin(com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType.Line)
+            val s = 0.5f
+            for (x in 0 until world.width) {
+                for (y in 0 until world.height) {
+                    for (z in 0 until world.depth) {
+                        val node = world.getNode(x, y, z) ?: continue
+                        if (node.tiles.isEmpty()) continue
+
+                        val color = when {
+                            x == playerNodeX && y == playerNodeY && z == playerNodeZ -> Color.BLUE
+                            node.tiles.any { it.slot == TileSlot.DOOR } -> Color.GREEN
+                            else -> Color(1f, 1f, 1f, 0.3f)
+                        }
+                        debugShapeRenderer.color = color
+                        val fx = x.toFloat(); val fy = y.toFloat(); val fz = z.toFloat()
+                        // Bottom
+                        debugShapeRenderer.line(fx-s,fy-s,fz-s, fx+s,fy-s,fz-s)
+                        debugShapeRenderer.line(fx+s,fy-s,fz-s, fx+s,fy+s,fz-s)
+                        debugShapeRenderer.line(fx+s,fy+s,fz-s, fx-s,fy+s,fz-s)
+                        debugShapeRenderer.line(fx-s,fy+s,fz-s, fx-s,fy-s,fz-s)
+                        // Top
+                        debugShapeRenderer.line(fx-s,fy-s,fz+s, fx+s,fy-s,fz+s)
+                        debugShapeRenderer.line(fx+s,fy-s,fz+s, fx+s,fy+s,fz+s)
+                        debugShapeRenderer.line(fx+s,fy+s,fz+s, fx-s,fy+s,fz+s)
+                        debugShapeRenderer.line(fx-s,fy+s,fz+s, fx-s,fy-s,fz+s)
+                        // Verticals
+                        debugShapeRenderer.line(fx-s,fy-s,fz-s, fx-s,fy-s,fz+s)
+                        debugShapeRenderer.line(fx+s,fy-s,fz-s, fx+s,fy-s,fz+s)
+                        debugShapeRenderer.line(fx+s,fy+s,fz-s, fx+s,fy+s,fz+s)
+                        debugShapeRenderer.line(fx-s,fy+s,fz-s, fx-s,fy+s,fz+s)
+                    }
+                }
+            }
+            debugShapeRenderer.end()
+            Gdx.gl.glDisable(GL20.GL_BLEND)
+
+            // ── Player facing direction arrow ─────────────────────────────────
+            Gdx.gl.glEnable(GL20.GL_BLEND)
+            Gdx.gl.glLineWidth(3f)
+            debugShapeRenderer.projectionMatrix = camera.combined
+            debugShapeRenderer.begin(com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType.Line)
+            debugShapeRenderer.color = Color.YELLOW
+            val px = player.position.x
+            val py = player.position.y
+            val pz = player.position.z
+            val fd = player.facingDirection
+            debugShapeRenderer.line(px, py, pz, px + fd.x * 0.8f, py + fd.y * 0.8f, pz)
+            debugShapeRenderer.end()
+            Gdx.gl.glLineWidth(1f)
+            Gdx.gl.glDisable(GL20.GL_BLEND)
+
+            // ── Tag text labels — projected to screen 2D ──────────────────────
+            val viewW = Gdx.graphics.width.toFloat()
+            val viewH = Gdx.graphics.height.toFloat()
+            val projPos = com.badlogic.gdx.math.Vector3()
+            debugSpriteBatch.projectionMatrix = com.badlogic.gdx.math.Matrix4().setToOrtho2D(0f, 0f, viewW, viewH)
+            debugSpriteBatch.begin()
+            for (x in 0 until world.width) {
+                for (y in 0 until world.height) {
+                    for (z in 0 until world.depth) {
+                        val node = world.getNode(x, y, z) ?: continue
+                        if (node.tags.isEmpty()) continue
+                        projPos.set(x.toFloat(), y.toFloat() + 0.45f, z.toFloat())
+                        camera.project(projPos)
+                        if (projPos.z in 0f..1f) {
+                            val label = node.tags.joinToString("\n")
+                            debugFont.draw(debugSpriteBatch, label, projPos.x - 30f, projPos.y + 4f)
+                        }
+                    }
+                }
+            }
+            debugSpriteBatch.end()
+
+            // ── Association lines ─────────────────────────────────────────────
+            Gdx.gl.glEnable(GL20.GL_BLEND)
+            debugShapeRenderer.projectionMatrix = camera.combined
+            debugShapeRenderer.begin(com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType.Line)
+            world.associations.forEach { assoc ->
+                // Skip key associations where the key has been picked up
+                if (assoc.type == "key" && assoc.target.items.none { it is com.roguelike.core.model.KeyItem }) return@forEach
+
+                val color = when (assoc.type) {
+                    "toggle" -> Color.YELLOW
+                    "key"    -> Color.CYAN
+                    else     -> Color.WHITE
+                }
+                debugShapeRenderer.color = color
+                debugShapeRenderer.line(
+                    assoc.source.x.toFloat(), assoc.source.y.toFloat(), assoc.source.z.toFloat(),
+                    assoc.target.x.toFloat(), assoc.target.y.toFloat(), assoc.target.z.toFloat()
+                )
+            }
+            debugShapeRenderer.end()
+            Gdx.gl.glDisable(GL20.GL_BLEND)
+        }
+
         stage.act(delta)
         stage.draw()
     }
@@ -235,6 +376,9 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         assetLoader.dispose()
         stage.dispose()
         skin.dispose()
+        debugShapeRenderer.dispose()
+        debugSpriteBatch.dispose()
+        debugFont.dispose()
     }
 
     override fun hide() {}

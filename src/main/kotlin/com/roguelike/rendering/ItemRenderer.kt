@@ -10,7 +10,7 @@ import com.roguelike.core.model.KeyItem
 import com.roguelike.utils.AssetLoader
 
 class ItemRenderer(val assetLoader: AssetLoader) {
-    private val keyModel: Model by lazy { assetLoader.loadModel("item_key", "objects/key.obj") }
+    private val keyModel: Model by lazy { assetLoader.loadModel("item_key", "models/tiles/obj/key.obj") }
     private var keyScale: Float = 0f
     private val keyCenter = Vector3()
     
