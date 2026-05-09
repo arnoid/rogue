@@ -1,5 +1,5 @@
 {
-width: 5
+width: 8
 height: 7
 depth: 1
 nodes: [
@@ -322,8 +322,7 @@ nodes: [
 				type: FloorTile
 			}
 			{
-				type: CornerNWTile
-				rotY: -90
+				type: WallTsplitNTile
 			}
 		]
 	}
@@ -372,10 +371,6 @@ nodes: [
 			{
 				type: FloorTile
 			}
-			{
-				type: WallVerticalTile
-				rotY: -90
-			}
 		]
 	}
 	{
@@ -399,10 +394,260 @@ nodes: [
 				type: FloorTile
 			}
 			{
+				type: WallTsplitSTile
+				rotY: 180
+			}
+		]
+	}
+	{
+		x: 5
+		tiles: [
+			{
+				type: WallHorizontalTile
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 5
+		y: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 5
+		y: 2
+		tiles: [
+			{
+				type: WallHorizontalTile
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 5
+		y: 3
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 5
+		y: 4
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 5
+		y: 5
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 5
+		y: 6
+		tiles: [
+			{
+				type: WallHorizontalTile
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 6
+		tiles: [
+			{
+				type: WallHorizontalTile
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 6
+		y: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 6
+		y: 2
+		tags: [
+			door_toggle
+		]
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: DoorHorizontalTile
+			}
+		]
+	}
+	{
+		x: 6
+		y: 3
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 6
+		y: 4
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 6
+		y: 5
+		tags: [
+			toggle
+		]
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: ToggleTile
+			}
+		]
+	}
+	{
+		x: 6
+		y: 6
+		tiles: [
+			{
+				type: WallHorizontalTile
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 7
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: CornerNWTile
+				rotY: -90
+			}
+		]
+	}
+	{
+		x: 7
+		y: 1
+		tiles: [
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 7
+		y: 2
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallTsplitWTile
+				rotY: -90
+			}
+		]
+	}
+	{
+		x: 7
+		y: 3
+		tiles: [
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 7
+		y: 4
+		tiles: [
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 7
+		y: 5
+		tiles: [
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 7
+		y: 6
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
 				type: CornerSWTile
 				rotY: 180
 			}
 		]
+	}
+]
+associations: [
+	{
+		sourceX: 6
+		sourceY: 2
+		targetX: 6
+		targetY: 5
+		type: toggle
 	}
 ]
 }

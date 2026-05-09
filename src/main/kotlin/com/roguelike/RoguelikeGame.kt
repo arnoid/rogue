@@ -15,7 +15,6 @@ import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder
 import com.badlogic.gdx.scenes.scene2d.Stage
 import com.badlogic.gdx.scenes.scene2d.ui.Skin
 import com.badlogic.gdx.utils.viewport.ScreenViewport
-import com.roguelike.core.math.Vec3
 import com.roguelike.core.model.GameLogger
 import com.roguelike.core.systems.InteractionSystem
 import com.roguelike.core.systems.MovementSystem
@@ -25,6 +24,7 @@ import com.roguelike.rendering.TileRenderer
 import com.roguelike.rendering.WorldRenderer
 import com.roguelike.serialization.WorldIO
 import com.roguelike.systems.CameraManager
+import com.roguelike.systems.DoorAnimationSystem
 import com.roguelike.systems.InputHandler
 import com.roguelike.core.model.WorldNode.Tags as NodeTags
 import com.roguelike.utils.*
@@ -48,6 +48,7 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
     private lateinit var interactionSystem: InteractionSystem
     private val inputHandler = InputHandler()
     private lateinit var cameraManager: CameraManager
+    private val doorAnimationSystem = DoorAnimationSystem()
 
     // UI
     private lateinit var stage: Stage
@@ -68,7 +69,7 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
     override fun show() {
         modelBatch = ModelBatch()
         itemRenderer = ItemRenderer(assetLoader)
-        val tileRenderer = TileRenderer(modelLoader.renderRegistry)
+        val tileRenderer = TileRenderer(modelLoader.renderRegistry, doorAnimationSystem)
         worldRenderer = WorldRenderer(tileRenderer, itemRenderer)
 
         // --- World Generation or Loading ---
@@ -81,6 +82,12 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
 
         movementSystem = MovementSystem(world)
         interactionSystem = InteractionSystem(world, gdxLogger)
+
+        // Register all existing doors with the animation system
+        registerDoorAnimations()
+
+        // Wire ToggleTile.linkedDoor from world associations
+        wireToggleLinks()
 
         camera = PerspectiveCamera(67f, Gdx.graphics.width.toFloat(), Gdx.graphics.height.toFloat())
         camera.near = 0.1f
@@ -149,6 +156,28 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         }
     }
 
+    /** Scans the world grid and registers every DoorTile with the animation system. */
+    private fun registerDoorAnimations() {
+        doorAnimationSystem.clear()
+        for (x in 0 until world.width)
+            for (y in 0 until world.height)
+                for (z in 0 until world.depth) {
+                    val node = world.nodes[x][y][z]
+                    node.tiles.filterIsInstance<DoorTile>().forEach { doorAnimationSystem.register(it) }
+                }
+    }
+
+    /** Wires each ToggleTile's linkedDoor from world associations so rendering can reflect door state. */
+    private fun wireToggleLinks() {
+        world.associations.filter { it.type == "toggle" }.forEach { assoc ->
+            val doorTile = assoc.source.tiles.filterIsInstance<DoorTile>().firstOrNull()
+            val toggleTile = assoc.target.tiles.filterIsInstance<ToggleTile>().firstOrNull()
+            if (doorTile != null && toggleTile != null) {
+                toggleTile.linkedDoor = doorTile
+            }
+        }
+    }
+
     override fun render(delta: Float) {
         // ── Input & Logic ────────────────────────────────────────────────────
         val moveDir = inputHandler.getMovementDirection()
@@ -164,12 +193,12 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         }
 
         if (inputHandler.isInteractionJustPressed()) {
-            // Extract camera direction as core Vec3 — the only LibGDX-to-core bridge here
-            val camDir = Vec3(camera.direction.x, camera.direction.y, camera.direction.z)
-            interactionSystem.interact(player, camDir)
+            // Use the player's facing direction (updated by movement) for interaction
+            interactionSystem.interact(player, player.facingDirection)
         }
 
         player.update(delta)
+        doorAnimationSystem.update(delta)
         inventoryUI.update(player)
 
         // ── Rendering ────────────────────────────────────────────────────────

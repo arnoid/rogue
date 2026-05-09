@@ -23,13 +23,9 @@ class InteractionSystem(
             return
         }
 
-        // 2. Check for door logic
-        val hasDoorTag = facingNode.tags.any {
-            it == WorldNode.Tags.DOOR_MANUAL ||
-            it == WorldNode.Tags.DOOR_KEY   ||
-            it == WorldNode.Tags.DOOR_TOGGLE
-        }
-        if (hasDoorTag) {
+        // 2. Check for door logic (detect door tiles directly)
+        val hasDoorTile = facingNode.tiles.any { isDoorTile(it) }
+        if (hasDoorTile) {
             handleDoorInteraction(actor, facingNode)
             return
         }
@@ -78,50 +74,51 @@ class InteractionSystem(
     private fun handleDoorInteraction(actor: Actor, node: WorldNode) {
         val doorTile = node.tiles.firstOrNull { isDoorTile(it) } ?: return
 
-        // For door state, we use the properties or check blocking
-        // Since DoorTile extends BaseTile which extends Tile, the onInteract toggles isOpen.
-        // isBlocking returns !isOpen for doors.
+        // Doors tagged as toggle-only cannot be opened directly
+        if (node.tags.contains(WorldNode.Tags.DOOR_TOGGLE)) {
+            logger.log("Interaction", "This door can only be opened by a toggle.")
+            return
+        }
+
         val doorIsOpen = !doorTile.isBlocking()
 
         if (doorIsOpen) {
             doorTile.onInteract() // close it
-            syncAdjacentDoors(node, doorTile.isBlocking()) // now blocking = closed
+            syncAdjacentDoors(node, doorTile.isBlocking())
             return
         }
 
-        if (node.tags.contains(WorldNode.Tags.DOOR_KEY)) {
-            val requiredAssocs = world.associations.filter { it.source == node && it.type == "key" }
-            if (requiredAssocs.isNotEmpty()) {
-                val requiredKeyNames = requiredAssocs.map { it.data ?: "Key" }
-                val tempInventory = actor.inventory.toMutableList()
-                val keysToConsume = mutableListOf<Item>()
-                var allPresent = true
+        // Check for key-locked doors via associations
+        val requiredAssocs = world.associations.filter { it.source == node && it.type == "key" }
+        if (requiredAssocs.isNotEmpty()) {
+            val requiredKeyNames = requiredAssocs.map { it.data ?: "Key" }
+            val tempInventory = actor.inventory.toMutableList()
+            val keysToConsume = mutableListOf<Item>()
+            var allPresent = true
 
-                for (keyName in requiredKeyNames) {
-                    val keyInInv = tempInventory.find { it.name == keyName || (keyName == "Key" && it is KeyItem) }
-                    if (keyInInv != null) {
-                        tempInventory.remove(keyInInv)
-                        keysToConsume.add(keyInInv)
-                    } else {
-                        allPresent = false
-                        logger.log("Interaction", "Locked! Missing key: $keyName")
-                        break
-                    }
+            for (keyName in requiredKeyNames) {
+                val keyInInv = tempInventory.find { it.name == keyName || (keyName == "Key" && it is KeyItem) }
+                if (keyInInv != null) {
+                    tempInventory.remove(keyInInv)
+                    keysToConsume.add(keyInInv)
+                } else {
+                    allPresent = false
+                    logger.log("Interaction", "Locked! Missing key: $keyName")
+                    break
                 }
-
-                if (allPresent) {
-                    keysToConsume.forEach { actor.inventory.remove(it) }
-                    doorTile.onInteract()
-                    syncAdjacentDoors(node, doorTile.isBlocking())
-                }
-                return
             }
+
+            if (allPresent) {
+                keysToConsume.forEach { actor.inventory.remove(it) }
+                doorTile.onInteract()
+                syncAdjacentDoors(node, doorTile.isBlocking())
+            }
+            return
         }
 
-        if (node.tags.contains(WorldNode.Tags.DOOR_MANUAL)) {
-            doorTile.onInteract()
-            syncAdjacentDoors(node, doorTile.isBlocking())
-        }
+        // Default: manual door — just open it
+        doorTile.onInteract()
+        syncAdjacentDoors(node, doorTile.isBlocking())
     }
 
     private fun syncAdjacentDoors(node: WorldNode, shouldBlock: Boolean) {

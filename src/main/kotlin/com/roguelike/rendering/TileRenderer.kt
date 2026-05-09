@@ -3,8 +3,10 @@ package com.roguelike.rendering
 import com.badlogic.gdx.graphics.Color
 import com.badlogic.gdx.graphics.g3d.*
 import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute
+import com.badlogic.gdx.math.Quaternion
 import com.badlogic.gdx.math.Vector3
 import com.roguelike.core.model.Tile
+import com.roguelike.systems.DoorAnimationSystem
 import com.roguelike.world.*
 
 /**
@@ -14,7 +16,10 @@ import com.roguelike.world.*
  * Rendering metadata (Model, scale, center) is looked up from [TileRenderRegistry],
  * keeping tile classes free of any LibGDX state.
  */
-class TileRenderer(private val registry: TileRenderRegistry) {
+class TileRenderer(
+    private val registry: TileRenderRegistry,
+    var doorAnimationSystem: DoorAnimationSystem? = null
+) {
 
     /** Primary (closed-door / default) ModelInstance per tile. */
     private val instanceCache    = mutableMapOf<Any, ModelInstance>()
@@ -50,22 +55,17 @@ class TileRenderer(private val registry: TileRenderRegistry) {
         if (tile !is BaseTile) return
         val renderData = registry[tile] ?: return
 
+        // Doors always use the same model; the animation system rotates it open/closed
         val instanceToRender = when {
-            tile is DoorTile && tile.isOpen -> getAltInstance(tile) ?: return
-            else                            -> getInstance(tile) ?: return
+            tile is DoorTile -> getInstance(tile) ?: return
+            else             -> getInstance(tile) ?: return
         }
 
-        val extraRotZ = if (tile is DoorTile && tile.isOpen) -90f else 0f
+        // Use animated quaternion rotation when available, otherwise fall back to instant
+        val doorQuat: Quaternion? = if (tile is DoorTile) doorAnimationSystem?.getCurrentRotation(tile) else null
+        val extraRotY = if (doorQuat != null) 0f else if (tile is DoorTile && tile.isOpen) -90f else 0f
 
-        updateTransform(instanceToRender, tile, renderData, x, y, z, ignoreYRotation, extraRotZ)
-
-        // Keep the other door instance in sync
-        if (tile is DoorTile) {
-            val other     = if (tile.isOpen) getInstance(tile) else getAltInstance(tile)
-            val otherRotZ = if (tile.isOpen) 0f else -90f
-            if (other != null) updateTransform(other, tile, renderData, x, y, z, ignoreYRotation, otherRotZ)
-        }
-
+        updateTransform(instanceToRender, tile, renderData, x, y, z, ignoreYRotation, extraRotY, doorQuat)
         updateColor(instanceToRender, tile)
 
         batch.render(instanceToRender, environment)
@@ -77,15 +77,16 @@ class TileRenderer(private val registry: TileRenderRegistry) {
         renderData: TileRenderData,
         x: Float, y: Float, z: Float,
         ignoreYRotation: Boolean,
-        additionalRotZ: Float = 0f
+        additionalRotY: Float = 0f,
+        doorQuat: Quaternion? = null
     ) {
         var rotX = -90f
         var rotY = 0f
         var rotZ = 180f
 
         rotX += tile.rotationX
-        rotY += tile.rotationY
-        rotZ += tile.rotationZ + additionalRotZ
+        rotY += tile.rotationY + additionalRotY
+        rotZ += tile.rotationZ
 
         val baseZ = tile.fixedZ ?: z
         val tx = x + tile.xOffset
@@ -97,6 +98,8 @@ class TileRenderer(private val registry: TileRenderRegistry) {
         if (rotX != 0f)                       instance.transform.rotate(Vector3.X, rotX)
         if (!ignoreYRotation && rotY != 0f)   instance.transform.rotate(Vector3.Y, rotY)
         if (rotZ != 0f)                       instance.transform.rotate(Vector3.Z, rotZ)
+        // Apply smooth door swing quaternion (slerp-interpolated by DoorAnimationSystem)
+        if (doorQuat != null)                 instance.transform.rotate(doorQuat)
         instance.transform.translate(-renderData.center.x, -renderData.center.y, -renderData.center.z)
     }
 

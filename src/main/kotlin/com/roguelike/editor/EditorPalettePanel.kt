@@ -118,8 +118,7 @@ class EditorPalettePanel(
         val nodeTags = listOf(
             NodeTags.PLAYER_SPAWN, NodeTags.ENEMY_SPAWN,
             NodeTags.ITEM_SPAWN, NodeTags.EXIT,
-            NodeTags.DOOR_MANUAL, NodeTags.DOOR_KEY,
-            NodeTags.DOOR_TOGGLE, NodeTags.TOGGLE
+            NodeTags.TOGGLE
         )
         nodeTags.forEach { tag ->
             val btn = VisTextButton(tag, "toggle")

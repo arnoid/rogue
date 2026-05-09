@@ -12,7 +12,11 @@ class MovementSystem(private val world: World) {
     fun move(actor: Actor, moveDir: Vec3, delta: Float, speed: Float) {
         if (moveDir.isZero) return
 
-        val scaledMove = Vec3(moveDir).nor().scl(delta * speed)
+        val norDir = Vec3(moveDir).nor()
+        val scaledMove = Vec3(norDir).scl(delta * speed)
+
+        // Update facing direction when the player moves
+        actor.facingDirection.set(norDir.x, norDir.y, 0f)
 
         val nextX = actor.position.x + scaledMove.x
         val nextY = actor.position.y + scaledMove.y

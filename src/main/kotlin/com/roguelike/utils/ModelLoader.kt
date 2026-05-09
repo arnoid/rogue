@@ -76,20 +76,18 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
     }
 
     fun createDoorHorizontalTile(): DoorHorizontalTile {
-        val closed = assetLoader.loadModel("door_closed", "models/tiles/obj/wall_doorway_door.obj")
-        val open   = assetLoader.loadModel("door_open",   "models/tiles/obj/wall_doorway.obj")
-        val (scale, center) = getModelData(closed)
+        val model = assetLoader.loadModel("door_closed", "models/tiles/obj/wall_doorway_door.obj")
+        val (scale, center) = getModelData(model)
         val tile = DoorHorizontalTile()
-        renderRegistry.register(tile, TileRenderData(closed, scale, center, altModel = open))
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
         return tile
     }
 
     fun createDoorVerticalTile(): DoorVerticalTile {
-        val closed = assetLoader.loadModel("door_closed", "models/tiles/obj/wall_doorway_door.obj")
-        val open   = assetLoader.loadModel("door_open",   "models/tiles/obj/wall_doorway.obj")
-        val (scale, center) = getModelData(closed)
+        val model = assetLoader.loadModel("door_closed", "models/tiles/obj/wall_doorway_door.obj")
+        val (scale, center) = getModelData(model)
         val tile = DoorVerticalTile().also { it.rotationY = 90f }
-        renderRegistry.register(tile, TileRenderData(closed, scale, center, altModel = open))
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
         return tile
     }
 

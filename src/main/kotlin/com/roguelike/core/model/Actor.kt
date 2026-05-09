@@ -8,6 +8,8 @@ import com.roguelike.core.math.Vec3
  */
 abstract class Actor {
     val position = Vec3()
+    /** The direction the actor is facing (updated on movement). Defaults to +Y (north). */
+    val facingDirection = Vec3(0f, 1f, 0f)
     var collisionSize: Float = 0.3f
     val inventory = mutableListOf<Item>()
 
