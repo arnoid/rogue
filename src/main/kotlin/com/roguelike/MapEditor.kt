@@ -332,6 +332,8 @@ class MapEditor(private val game: Game) : Screen {
                                     CornerNETile.TYPE, CornerSETile.TYPE,
                                     CornerSWTile.TYPE, CornerNWTile.TYPE),
             "Doors"       to listOf(DoorHorizontalTile.TYPE, DoorVerticalTile.TYPE),
+            "Stairs"      to listOf(StairsNTile.TYPE, StairsETile.TYPE,
+                                    StairsSTile.TYPE, StairsWTile.TYPE),
             "Interaction" to listOf(ToggleTile.TYPE)
         )
 
@@ -550,6 +552,10 @@ class MapEditor(private val game: Game) : Screen {
         DoorHorizontalTile.TYPE         -> "DoorHor"
         DoorVerticalTile.TYPE           -> "DoorVert"
         ToggleTile.TYPE                 -> "Toggle"
+        StairsNTile.TYPE                -> "StairsN"
+        StairsETile.TYPE                -> "StairsE"
+        StairsSTile.TYPE                -> "StairsS"
+        StairsWTile.TYPE                -> "StairsW"
         else                            -> type.removeSuffix("Tile")
     }
 

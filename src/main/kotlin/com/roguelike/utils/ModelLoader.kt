@@ -35,6 +35,10 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
         register(WallTsplitETile.TYPE)    { createWallTsplitETile() }
         register(WallTsplitSTile.TYPE)    { createWallTsplitSTile() }
         register(WallTsplitWTile.TYPE)    { createWallTsplitWTile() }
+        register(StairsNTile.TYPE)        { createStairsNTile() }
+        register(StairsETile.TYPE)        { createStairsETile() }
+        register(StairsSTile.TYPE)        { createStairsSTile() }
+        register(StairsWTile.TYPE)        { createStairsWTile() }
     }
 
     fun register(typeName: String, factory: () -> Tile) {
@@ -164,7 +168,7 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
     fun createWallTsplitNTile(): WallTsplitNTile {
         val model = assetLoader.loadModel("wall_Tsplit", "models/tiles/obj/wall_Tsplit.obj")
         val (scale, center) = getModelData(model)
-        val tile = WallTsplitNTile().also { it.yOffset = 0.19f }
+        val tile = WallTsplitNTile().also { it.yOffset = WALL_TSPLIT_OFFSET }
         renderRegistry.register(tile, TileRenderData(model, scale, center))
         return tile
     }
@@ -189,6 +193,38 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
         val model = assetLoader.loadModel("wall_Tsplit", "models/tiles/obj/wall_Tsplit.obj")
         val (scale, center) = getModelData(model)
         val tile = WallTsplitWTile().also { it.rotationY = -90f; it.xOffset = -WALL_TSPLIT_OFFSET }
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        return tile
+    }
+
+    fun createStairsNTile(): StairsNTile {
+        val model = assetLoader.loadModel("stairs_narrow", "models/tiles/obj/stairs_narrow.obj")
+        val (scale, center) = getModelData(model)
+        val tile = StairsNTile().also { it.rotationY = 180f }
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        return tile
+    }
+
+    fun createStairsETile(): StairsETile {
+        val model = assetLoader.loadModel("stairs_narrow", "models/tiles/obj/stairs_narrow.obj")
+        val (scale, center) = getModelData(model)
+        val tile = StairsETile().also { it.rotationY = -90f }
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        return tile
+    }
+
+    fun createStairsSTile(): StairsSTile {
+        val model = assetLoader.loadModel("stairs_narrow", "models/tiles/obj/stairs_narrow.obj")
+        val (scale, center) = getModelData(model)
+        val tile = StairsSTile().also { it.rotationY = 0f }
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        return tile
+    }
+
+    fun createStairsWTile(): StairsWTile {
+        val model = assetLoader.loadModel("stairs_narrow", "models/tiles/obj/stairs_narrow.obj")
+        val (scale, center) = getModelData(model)
+        val tile = StairsWTile().also { it.rotationY = 90f }
         renderRegistry.register(tile, TileRenderData(model, scale, center))
         return tile
     }

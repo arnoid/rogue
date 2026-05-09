@@ -133,3 +133,28 @@ class GenericTile(val modelName: String) : BaseTile() {
     override val type: String get() = "Generic:$modelName"
     override val slot: TileSlot get() = TileSlot.FLOOR
 }
+
+abstract class StairsTile : BaseTile() {
+    override val slot: TileSlot get() = TileSlot.FLOOR
+}
+
+class StairsNTile : StairsTile() {
+    companion object { const val TYPE = "StairsNTile" }
+    override val type: String get() = TYPE
+}
+
+class StairsETile : StairsTile() {
+    companion object { const val TYPE = "StairsETile" }
+    override val type: String get() = TYPE
+}
+
+class StairsSTile : StairsTile() {
+    companion object { const val TYPE = "StairsSTile" }
+    override val type: String get() = TYPE
+}
+
+class StairsWTile : StairsTile() {
+    companion object { const val TYPE = "StairsWTile" }
+    override val type: String get() = TYPE
+}
+
