@@ -184,6 +184,7 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         movementSystem.move(player, moveDir, delta, moveSpeed)
 
         cameraManager.cameraYaw += inputHandler.getCameraYawChange(delta)
+        cameraManager.zoom(inputHandler.getZoomChange(delta))
         cameraManager.update(player.position)
 
         if (inputHandler.isDebugToggleJustPressed()) debugMode = !debugMode

@@ -110,7 +110,7 @@ class TileRenderer(
             is ToggleTile  -> if (tile.linkedDoor?.isOpen == true) Color.GREEN else Color.RED
             is FloorTile   -> Color(0.6f, 0.4f, 0.2f, 1f)
             is WallTile    -> Color.GRAY
-            is CornerTile  -> Color.LIGHT_GRAY
+            is CornerTile  -> null
             else           -> null
         }
         color?.let { instance.materials.get(0).set(ColorAttribute.createDiffuse(it)) }

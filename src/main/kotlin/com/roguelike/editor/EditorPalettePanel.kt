@@ -52,7 +52,8 @@ class EditorPalettePanel(
         add(DirectionalLight().set(1.0f, 1.0f, 1.0f, -1f, -0.8f, -0.2f))
     }
     private val previewCamera = com.badlogic.gdx.graphics.PerspectiveCamera(67f, 100f, 100f).apply {
-        position.set(1.2f, 1.2f, 1.2f)
+        position.set(0f, 0f, 2f)
+        up.set(0f, 1f, 0f)
         lookAt(0f, 0f, 0f)
         near = 0.1f; far = 100f; update()
     }
@@ -76,7 +77,7 @@ class EditorPalettePanel(
         val tileGroups = listOf(
             "Floors"      to listOf(FloorTile.TYPE),
             "Walls"       to listOf(WallHorizontalTile.TYPE, WallVerticalTile.TYPE,
-                                    WallArchedTile.TYPE, WallCrossingTile.TYPE,
+                                    WallArchedTile.TYPE, WallDoorwayHorizontalTile.TYPE, WallDoorwayVerticalTile.TYPE, WallCrossingTile.TYPE,
                                     WallTsplitNTile.TYPE, WallTsplitETile.TYPE,
                                     WallTsplitSTile.TYPE, WallTsplitWTile.TYPE,
                                     CornerNETile.TYPE, CornerSETile.TYPE,
@@ -107,8 +108,8 @@ class EditorPalettePanel(
                     toggleSelection(PaletteSelection.ItemSel(name, colorHex))
                 }
             })
-            itemsGrid.add(container).pad(5f)
-            if ((index + 1) % 3 == 0) itemsGrid.row()
+            itemsGrid.add(container).pad(5f).uniform().fill()
+            if ((index + 1) % 2 == 0) itemsGrid.row()
             itemContainers[name] = container
         }
 
@@ -151,8 +152,8 @@ class EditorPalettePanel(
                     toggleSelection(PaletteSelection.TileSel(type))
                 }
             })
-            grid.add(container).pad(5f)
-            if ((index + 1) % 3 == 0) grid.row()
+            grid.add(container).pad(5f).uniform().fill()
+            if ((index + 1) % 2 == 0) grid.row()
             tileContainers[type] = container
         }
     }
@@ -181,27 +182,28 @@ class EditorPalettePanel(
     inner class TilePreviewActor(val tile: Tile) : Actor() {
         init { touchable = Touchable.disabled }
         override fun draw(batch: com.badlogic.gdx.graphics.g2d.Batch, parentAlpha: Float) {
-            val scissorWasEnabled = Gdx.gl.glIsEnabled(GL20.GL_SCISSOR_TEST)
-            val scissorBox = com.badlogic.gdx.utils.BufferUtils.newIntBuffer(4)
-            Gdx.gl20.glGetIntegerv(GL20.GL_SCISSOR_BOX, scissorBox)
             batch.end()
+
             val screenPos = localToStageCoordinates(Vector2(0f, 0f))
-            val bx = screenPos.x * (Gdx.graphics.backBufferWidth.toFloat() / stage.width)
-            val by = screenPos.y * (Gdx.graphics.backBufferHeight.toFloat() / stage.height)
-            val bw = width * (Gdx.graphics.backBufferWidth.toFloat() / stage.width)
-            val bh = height * (Gdx.graphics.backBufferHeight.toFloat() / stage.height)
-            Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST)
-            Gdx.gl.glViewport(bx.toInt(), by.toInt(), bw.toInt(), bh.toInt())
+            val scaleX = Gdx.graphics.backBufferWidth.toFloat() / stage.width
+            val scaleY = Gdx.graphics.backBufferHeight.toFloat() / stage.height
+            val bx = (screenPos.x * scaleX).toInt()
+            val by = (screenPos.y * scaleY).toInt()
+            val bw = (width * scaleX).toInt()
+            val bh = (height * scaleY).toInt()
+
+            // Clip rendering to this actor's screen area
+            Gdx.gl.glEnable(GL20.GL_SCISSOR_TEST)
+            Gdx.gl.glScissor(bx, by, bw, bh)
+            Gdx.gl.glViewport(bx, by, bw, bh)
+
             modelBatch.begin(previewCamera)
             tileRenderer.render(tile, modelBatch, previewEnvironment, 0f, 0f, 0f, ignoreYRotation = true)
             modelBatch.end()
+
             Gdx.gl.glViewport(0, 0, Gdx.graphics.backBufferWidth, Gdx.graphics.backBufferHeight)
-            if (scissorWasEnabled) {
-                Gdx.gl.glEnable(GL20.GL_SCISSOR_TEST)
-                Gdx.gl.glScissor(scissorBox[0], scissorBox[1], scissorBox[2], scissorBox[3])
-            } else {
-                Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST)
-            }
+            Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST)
+
             batch.begin()
         }
     }

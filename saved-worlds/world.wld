@@ -1,6 +1,6 @@
 {
 width: 8
-height: 7
+height: 10
 depth: 1
 nodes: [
 	{
@@ -80,8 +80,44 @@ nodes: [
 				type: FloorTile
 			}
 			{
+				type: WallTsplitETile
+				rotY: 90
+			}
+		]
+	}
+	{
+		y: 7
+		tiles: [
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		y: 8
+		tiles: [
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		y: 9
+		tiles: [
+			{
 				type: CornerSETile
 				rotY: 90
+			}
+			{
+				type: FloorTile
 			}
 		]
 	}
@@ -117,6 +153,9 @@ nodes: [
 			}
 			{
 				type: DoorHorizontalTile
+			}
+			{
+				type: WallDoorwayHorizontalTile
 			}
 		]
 	}
@@ -160,6 +199,58 @@ nodes: [
 		]
 	}
 	{
+		x: 1
+		y: 7
+		tags: [
+			item_key
+		]
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+		items: [
+			{
+				id: c98c3017-3c86-4a46-9462-dfd7d7e1f92b
+				type: Key
+				color: 0000ffff
+				name: Blue Key
+			}
+		]
+	}
+	{
+		x: 1
+		y: 8
+		tags: [
+			item_key
+		]
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+		items: [
+			{
+				id: f847d4dd-82f4-4c93-a3fb-7906c5ea79eb
+				type: Key
+				color: 00ff00ff
+				name: Green Key
+			}
+		]
+	}
+	{
+		x: 1
+		y: 9
+		tiles: [
+			{
+				type: WallHorizontalTile
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
 		x: 2
 		tiles: [
 			{
@@ -183,6 +274,10 @@ nodes: [
 			{
 				type: DoorVerticalTile
 				rotY: 90
+			}
+			{
+				type: WallDoorwayVerticalTile
+				rotY: -90
 			}
 		]
 	}
@@ -237,7 +332,37 @@ nodes: [
 				type: FloorTile
 			}
 			{
+				type: WallDoorwayHorizontalTile
+			}
+		]
+	}
+	{
+		x: 2
+		y: 7
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 2
+		y: 8
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 2
+		y: 9
+		tiles: [
+			{
 				type: WallHorizontalTile
+			}
+			{
+				type: FloorTile
 			}
 		]
 	}
@@ -273,6 +398,9 @@ nodes: [
 			}
 			{
 				type: DoorHorizontalTile
+			}
+			{
+				type: WallDoorwayHorizontalTile
 			}
 		]
 	}
@@ -311,7 +439,53 @@ nodes: [
 				type: FloorTile
 			}
 			{
-				type: WallHorizontalTile
+				type: WallTsplitNTile
+			}
+		]
+	}
+	{
+		x: 3
+		y: 7
+		tags: [
+			door_key
+		]
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: DoorVerticalTile
+				rotY: 90
+			}
+			{
+				type: WallDoorwayVerticalTile
+				rotY: -90
+			}
+		]
+	}
+	{
+		x: 3
+		y: 8
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+		]
+	}
+	{
+		x: 3
+		y: 9
+		tiles: [
+			{
+				type: WallTsplitSTile
+				rotY: 180
+			}
+			{
+				type: FloorTile
 			}
 		]
 	}
@@ -371,6 +545,10 @@ nodes: [
 			{
 				type: FloorTile
 			}
+			{
+				type: WallDoorwayVerticalTile
+				rotY: -90
+			}
 		]
 	}
 	{
@@ -396,6 +574,36 @@ nodes: [
 			{
 				type: WallTsplitSTile
 				rotY: 180
+			}
+		]
+	}
+	{
+		x: 4
+		y: 7
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 4
+		y: 8
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 4
+		y: 9
+		tiles: [
+			{
+				type: WallHorizontalTile
+			}
+			{
+				type: FloorTile
 			}
 		]
 	}
@@ -461,6 +669,36 @@ nodes: [
 	{
 		x: 5
 		y: 6
+		tiles: [
+			{
+				type: WallHorizontalTile
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 5
+		y: 7
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 5
+		y: 8
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 5
+		y: 9
 		tiles: [
 			{
 				type: WallHorizontalTile
@@ -503,6 +741,9 @@ nodes: [
 			{
 				type: DoorHorizontalTile
 			}
+			{
+				type: WallDoorwayHorizontalTile
+			}
 		]
 	}
 	{
@@ -541,6 +782,36 @@ nodes: [
 	{
 		x: 6
 		y: 6
+		tiles: [
+			{
+				type: WallHorizontalTile
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 6
+		y: 7
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 6
+		y: 8
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 6
+		y: 9
 		tiles: [
 			{
 				type: WallHorizontalTile
@@ -635,19 +906,67 @@ nodes: [
 				type: FloorTile
 			}
 			{
+				type: WallTsplitWTile
+				rotY: -90
+			}
+		]
+	}
+	{
+		x: 7
+		y: 7
+		tiles: [
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 7
+		y: 8
+		tiles: [
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 7
+		y: 9
+		tiles: [
+			{
 				type: CornerSWTile
 				rotY: 180
+			}
+			{
+				type: FloorTile
 			}
 		]
 	}
 ]
 associations: [
 	{
-		sourceX: 6
-		sourceY: 2
-		targetX: 6
-		targetY: 5
-		type: toggle
+		sourceX: 3
+		sourceY: 7
+		targetX: 1
+		targetY: 7
+		type: key
+		data: Blue Key
+	}
+	{
+		sourceX: 3
+		sourceY: 7
+		targetX: 1
+		targetY: 8
+		type: key
+		data: Green Key
 	}
 ]
 }

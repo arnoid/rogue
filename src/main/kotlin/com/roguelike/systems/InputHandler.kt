@@ -26,4 +26,12 @@ class InputHandler {
         if (Gdx.input.isKeyPressed(Input.Keys.E)) change += 90f * delta
         return change
     }
+
+    /** Returns zoom change: negative = zoom in, positive = zoom out. */
+    fun getZoomChange(delta: Float): Float {
+        var change = 0f
+        if (Gdx.input.isKeyPressed(Input.Keys.Z)) change -= 10f * delta
+        if (Gdx.input.isKeyPressed(Input.Keys.X)) change += 10f * delta
+        return change
+    }
 }

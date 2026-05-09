@@ -13,15 +13,26 @@ class InteractionSystem(
 ) {
 
     fun interact(actor: Actor, cameraDir: Vec3) {
-        val facingNode = getFacingNode(actor, cameraDir) ?: return
-
-        // 1. Check for items to pick up
-        if (facingNode.items.isNotEmpty()) {
-            val item = facingNode.items.removeAt(0)
+        // 0. Check if actor is standing on a node with items — pick up, no facing needed
+        val currentNode = world.getNode(
+            Math.round(actor.position.x),
+            Math.round(actor.position.y),
+            Math.round(actor.position.z)
+        )
+        if (currentNode != null && currentNode.items.isNotEmpty()) {
+            val item = currentNode.items.removeAt(0)
             actor.inventory.add(item)
             logger.log("Interaction", "Picked up: ${item.name}")
             return
         }
+
+        // 1. Check if actor is standing on a toggle — no facing needed
+        if (currentNode != null && currentNode.tags.contains(WorldNode.Tags.TOGGLE)) {
+            handleToggleInteraction(currentNode)
+            return
+        }
+
+        val facingNode = getFacingNode(actor, cameraDir) ?: return
 
         // 2. Check for door logic (detect door tiles directly)
         val hasDoorTile = facingNode.tiles.any { isDoorTile(it) }
@@ -30,7 +41,7 @@ class InteractionSystem(
             return
         }
 
-        // 3. Check for toggle logic
+        // 3. Check for toggle logic on facing node
         if (facingNode.tags.contains(WorldNode.Tags.TOGGLE)) {
             handleToggleInteraction(facingNode)
         }
@@ -80,39 +91,35 @@ class InteractionSystem(
             return
         }
 
+        // Doors tagged as key-locked: check if actor has the linked key in inventory
+        if (node.tags.contains(WorldNode.Tags.DOOR_KEY)) {
+            val keyAssocs = world.associations.filter { it.source == node && it.type == "key" }
+            if (keyAssocs.isNotEmpty()) {
+                val hasAllKeys = keyAssocs.all { assoc ->
+                    val requiredName = assoc.data ?: "Key"
+                    actor.inventory.any { it.name == requiredName || (requiredName == "Key" && it is KeyItem) }
+                }
+                if (hasAllKeys) {
+                    doorTile.onInteract()
+                    syncAdjacentDoors(node, doorTile.isBlocking())
+                } else {
+                    val missing = keyAssocs.firstOrNull { assoc ->
+                        val requiredName = assoc.data ?: "Key"
+                        actor.inventory.none { it.name == requiredName || (requiredName == "Key" && it is KeyItem) }
+                    }
+                    logger.log("Interaction", "Locked! Missing key: ${missing?.data ?: "Key"}")
+                }
+            } else {
+                logger.log("Interaction", "This door requires a key but none is linked.")
+            }
+            return
+        }
+
         val doorIsOpen = !doorTile.isBlocking()
 
         if (doorIsOpen) {
             doorTile.onInteract() // close it
             syncAdjacentDoors(node, doorTile.isBlocking())
-            return
-        }
-
-        // Check for key-locked doors via associations
-        val requiredAssocs = world.associations.filter { it.source == node && it.type == "key" }
-        if (requiredAssocs.isNotEmpty()) {
-            val requiredKeyNames = requiredAssocs.map { it.data ?: "Key" }
-            val tempInventory = actor.inventory.toMutableList()
-            val keysToConsume = mutableListOf<Item>()
-            var allPresent = true
-
-            for (keyName in requiredKeyNames) {
-                val keyInInv = tempInventory.find { it.name == keyName || (keyName == "Key" && it is KeyItem) }
-                if (keyInInv != null) {
-                    tempInventory.remove(keyInInv)
-                    keysToConsume.add(keyInInv)
-                } else {
-                    allPresent = false
-                    logger.log("Interaction", "Locked! Missing key: $keyName")
-                    break
-                }
-            }
-
-            if (allPresent) {
-                keysToConsume.forEach { actor.inventory.remove(it) }
-                doorTile.onInteract()
-                syncAdjacentDoors(node, doorTile.isBlocking())
-            }
             return
         }
 

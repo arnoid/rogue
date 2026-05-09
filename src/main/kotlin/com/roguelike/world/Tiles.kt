@@ -23,8 +23,11 @@ class FloorTile : BaseTile() {
     override val fixedZ: Float get() = -0.5f
 }
 
-abstract class WallTile : BaseTile() {
-    override fun isBlocking(): Boolean = true
+abstract class WallTile(
+    /** Whether this wall allows passage. Default is false (impassable). */
+    val passable: Boolean = false
+) : BaseTile() {
+    override fun isBlocking(): Boolean = !passable
     override val slot: TileSlot get() = TileSlot.WALL
 }
 
@@ -92,6 +95,16 @@ class CornerNWTile : CornerTile() {
 
 class WallArchedTile : WallTile() {
     companion object { const val TYPE = "WallArchedTile" }
+    override val type: String get() = TYPE
+}
+
+class WallDoorwayHorizontalTile : WallTile(passable = true) {
+    companion object { const val TYPE = "WallDoorwayHorizontalTile" }
+    override val type: String get() = TYPE
+}
+
+class WallDoorwayVerticalTile : WallTile(passable = true) {
+    companion object { const val TYPE = "WallDoorwayVerticalTile" }
     override val type: String get() = TYPE
 }
 

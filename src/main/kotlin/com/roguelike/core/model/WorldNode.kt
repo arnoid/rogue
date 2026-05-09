@@ -16,6 +16,7 @@ class WorldNode(val x: Int, val y: Int, val z: Int) {
         const val DOOR_KEY     = "door_key"
         const val DOOR_TOGGLE  = "door_toggle"
         const val TOGGLE       = "toggle"
+        const val ITEM_KEY     = "item_key"
     }
 
     /** Slot-based tile storage: at most one tile per [TileSlot]. */

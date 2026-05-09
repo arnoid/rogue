@@ -64,6 +64,10 @@ class MapEditor(private val game: Game) : Screen {
     private var isDialogActive = false
     private var currentFilePath: String? = null
 
+    private val recentFiles = mutableListOf<String>()
+    private lateinit var fileMenu: Menu
+    private val maxRecentFiles = 5
+
     private var maxRenderZ = 0
     private var hoveredX = -1
     private var hoveredY = -1
@@ -101,7 +105,8 @@ class MapEditor(private val game: Game) : Screen {
             }
     private val previewCamera =
             PerspectiveCamera(67f, 100f, 100f).apply {
-                position.set(1.2f, 1.2f, 1.2f)
+                position.set(0f, 0f, 2f)
+                up.set(0f, 1f, 0f)
                 lookAt(0f, 0f, 0f)
                 near = 0.1f
                 far = 100f
@@ -125,7 +130,7 @@ class MapEditor(private val game: Game) : Screen {
     private val tileCellPad = 5f
 
     private val tagButtons = HashMap<String, TextButton>()
-    private var cameraPitch = 45f
+    private var cameraPitch = 90f
     private var cameraYaw = 0f
     private lateinit var orientationGizmo: OrientationGizmo
     private lateinit var rootTable: VisTable
@@ -262,13 +267,10 @@ class MapEditor(private val game: Game) : Screen {
         val menuBar = MenuBar()
         rootTable.add(menuBar.table).fillX().expandX().top().row()
 
-        val fileMenu = Menu("File")
+        fileMenu = Menu("File")
         menuBar.addMenu(fileMenu)
-        fileMenu.addItem(MenuItem("New").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { newWorld() } }) })
-        fileMenu.addItem(MenuItem("Open").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { openWorld() } }) })
-        fileMenu.addItem(MenuItem("Save").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { saveWorld() } }) })
-        fileMenu.addItem(MenuItem("Save As...").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { saveWorldAs() } }) })
-        fileMenu.addItem(MenuItem("Exit").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { game.screen = MainMenuScreen(game) } }) })
+        loadRecentFiles()
+        rebuildFileMenu()
 
         // ── Row 2: Main Area ─────────────────────────────────────────────────
         val mainRow = VisTable()
@@ -323,7 +325,7 @@ class MapEditor(private val game: Game) : Screen {
         val tileGroups = listOf(
             "Floors"      to listOf(FloorTile.TYPE),
             "Walls"       to listOf(WallHorizontalTile.TYPE, WallVerticalTile.TYPE,
-                                    WallArchedTile.TYPE, WallCrossingTile.TYPE,
+                                    WallArchedTile.TYPE, WallDoorwayHorizontalTile.TYPE, WallDoorwayVerticalTile.TYPE, WallCrossingTile.TYPE,
                                     WallTsplitNTile.TYPE, WallTsplitETile.TYPE,
                                     WallTsplitSTile.TYPE, WallTsplitWTile.TYPE,
                                     CornerNETile.TYPE, CornerSETile.TYPE,
@@ -533,24 +535,29 @@ class MapEditor(private val game: Game) : Screen {
         if (paletteWidth == lastPaletteWidth || paletteWidth <= 0f) return
         lastPaletteWidth = paletteWidth
 
-        val cellWidth = tilePreviewSize + tileCellPad * 2  // size + pad on each side
-        val cols = maxOf(1, (paletteWidth / cellWidth).toInt())
+        // Total width per tile cell: preview + padding inside container + padding on grid cell
+        // Container internal: preview.size(64) + preview.pad(5) on each side = 74
+        // Grid cell: .pad(5) on each side = +10
+        // Total per cell = 84
+        val tileCellTotal = tilePreviewSize + tileCellPad * 2 + tileCellPad * 2
+        val cols = maxOf(1, Math.floor((paletteWidth / tileCellTotal).toDouble()).toInt())
 
         // Re-layout tile grids
         for ((grid, containers) in tileGrids) {
             grid.clearChildren()
             containers.forEachIndexed { index, container ->
-                grid.add(container).pad(tileCellPad)
+                grid.add(container).pad(tileCellPad).width(tilePreviewSize + tileCellPad * 2).fill()
                 if ((index + 1) % cols == 0) grid.row()
             }
         }
 
-        // Re-layout item grid
-        val itemCellWidth = 32f + tileCellPad * 2
-        val itemCols = maxOf(1, (paletteWidth / itemCellWidth).toInt())
+        // Re-layout item grid: item preview is 32px + pad
+        val itemSize = 32f
+        val itemCellTotal = itemSize + tileCellPad * 2 + tileCellPad * 2
+        val itemCols = maxOf(1, Math.floor((paletteWidth / itemCellTotal).toDouble()).toInt())
         itemGridTable.clearChildren()
         itemGrid.forEachIndexed { index, container ->
-            itemGridTable.add(container).pad(tileCellPad)
+            itemGridTable.add(container).pad(tileCellPad).width(itemSize + tileCellPad * 2).fill()
             if ((index + 1) % itemCols == 0) itemGridTable.row()
         }
     }
@@ -558,32 +565,30 @@ class MapEditor(private val game: Game) : Screen {
     inner class TilePreviewActor(val tile: com.roguelike.core.model.Tile) : S2DActor() {
         init { touchable = Touchable.disabled }  // clicks fall through to the container's listener
         override fun draw(batch: com.badlogic.gdx.graphics.g2d.Batch, parentAlpha: Float) {
-            // Save scissor state so the ScrollPane's clipping is preserved after our GL work
-            val scissorWasEnabled = Gdx.gl.glIsEnabled(GL20.GL_SCISSOR_TEST)
-            val scissorBox = com.badlogic.gdx.utils.BufferUtils.newIntBuffer(4)  // must be direct for glGetIntegerv
-            Gdx.gl20.glGetIntegerv(GL20.GL_SCISSOR_BOX, scissorBox)
-
             batch.end()
+
             val screenPos = localToStageCoordinates(Vector2(0f, 0f))
-            val bx = screenPos.x * (Gdx.graphics.backBufferWidth.toFloat() / stage.width)
-            val by = screenPos.y * (Gdx.graphics.backBufferHeight.toFloat() / stage.height)
-            val bw = width * (Gdx.graphics.backBufferWidth.toFloat() / stage.width)
-            val bh = height * (Gdx.graphics.backBufferHeight.toFloat() / stage.height)
-            Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST)
-            Gdx.gl.glViewport(bx.toInt(), by.toInt(), bw.toInt(), bh.toInt())
+            val scaleX = Gdx.graphics.backBufferWidth.toFloat() / stage.width
+            val scaleY = Gdx.graphics.backBufferHeight.toFloat() / stage.height
+            val bx = (screenPos.x * scaleX).toInt()
+            val by = (screenPos.y * scaleY).toInt()
+            val bw = (width * scaleX).toInt()
+            val bh = (height * scaleY).toInt()
+
+            // Clip rendering to this actor's screen area
+            Gdx.gl.glEnable(GL20.GL_SCISSOR_TEST)
+            Gdx.gl.glScissor(bx, by, bw, bh)
+            Gdx.gl.glViewport(bx, by, bw, bh)
             Gdx.gl.glEnable(GL20.GL_DEPTH_TEST)
             Gdx.gl.glClear(GL20.GL_DEPTH_BUFFER_BIT)
+
             modelBatch.begin(previewCamera)
             tileRenderer.render(tile, modelBatch, previewEnvironment, 0f, 0f, 0f, ignoreYRotation = true)
             modelBatch.end()
+
             Gdx.gl.glViewport(0, 0, Gdx.graphics.backBufferWidth, Gdx.graphics.backBufferHeight)
-            // Restore scissor
-            if (scissorWasEnabled) {
-                Gdx.gl.glEnable(GL20.GL_SCISSOR_TEST)
-                Gdx.gl.glScissor(scissorBox[0], scissorBox[1], scissorBox[2], scissorBox[3])
-            } else {
-                Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST)
-            }
+            Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST)
+
             batch.begin()
         }
     }
@@ -629,15 +634,17 @@ class MapEditor(private val game: Game) : Screen {
         val cosYaw = Math.cos(yawRad).toFloat()
 
         val offsetX = cameraDistance * cosPitch * sinYaw
-        val offsetY = cameraDistance * sinPitch
-        val offsetZ = cameraDistance * cosPitch * cosYaw
+        val offsetZ = cameraDistance * sinPitch
+        val offsetY = cameraDistance * cosPitch * cosYaw
 
         camera.position.set(
             cameraTarget.x + offsetX,
             cameraTarget.y + offsetY,
             cameraTarget.z + offsetZ
         )
-        camera.up.set(0f, 1f, 0f)
+        // Smoothly blend the up vector: at pitch=90° use Y-up, at lower pitches use Z-up
+        val t = ((cameraPitch - 80f) / 10f).coerceIn(0f, 1f) // blend over 80°–90°
+        camera.up.set(0f, t, 1f - t).nor()
         camera.lookAt(cameraTarget)
         camera.update()
     }
@@ -649,10 +656,80 @@ class MapEditor(private val game: Game) : Screen {
         selectedX = -1
         selectedY = -1
         selectedZ = -1
-        cameraPitch = 45f
+        cameraPitch = 90f
         cameraYaw = 0f
         cameraTarget.set((world.width / 2f), (world.height / 2f), (world.depth / 2f))
         updateCamera()
+    }
+
+    private fun rebuildFileMenu() {
+        fileMenu.clear()
+        fileMenu.addItem(MenuItem("New").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { newWorld() } }) })
+        fileMenu.addItem(MenuItem("Open").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { openWorld() } }) })
+
+        if (recentFiles.isNotEmpty()) {
+            fileMenu.addSeparator()
+            recentFiles.forEach { path ->
+                val displayName = java.io.File(path).name
+                fileMenu.addItem(MenuItem(displayName).apply {
+                    addListener(object : ChangeListener() {
+                        override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) {
+                            loadWorldFromPath(path)
+                        }
+                    })
+                })
+            }
+            fileMenu.addSeparator()
+        }
+
+        fileMenu.addItem(MenuItem("Save").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { saveWorld() } }) })
+        fileMenu.addItem(MenuItem("Save As...").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { saveWorldAs() } }) })
+        fileMenu.addItem(MenuItem("Exit").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { game.screen = MainMenuScreen(game) } }) })
+    }
+
+    private fun addRecentFile(path: String) {
+        recentFiles.remove(path)
+        recentFiles.add(0, path)
+        if (recentFiles.size > maxRecentFiles) {
+            recentFiles.removeAt(recentFiles.lastIndex)
+        }
+        saveRecentFiles()
+        rebuildFileMenu()
+    }
+
+    private fun loadRecentFiles() {
+        recentFiles.clear()
+        val prefs = Gdx.app.getPreferences("MapEditorPrefs")
+        for (i in 0 until maxRecentFiles) {
+            val path = prefs.getString("recent_$i", "")
+            if (path.isNotEmpty()) recentFiles.add(path)
+        }
+    }
+
+    private fun saveRecentFiles() {
+        val prefs = Gdx.app.getPreferences("MapEditorPrefs")
+        for (i in 0 until maxRecentFiles) {
+            prefs.putString("recent_$i", if (i < recentFiles.size) recentFiles[i] else "")
+        }
+        prefs.flush()
+    }
+
+    private fun loadWorldFromPath(filePath: String) {
+        val loadedWorld = WorldIO.loadWorld(filePath, { w, h, d -> World(w, h, d) }, { type -> modelLoader.createTile(type) })
+        if (loadedWorld != null) {
+            world = loadedWorld
+            currentFilePath = filePath
+            maxRenderZ = world.depth - 1
+            xLabel.setText(world.width.toString())
+            yLabel.setText(world.height.toString())
+            zLabel.setText(world.depth.toString())
+            layerLabel.setText(maxRenderZ.toString())
+            cameraPitch = 90f
+            cameraYaw = 0f
+            cameraTarget.set(world.width / 2f, world.height / 2f, world.depth / 2f)
+            updateCamera()
+            addRecentFile(filePath)
+        }
     }
 
     private fun openWorld() {
@@ -662,21 +739,8 @@ class MapEditor(private val game: Game) : Screen {
             try {
                 val path = PlatformUtils.chooseFile("wld")
                 path?.let { filePath ->
-                    val loadedWorld = WorldIO.loadWorld(filePath, { w, h, d -> World(w, h, d) }, { type -> modelLoader.createTile(type) })
-                    if (loadedWorld != null) {
-                        Gdx.app.postRunnable {
-                            world = loadedWorld
-                            currentFilePath = filePath
-                            maxRenderZ = world.depth - 1
-                            xLabel.setText(world.width.toString())
-                            yLabel.setText(world.height.toString())
-                            zLabel.setText(world.depth.toString())
-                            layerLabel.setText(maxRenderZ.toString())
-                            cameraPitch = 45f
-                            cameraYaw = 0f
-                            cameraTarget.set(world.width / 2f, world.height / 2f, world.depth / 2f)
-                            updateCamera()
-                        }
+                    Gdx.app.postRunnable {
+                        loadWorldFromPath(filePath)
                     }
                 }
             } finally {
@@ -916,7 +980,7 @@ class MapEditor(private val game: Game) : Screen {
             val dx = Gdx.input.deltaX.toFloat()
             val dy = Gdx.input.deltaY.toFloat()
             cameraYaw   = wrapAngle(cameraYaw   - dx * 0.5f)
-            cameraPitch = (cameraPitch + dy * 0.5f).coerceIn(-89f, 89f)
+            cameraPitch = (cameraPitch + dy * 0.5f).coerceIn(-89f, 90f)
             updateCamera()
         }
         scrolledThisFrame = false
@@ -931,7 +995,7 @@ class MapEditor(private val game: Game) : Screen {
                 isAlt -> {
                     // Alt/Option + drag → rotate
                     cameraYaw   = wrapAngle(cameraYaw   - dx * 0.5f)
-                    cameraPitch = (cameraPitch + dy * 0.5f).coerceIn(-89f, 89f)
+                    cameraPitch = (cameraPitch + dy * 0.5f).coerceIn(-89f, 90f)
                     updateCamera()
                 }
                 isShift -> {
@@ -970,6 +1034,9 @@ class MapEditor(private val game: Game) : Screen {
                     // Remove item from each new node entered
                     if (node != null && isNewEraseNode) {
                         node.items.removeIf { it is KeyItem && it.name == sel.name }
+                        if (node.items.none { it is KeyItem }) {
+                            world.removeTag(node, NodeTags.ITEM_KEY)
+                        }
                         Gdx.app.log("MapEditor", "Removed ${sel.name} from ($hoveredX, $hoveredY, $hoveredZ)")
                         lastEraseX = hoveredX; lastEraseY = hoveredY; lastEraseZ = hoveredZ
                     }
@@ -1012,12 +1079,13 @@ class MapEditor(private val game: Game) : Screen {
                     if (node != null && isNewNode) {
                         node.items.removeIf { it is KeyItem }
                         node.items.add(KeyItem(colorHex = sel.colorHex, name = sel.name))
+                        world.addTag(node, NodeTags.ITEM_KEY)
                         Gdx.app.log("MapEditor", "Placed ${sel.name} → ($hoveredX, $hoveredY, $hoveredZ)")
                         lastPaintX = hoveredX; lastPaintY = hoveredY; lastPaintZ = hoveredZ
                     }
                 }
                 is PaletteSelection.Tag -> {
-                    // Add tag to each new node entered; toggle (remove) only on single click of same node
+                    // Add tag to each new node entered
                     if (isNewNode) {
                         selectedX = hoveredX; selectedY = hoveredY; selectedZ = hoveredZ
                         val n = world.getNode(hoveredX, hoveredY, hoveredZ)
@@ -1025,11 +1093,6 @@ class MapEditor(private val game: Game) : Screen {
                             world.addTag(n, sel.tag)
                             updatePaletteHighlights()
                             Gdx.app.log("MapEditor", "Added tag ${sel.tag} → ($hoveredX, $hoveredY, $hoveredZ)")
-                        } else if (n != null && Gdx.input.justTouched()) {
-                            // Single click on a node that already has the tag → toggle off
-                            n.tags.remove(sel.tag)
-                            updatePaletteHighlights()
-                            Gdx.app.log("MapEditor", "Removed tag ${sel.tag} from ($hoveredX, $hoveredY, $hoveredZ)")
                         }
                         lastPaintX = hoveredX; lastPaintY = hoveredY; lastPaintZ = hoveredZ
                     }
@@ -1054,9 +1117,11 @@ class MapEditor(private val game: Game) : Screen {
                 val target = world.getNode(hoveredX, hoveredY, hoveredZ)
                 if (source != null && target != null) {
                     var assocData: String? = null
-                    val type = if (target.items.any { it is KeyItem }) {
+                    val type = if (source.tags.contains(NodeTags.DOOR_TOGGLE) && target.tags.contains(NodeTags.TOGGLE)) {
+                        "toggle"
+                    } else if (source.tags.contains(NodeTags.DOOR_KEY) && target.tags.contains(NodeTags.ITEM_KEY)) {
                         assocData = target.items.firstOrNull { it is KeyItem }?.name; "key"
-                    } else if (target.tags.contains(NodeTags.TOGGLE)) "toggle" else null
+                    } else null
                     if (type != null) world.addAssociation(source, target, type, assocData)
                 }
             }

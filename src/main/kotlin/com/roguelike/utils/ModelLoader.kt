@@ -29,6 +29,8 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
         register(CornerSWTile.TYPE)       { createCornerSWTile() }
         register(CornerNWTile.TYPE)       { createCornerNWTile() }
         register(WallArchedTile.TYPE)     { createWallArchedTile() }
+        register(WallDoorwayHorizontalTile.TYPE) { createWallDoorwayHorizontalTile() }
+        register(WallDoorwayVerticalTile.TYPE)   { createWallDoorwayVerticalTile() }
         register(WallCrossingTile.TYPE)   { createWallCrossingTile() }
         register(WallTsplitNTile.TYPE)    { createWallTsplitNTile() }
         register(WallTsplitETile.TYPE)    { createWallTsplitETile() }
@@ -140,6 +142,22 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
         val model = assetLoader.loadModel("wall_arched", "models/tiles/obj/wall_arched.obj")
         val (scale, center) = getModelData(model)
         val tile = WallArchedTile()
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        return tile
+    }
+
+    fun createWallDoorwayHorizontalTile(): WallDoorwayHorizontalTile {
+        val model = assetLoader.loadModel("wall_doorway", "models/tiles/obj/wall_doorway.obj")
+        val (scale, center) = getModelData(model)
+        val tile = WallDoorwayHorizontalTile()
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        return tile
+    }
+
+    fun createWallDoorwayVerticalTile(): WallDoorwayVerticalTile {
+        val model = assetLoader.loadModel("wall_doorway", "models/tiles/obj/wall_doorway.obj")
+        val (scale, center) = getModelData(model)
+        val tile = WallDoorwayVerticalTile().also { it.rotationY = -90f }
         renderRegistry.register(tile, TileRenderData(model, scale, center))
         return tile
     }
