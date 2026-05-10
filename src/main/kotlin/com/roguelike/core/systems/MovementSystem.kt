@@ -263,6 +263,10 @@ class MovementSystem(private val world: World) {
             return false
         }
 
+        // Stair perpendicular wall check: stairs block entry/exit on sides
+        // perpendicular to their elevation direction.
+        if (!checkStairPerpendicularWalls(targetX, targetY, size, zFloor)) return false
+
         return true
     }
 
@@ -308,6 +312,74 @@ class MovementSystem(private val world: World) {
         if (node === skipNode) return true                           // door escape
         if (node.tiles.isEmpty()) return true                       // empty node
         return node.tiles.none { it.isBlocking() }                  // blocked if any tile blocks
+    }
+
+    /**
+     * Checks that the actor's collision box doesn't cross a stair node boundary
+     * on the side perpendicular to the stair's elevation direction.
+     *
+     * StairsN/S elevate along Y → block entry/exit on X sides (east/west walls)
+     * StairsE/W elevate along X → block entry/exit on Y sides (north/south walls)
+     *
+     * Returns false if the move is blocked.
+     */
+    private fun checkStairPerpendicularWalls(
+        targetX: Float, targetY: Float, size: Float, z: Int
+    ): Boolean {
+        val centerX = round(targetX).toInt()
+        val centerY = round(targetY).toInt()
+
+        // Check stairs at z and z-1 (actor might be at top of stairs from level below)
+        for (checkZ in z downTo (z - 1).coerceAtLeast(0)) {
+            val node = world.getNode(centerX, centerY, checkZ) ?: continue
+            val stair = node.tiles.firstOrNull { it.type.startsWith("Stairs") } ?: continue
+
+            when (stair.type) {
+                "StairsNTile", "StairsSTile" -> {
+                    // Elevation along Y — block X-axis crossing (east/west sides)
+                    val leftCornerX = round(targetX - size).toInt()
+                    val rightCornerX = round(targetX + size).toInt()
+                    if (leftCornerX != centerX || rightCornerX != centerX) return false
+                }
+                "StairsETile", "StairsWTile" -> {
+                    // Elevation along X — block Y-axis crossing (north/south sides)
+                    val bottomCornerY = round(targetY - size).toInt()
+                    val topCornerY = round(targetY + size).toInt()
+                    if (bottomCornerY != centerY || topCornerY != centerY) return false
+                }
+            }
+            break // Only check the first stairs node found
+        }
+
+        // Also check if any corner is entering a stairs node from the perpendicular side
+        val corners = arrayOf(
+            round(targetX - size).toInt() to round(targetY - size).toInt(),
+            round(targetX + size).toInt() to round(targetY - size).toInt(),
+            round(targetX - size).toInt() to round(targetY + size).toInt(),
+            round(targetX + size).toInt() to round(targetY + size).toInt()
+        )
+
+        for ((cx, cy) in corners) {
+            if (cx == centerX && cy == centerY) continue // Same node as center, already checked
+            for (checkZ in z downTo (z - 1).coerceAtLeast(0)) {
+                val cornerNode = world.getNode(cx, cy, checkZ) ?: continue
+                val stair = cornerNode.tiles.firstOrNull { it.type.startsWith("Stairs") } ?: continue
+
+                when (stair.type) {
+                    "StairsNTile", "StairsSTile" -> {
+                        // Corner is on a N/S stairs node but center is at a different X → perpendicular entry
+                        if (cx != centerX) return false
+                    }
+                    "StairsETile", "StairsWTile" -> {
+                        // Corner is on an E/W stairs node but center is at a different Y → perpendicular entry
+                        if (cy != centerY) return false
+                    }
+                }
+                break
+            }
+        }
+
+        return true
     }
 
     // ------------------------------------------------------------------ //

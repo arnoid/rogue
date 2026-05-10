@@ -116,7 +116,7 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
         val gdxCenter = com.badlogic.gdx.math.Vector3()
         box.getCenter(gdxCenter)
         val center = Vec3(gdxCenter.x, gdxCenter.y, gdxCenter.z)
-        val scale  = 0.5f / center.len()
+        val scale  = 0.5f / center.len() / 4f
         val tile = ToggleTile()
         renderRegistry.register(tile, TileRenderData(model, scale, center))
         return tile

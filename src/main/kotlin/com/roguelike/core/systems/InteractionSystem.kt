@@ -11,6 +11,8 @@ class InteractionSystem(
     private val world: World,
     private val logger: GameLogger = GameLogger.NOOP
 ) {
+    /** All actors in the world — used to prevent doors from closing on actors. */
+    val actors = mutableListOf<Actor>()
 
     fun interact(actor: Actor, cameraDir: Vec3) {
         val nx = Math.round(actor.position.x)
@@ -109,6 +111,16 @@ class InteractionSystem(
         return tile.slot == TileSlot.DOOR
     }
 
+    /** Returns true if any tracked actor's collision box overlaps the given node. */
+    private fun isActorInNode(node: WorldNode): Boolean {
+        return actors.any { actor ->
+            val ax = Math.round(actor.position.x)
+            val ay = Math.round(actor.position.y)
+            val az = Math.round(actor.position.z)
+            ax == node.x && ay == node.y && az == node.z
+        }
+    }
+
     private fun handleDoorInteraction(actor: Actor, node: WorldNode) {
         val doorTile = node.tiles.firstOrNull { isDoorTile(it) } ?: return
 
@@ -127,8 +139,13 @@ class InteractionSystem(
                     actor.inventory.any { it.name == requiredName || (requiredName == "Key" && it is KeyItem) }
                 }
                 if (hasAllKeys) {
-                    doorTile.onInteract()
-                    syncAdjacentDoors(node, doorTile.isBlocking())
+                    val wouldClose = !doorTile.isBlocking()
+                    if (wouldClose && isActorInNode(node)) {
+                        logger.log("Interaction", "Cannot close door — someone is in the way.")
+                    } else {
+                        doorTile.onInteract()
+                        syncAdjacentDoors(node, doorTile.isBlocking())
+                    }
                 } else {
                     val missing = keyAssocs.firstOrNull { assoc ->
                         val requiredName = assoc.data ?: "Key"
@@ -145,6 +162,10 @@ class InteractionSystem(
         val doorIsOpen = !doorTile.isBlocking()
 
         if (doorIsOpen) {
+            if (isActorInNode(node)) {
+                logger.log("Interaction", "Cannot close door — someone is in the way.")
+                return
+            }
             doorTile.onInteract() // close it
             syncAdjacentDoors(node, doorTile.isBlocking())
             return
@@ -178,6 +199,12 @@ class InteractionSystem(
             val doorTile = assoc.source.tiles.firstOrNull { isDoorTile(it) }
             logger.log("Interaction", "  → door at (${assoc.source.x},${assoc.source.y},${assoc.source.z}): tile=$doorTile")
             if (doorTile != null) {
+                // Prevent closing if an actor is in the door node
+                val wouldClose = !doorTile.isBlocking()
+                if (wouldClose && isActorInNode(assoc.source)) {
+                    logger.log("Interaction", "  → cannot close door — someone is in the way.")
+                    return@forEach
+                }
                 doorTile.onInteract()
                 syncAdjacentDoors(assoc.source, doorTile.isBlocking())
             }

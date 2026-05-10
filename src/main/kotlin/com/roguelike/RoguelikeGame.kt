@@ -124,6 +124,7 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
 
         // Player — pure logic object, no LibGDX
         player = Player()
+        interactionSystem.actors.add(player)
 
         // Player visual — sphere mesh owned here in the view layer
         val modelBuilder = ModelBuilder()
@@ -269,7 +270,7 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
             val s = 0.5f
             for (x in 0 until world.width) {
                 for (y in 0 until world.height) {
-                    for (z in 0 until world.depth) {
+                    val z = playerNodeZ
                         val node = world.getNode(x, y, z) ?: continue
                         if (node.tiles.isEmpty()) continue
 
@@ -295,7 +296,6 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
                         debugShapeRenderer.line(fx+s,fy-s,fz-s, fx+s,fy-s,fz+s)
                         debugShapeRenderer.line(fx+s,fy+s,fz-s, fx+s,fy+s,fz+s)
                         debugShapeRenderer.line(fx-s,fy+s,fz-s, fx-s,fy+s,fz+s)
-                    }
                 }
             }
             debugShapeRenderer.end()
@@ -324,7 +324,7 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
             debugSpriteBatch.begin()
             for (x in 0 until world.width) {
                 for (y in 0 until world.height) {
-                    for (z in 0 until world.depth) {
+                    val z = playerNodeZ
                         val node = world.getNode(x, y, z) ?: continue
                         if (node.tags.isEmpty()) continue
                         projPos.set(x.toFloat(), y.toFloat() + 0.45f, z.toFloat())
@@ -333,7 +333,6 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
                             val label = node.tags.joinToString("\n")
                             debugFont.draw(debugSpriteBatch, label, projPos.x - 30f, projPos.y + 4f)
                         }
-                    }
                 }
             }
             debugSpriteBatch.end()
@@ -343,6 +342,8 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
             debugShapeRenderer.projectionMatrix = camera.combined
             debugShapeRenderer.begin(com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType.Line)
             world.associations.forEach { assoc ->
+                // Only show associations where at least one end is on the player's level
+                if (assoc.source.z != playerNodeZ && assoc.target.z != playerNodeZ) return@forEach
                 // Skip key associations where the key has been picked up
                 if (assoc.type == "key" && assoc.target.items.none { it is com.roguelike.core.model.KeyItem }) return@forEach
 
@@ -366,7 +367,7 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
             debugShapeRenderer.color = Color(0.2f, 0.5f, 1f, 1f)
             for (x in 0 until world.width) {
                 for (y in 0 until world.height) {
-                    for (z in 0 until world.depth) {
+                    val z = playerNodeZ
                         val node = world.getNode(x, y, z) ?: continue
                         node.tiles.filterIsInstance<StairsTile>().forEach { stair ->
                             val fx = x.toFloat(); val fy = y.toFloat(); val fz = z.toFloat() + 0.05f
@@ -383,7 +384,6 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
                             debugShapeRenderer.line(ex, ey, fz, ex - dx * head + dy * head, ey - dy * head + dx * head, fz)
                             debugShapeRenderer.line(ex, ey, fz, ex - dx * head - dy * head, ey - dy * head - dx * head, fz)
                         }
-                    }
                 }
             }
             debugShapeRenderer.end()

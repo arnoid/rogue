@@ -61,9 +61,12 @@ class TileRenderer(
             else             -> getInstance(tile) ?: return
         }
 
-        // Use animated quaternion rotation when available, otherwise fall back to instant
-        val doorQuat: Quaternion? = if (tile is DoorTile) doorAnimationSystem?.getCurrentRotation(tile) else null
-        val extraRotY = if (doorQuat != null) 0f else if (tile is DoorTile && tile.isOpen) -90f else 0f
+        // Use animated quaternion rotation when available, otherwise create instant quaternion
+        val doorQuat: Quaternion? = if (tile is DoorTile) {
+            doorAnimationSystem?.getCurrentRotation(tile)
+                ?: if (tile.isOpen) Quaternion().setFromAxis(0f, 1f, 0f, -90f) else null
+        } else null
+        val extraRotY = 0f
 
         updateTransform(instanceToRender, tile, renderData, x, y, z, ignoreYRotation, extraRotY, doorQuat)
         updateColor(instanceToRender, tile)
@@ -101,8 +104,25 @@ class TileRenderer(
         if (rotX != 0f)                       instance.transform.rotate(Vector3.X, rotX)
         if (!ignoreYRotation && rotY != 0f)   instance.transform.rotate(Vector3.Y, rotY)
         if (rotZ != 0f)                       instance.transform.rotate(Vector3.Z, rotZ)
-        // Apply smooth door swing quaternion (slerp-interpolated by DoorAnimationSystem)
-        if (doorQuat != null)                 instance.transform.rotate(doorQuat)
+
+        // Apply smooth door swing quaternion with pivot at the door's hinge edge.
+        // Horizontal doors pivot at +X edge, vertical doors pivot at +Y edge (in model space after base rotations).
+        if (doorQuat != null && tile is DoorTile) {
+            val pivotOffset = renderData.center.x  // half-width in model space
+            val isVertical = tile is DoorVerticalTile
+            if (isVertical) {
+                instance.transform.translate(-0.5f, 0f, 0f)
+                instance.transform.rotate(doorQuat)
+                instance.transform.translate(0.5f, 0f, 0f)
+            } else {
+                instance.transform.translate(-0.5f, 0f, 0f)
+                instance.transform.rotate(doorQuat)
+                instance.transform.translate(0.5f, 0f, 0f)
+            }
+        } else if (doorQuat != null) {
+            instance.transform.rotate(doorQuat)
+        }
+
         instance.transform.translate(-renderData.center.x, -renderData.center.y, -renderData.center.z)
     }
 
