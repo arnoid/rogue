@@ -27,7 +27,7 @@ class DoorAnimationSystem(
     )
 
     private val closedQuat = Quaternion()  // identity – no extra rotation
-    private val openQuat   = Quaternion().setFromAxis(0f, 1f, 0f, -swingAngleDeg)
+    private val openQuat   = Quaternion().setFromAxis(0f, 0f, 1f, -swingAngleDeg)
 
     private val anims = mutableMapOf<DoorTile, DoorAnim>()
 
@@ -87,7 +87,6 @@ class DoorAnimationSystem(
      */
     fun isAnimating(door: DoorTile): Boolean = anims[door]?.let { it.progress < 1f } ?: false
 }
-
 
 
 

@@ -72,7 +72,7 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
     fun createFloorTile(): FloorTile {
         val model = assetLoader.loadModel("floor", "models/tiles/obj/floor_dirt_large.obj")
         val (scale, center) = getModelData(model)
-        val tile = FloorTile().also { it.zOffset = 0f }
+        val tile = FloorTile().also { it.zOffset = -0.5f }
         renderRegistry.register(tile, TileRenderData(model, scale, center))
         return tile
     }

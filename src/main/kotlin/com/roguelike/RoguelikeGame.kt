@@ -247,7 +247,8 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         playerInstance.transform.setTranslation(player.position.x, player.position.y, player.position.z)
 
         modelBatch.begin(camera)
-        worldRenderer.render(world, modelBatch, environment)
+        val playerZ = Math.ceil(player.position.z.toDouble()).toInt()
+        worldRenderer.render(world, modelBatch, environment, maxZ = playerZ)
         modelBatch.render(playerInstance, environment)
 
         if (debugMode) {
@@ -259,7 +260,7 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         if (debugMode) {
             val playerNodeX = Math.round(player.position.x)
             val playerNodeY = Math.round(player.position.y)
-            val playerNodeZ = Math.round(player.position.z)
+            val playerNodeZ = Math.floor(player.position.z.toDouble()).toInt()
 
             // ── Node frames via ShapeRenderer ─────────────────────────────────
             Gdx.gl.glEnable(GL20.GL_BLEND)

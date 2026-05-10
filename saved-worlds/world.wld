@@ -1,7 +1,7 @@
 {
 width: 8
 height: 10
-depth: 1
+depth: 5
 nodes: [
 	{
 		tiles: [
@@ -14,7 +14,31 @@ nodes: [
 		]
 	}
 	{
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: CornerNETile
+			}
+		]
+	}
+	{
 		y: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+		]
+	}
+	{
+		y: 1
+		z: 1
 		tiles: [
 			{
 				type: FloorTile
@@ -38,7 +62,33 @@ nodes: [
 		]
 	}
 	{
+		y: 2
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+		]
+	}
+	{
 		y: 3
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+		]
+	}
+	{
+		y: 3
+		z: 1
 		tiles: [
 			{
 				type: FloorTile
@@ -62,6 +112,19 @@ nodes: [
 		]
 	}
 	{
+		y: 4
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+		]
+	}
+	{
 		y: 5
 		tiles: [
 			{
@@ -70,6 +133,31 @@ nodes: [
 			{
 				type: WallVerticalTile
 				rotY: -90
+			}
+		]
+	}
+	{
+		y: 5
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+		]
+	}
+	{
+		y: 5
+		z: 4
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: CornerNETile
 			}
 		]
 	}
@@ -86,7 +174,59 @@ nodes: [
 		]
 	}
 	{
+		y: 6
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallTsplitETile
+				rotY: 90
+			}
+		]
+	}
+	{
+		y: 6
+		z: 4
+		tiles: [
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
 		y: 7
+		tiles: [
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		y: 7
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+		]
+	}
+	{
+		y: 7
+		z: 4
 		tiles: [
 			{
 				type: WallVerticalTile
@@ -110,7 +250,59 @@ nodes: [
 		]
 	}
 	{
+		y: 8
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+		]
+	}
+	{
+		y: 8
+		z: 4
+		tiles: [
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
 		y: 9
+		tiles: [
+			{
+				type: CornerSETile
+				rotY: 90
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		y: 9
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: CornerSETile
+				rotY: 90
+			}
+		]
+	}
+	{
+		y: 9
+		z: 4
 		tiles: [
 			{
 				type: CornerSETile
@@ -134,7 +326,29 @@ nodes: [
 	}
 	{
 		x: 1
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallHorizontalTile
+			}
+		]
+	}
+	{
+		x: 1
 		y: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 1
+		y: 1
+		z: 1
 		tiles: [
 			{
 				type: FloorTile
@@ -161,7 +375,27 @@ nodes: [
 	}
 	{
 		x: 1
+		y: 2
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 1
 		y: 3
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 1
+		y: 3
+		z: 1
 		tiles: [
 			{
 				type: FloorTile
@@ -179,10 +413,49 @@ nodes: [
 	}
 	{
 		x: 1
+		y: 4
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 1
 		y: 5
 		tiles: [
 			{
 				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 1
+		y: 5
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 1
+		y: 5
+		z: 4
+		tags: [
+			door_toggle
+		]
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallDoorwayHorizontalTile
+			}
+			{
+				type: DoorHorizontalTile
 			}
 		]
 	}
@@ -200,6 +473,29 @@ nodes: [
 	}
 	{
 		x: 1
+		y: 6
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallHorizontalTile
+			}
+		]
+	}
+	{
+		x: 1
+		y: 6
+		z: 4
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 1
 		y: 7
 		tags: [
 			item_key
@@ -209,12 +505,24 @@ nodes: [
 				type: FloorTile
 			}
 		]
-		items: [
+	}
+	{
+		x: 1
+		y: 7
+		z: 1
+		tiles: [
 			{
-				id: c98c3017-3c86-4a46-9462-dfd7d7e1f92b
-				type: Key
-				color: 0000ffff
-				name: Blue Key
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 1
+		y: 7
+		z: 4
+		tiles: [
+			{
+				type: FloorTile
 			}
 		]
 	}
@@ -229,18 +537,56 @@ nodes: [
 				type: FloorTile
 			}
 		]
-		items: [
+	}
+	{
+		x: 1
+		y: 8
+		z: 1
+		tiles: [
 			{
-				id: f847d4dd-82f4-4c93-a3fb-7906c5ea79eb
-				type: Key
-				color: 00ff00ff
-				name: Green Key
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 1
+		y: 8
+		z: 4
+		tiles: [
+			{
+				type: FloorTile
 			}
 		]
 	}
 	{
 		x: 1
 		y: 9
+		tiles: [
+			{
+				type: WallHorizontalTile
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 1
+		y: 9
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallHorizontalTile
+			}
+		]
+	}
+	{
+		x: 1
+		y: 9
+		z: 4
 		tiles: [
 			{
 				type: WallHorizontalTile
@@ -258,6 +604,18 @@ nodes: [
 			}
 			{
 				type: WallTsplitNTile
+			}
+		]
+	}
+	{
+		x: 2
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallHorizontalTile
 			}
 		]
 	}
@@ -283,6 +641,16 @@ nodes: [
 	}
 	{
 		x: 2
+		y: 1
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 2
 		y: 2
 		tiles: [
 			{
@@ -296,7 +664,27 @@ nodes: [
 	}
 	{
 		x: 2
+		y: 2
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 2
 		y: 3
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 2
+		y: 3
+		z: 1
 		tiles: [
 			{
 				type: FloorTile
@@ -317,10 +705,51 @@ nodes: [
 	}
 	{
 		x: 2
+		y: 4
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: CornerNETile
+			}
+		]
+	}
+	{
+		x: 2
 		y: 5
 		tiles: [
 			{
 				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 2
+		y: 5
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+		]
+	}
+	{
+		x: 2
+		y: 5
+		z: 4
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: CornerNWTile
+				rotY: -90
 			}
 		]
 	}
@@ -338,8 +767,60 @@ nodes: [
 	}
 	{
 		x: 2
+		y: 6
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallTsplitSTile
+				rotY: 180
+			}
+		]
+	}
+	{
+		x: 2
+		y: 6
+		z: 4
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+		]
+	}
+	{
+		x: 2
 		y: 7
 		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 2
+		y: 7
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 2
+		y: 7
+		z: 4
+		tiles: [
+			{
+				type: CornerSETile
+				rotY: 90
+			}
 			{
 				type: FloorTile
 			}
@@ -356,6 +837,27 @@ nodes: [
 	}
 	{
 		x: 2
+		y: 8
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 2
+		y: 8
+		z: 3
+		tiles: [
+			{
+				type: StairsWTile
+				rotY: 90
+			}
+		]
+	}
+	{
+		x: 2
 		y: 9
 		tiles: [
 			{
@@ -367,7 +869,45 @@ nodes: [
 		]
 	}
 	{
+		x: 2
+		y: 9
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallHorizontalTile
+			}
+		]
+	}
+	{
+		x: 2
+		y: 9
+		z: 4
+		tiles: [
+			{
+				type: WallHorizontalTile
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
 		x: 3
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallHorizontalTile
+			}
+		]
+	}
+	{
+		x: 3
+		z: 1
 		tiles: [
 			{
 				type: FloorTile
@@ -380,6 +920,16 @@ nodes: [
 	{
 		x: 3
 		y: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 3
+		y: 1
+		z: 1
 		tiles: [
 			{
 				type: FloorTile
@@ -406,7 +956,27 @@ nodes: [
 	}
 	{
 		x: 3
+		y: 2
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 3
 		y: 3
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 3
+		y: 3
+		z: 1
 		tiles: [
 			{
 				type: FloorTile
@@ -424,10 +994,24 @@ nodes: [
 	}
 	{
 		x: 3
-		y: 5
+		y: 4
+		z: 1
 		tiles: [
 			{
 				type: FloorTile
+			}
+			{
+				type: WallHorizontalTile
+			}
+		]
+	}
+	{
+		x: 3
+		y: 5
+		tiles: [
+			{
+				type: StairsETile
+				rotY: -90
 			}
 		]
 	}
@@ -440,6 +1024,19 @@ nodes: [
 			}
 			{
 				type: WallTsplitNTile
+			}
+		]
+	}
+	{
+		x: 3
+		y: 6
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallHorizontalTile
 			}
 		]
 	}
@@ -465,6 +1062,29 @@ nodes: [
 	}
 	{
 		x: 3
+		y: 7
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 3
+		y: 7
+		z: 4
+		tiles: [
+			{
+				type: WallHorizontalTile
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 3
 		y: 8
 		tiles: [
 			{
@@ -478,11 +1098,58 @@ nodes: [
 	}
 	{
 		x: 3
+		y: 8
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 3
+		y: 8
+		z: 2
+		tiles: [
+			{
+				type: StairsWTile
+				rotY: 90
+			}
+		]
+	}
+	{
+		x: 3
 		y: 9
 		tiles: [
 			{
 				type: WallTsplitSTile
 				rotY: 180
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 3
+		y: 9
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallHorizontalTile
+			}
+		]
+	}
+	{
+		x: 3
+		y: 9
+		z: 4
+		tiles: [
+			{
+				type: WallHorizontalTile
 			}
 			{
 				type: FloorTile
@@ -502,6 +1169,18 @@ nodes: [
 	}
 	{
 		x: 4
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallHorizontalTile
+			}
+		]
+	}
+	{
+		x: 4
 		y: 1
 		tiles: [
 			{
@@ -515,6 +1194,19 @@ nodes: [
 	}
 	{
 		x: 4
+		y: 1
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: ToggleTile
+			}
+		]
+	}
+	{
+		x: 4
 		y: 2
 		tiles: [
 			{
@@ -522,6 +1214,16 @@ nodes: [
 			}
 			{
 				type: WallCrossingTile
+			}
+		]
+	}
+	{
+		x: 4
+		y: 2
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
 			}
 		]
 	}
@@ -540,6 +1242,16 @@ nodes: [
 	}
 	{
 		x: 4
+		y: 3
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 4
 		y: 4
 		tiles: [
 			{
@@ -553,6 +1265,20 @@ nodes: [
 	}
 	{
 		x: 4
+		y: 4
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: CornerNWTile
+				rotY: -90
+			}
+		]
+	}
+	{
+		x: 4
 		y: 5
 		tiles: [
 			{
@@ -560,6 +1286,20 @@ nodes: [
 			}
 			{
 				type: WallVerticalTile
+				rotY: -90
+			}
+		]
+	}
+	{
+		x: 4
+		y: 5
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallDoorwayVerticalTile
 				rotY: -90
 			}
 		]
@@ -579,8 +1319,45 @@ nodes: [
 	}
 	{
 		x: 4
+		y: 6
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: CornerSWTile
+				rotY: 180
+			}
+		]
+	}
+	{
+		x: 4
 		y: 7
 		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 4
+		y: 7
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 4
+		y: 7
+		z: 4
+		tiles: [
+			{
+				type: WallHorizontalTile
+			}
 			{
 				type: FloorTile
 			}
@@ -597,6 +1374,17 @@ nodes: [
 	}
 	{
 		x: 4
+		y: 8
+		z: 1
+		tiles: [
+			{
+				type: StairsWTile
+				rotY: 90
+			}
+		]
+	}
+	{
+		x: 4
 		y: 9
 		tiles: [
 			{
@@ -608,6 +1396,32 @@ nodes: [
 		]
 	}
 	{
+		x: 4
+		y: 9
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallHorizontalTile
+			}
+		]
+	}
+	{
+		x: 4
+		y: 9
+		z: 4
+		tiles: [
+			{
+				type: WallHorizontalTile
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
 		x: 5
 		tiles: [
 			{
@@ -620,7 +1434,29 @@ nodes: [
 	}
 	{
 		x: 5
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallHorizontalTile
+			}
+		]
+	}
+	{
+		x: 5
 		y: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 5
+		y: 1
+		z: 1
 		tiles: [
 			{
 				type: FloorTile
@@ -641,7 +1477,27 @@ nodes: [
 	}
 	{
 		x: 5
+		y: 2
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 5
 		y: 3
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 5
+		y: 3
+		z: 1
 		tiles: [
 			{
 				type: FloorTile
@@ -659,7 +1515,27 @@ nodes: [
 	}
 	{
 		x: 5
+		y: 4
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 5
 		y: 5
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 5
+		y: 5
+		z: 1
 		tiles: [
 			{
 				type: FloorTile
@@ -680,6 +1556,16 @@ nodes: [
 	}
 	{
 		x: 5
+		y: 6
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 5
 		y: 7
 		tiles: [
 			{
@@ -689,8 +1575,56 @@ nodes: [
 	}
 	{
 		x: 5
+		y: 7
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 5
+		y: 7
+		z: 4
+		tiles: [
+			{
+				type: CornerNWTile
+				rotY: -90
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 5
 		y: 8
 		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 5
+		y: 8
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 5
+		y: 8
+		z: 4
+		tiles: [
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
 			{
 				type: FloorTile
 			}
@@ -709,6 +1643,33 @@ nodes: [
 		]
 	}
 	{
+		x: 5
+		y: 9
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallHorizontalTile
+			}
+		]
+	}
+	{
+		x: 5
+		y: 9
+		z: 4
+		tiles: [
+			{
+				type: CornerSWTile
+				rotY: 180
+			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
 		x: 6
 		tiles: [
 			{
@@ -721,7 +1682,29 @@ nodes: [
 	}
 	{
 		x: 6
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallHorizontalTile
+			}
+		]
+	}
+	{
+		x: 6
 		y: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 6
+		y: 1
+		z: 1
 		tiles: [
 			{
 				type: FloorTile
@@ -748,6 +1731,16 @@ nodes: [
 	}
 	{
 		x: 6
+		y: 2
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 6
 		y: 3
 		tiles: [
 			{
@@ -757,7 +1750,27 @@ nodes: [
 	}
 	{
 		x: 6
+		y: 3
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 6
 		y: 4
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 6
+		y: 4
+		z: 1
 		tiles: [
 			{
 				type: FloorTile
@@ -781,11 +1794,31 @@ nodes: [
 	}
 	{
 		x: 6
+		y: 5
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 6
 		y: 6
 		tiles: [
 			{
 				type: WallHorizontalTile
 			}
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 6
+		y: 6
+		z: 1
+		tiles: [
 			{
 				type: FloorTile
 			}
@@ -802,7 +1835,27 @@ nodes: [
 	}
 	{
 		x: 6
+		y: 7
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 6
 		y: 8
+		tiles: [
+			{
+				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 6
+		y: 8
+		z: 1
 		tiles: [
 			{
 				type: FloorTile
@@ -822,7 +1875,33 @@ nodes: [
 		]
 	}
 	{
+		x: 6
+		y: 9
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallHorizontalTile
+			}
+		]
+	}
+	{
 		x: 7
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: CornerNWTile
+				rotY: -90
+			}
+		]
+	}
+	{
+		x: 7
+		z: 1
 		tiles: [
 			{
 				type: FloorTile
@@ -848,6 +1927,20 @@ nodes: [
 	}
 	{
 		x: 7
+		y: 1
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+		]
+	}
+	{
+		x: 7
 		y: 2
 		tiles: [
 			{
@@ -855,6 +1948,20 @@ nodes: [
 			}
 			{
 				type: WallTsplitWTile
+				rotY: -90
+			}
+		]
+	}
+	{
+		x: 7
+		y: 2
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallVerticalTile
 				rotY: -90
 			}
 		]
@@ -874,6 +1981,20 @@ nodes: [
 	}
 	{
 		x: 7
+		y: 3
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+		]
+	}
+	{
+		x: 7
 		y: 4
 		tiles: [
 			{
@@ -882,6 +2003,20 @@ nodes: [
 			}
 			{
 				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 7
+		y: 4
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallVerticalTile
+				rotY: -90
 			}
 		]
 	}
@@ -900,6 +2035,20 @@ nodes: [
 	}
 	{
 		x: 7
+		y: 5
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+		]
+	}
+	{
+		x: 7
 		y: 6
 		tiles: [
 			{
@@ -907,6 +2056,20 @@ nodes: [
 			}
 			{
 				type: WallTsplitWTile
+				rotY: -90
+			}
+		]
+	}
+	{
+		x: 7
+		y: 6
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallVerticalTile
 				rotY: -90
 			}
 		]
@@ -926,6 +2089,20 @@ nodes: [
 	}
 	{
 		x: 7
+		y: 7
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallVerticalTile
+				rotY: -90
+			}
+		]
+	}
+	{
+		x: 7
 		y: 8
 		tiles: [
 			{
@@ -934,6 +2111,20 @@ nodes: [
 			}
 			{
 				type: FloorTile
+			}
+		]
+	}
+	{
+		x: 7
+		y: 8
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: WallVerticalTile
+				rotY: -90
 			}
 		]
 	}
@@ -950,30 +2141,19 @@ nodes: [
 			}
 		]
 	}
-]
-associations: [
 	{
-		sourceX: 3
-		sourceY: 7
-		targetX: 1
-		targetY: 7
-		type: key
-		data: Blue Key
-	}
-	{
-		sourceX: 3
-		sourceY: 7
-		targetX: 1
-		targetY: 8
-		type: key
-		data: Green Key
-	}
-	{
-		sourceX: 6
-		sourceY: 2
-		targetX: 6
-		targetY: 5
-		type: toggle
+		x: 7
+		y: 9
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+			}
+			{
+				type: CornerSWTile
+				rotY: 180
+			}
+		]
 	}
 ]
 }

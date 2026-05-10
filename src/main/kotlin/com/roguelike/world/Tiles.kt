@@ -20,7 +20,9 @@ class FloorTile : BaseTile() {
     companion object { const val TYPE = "FloorTile" }
     override val type: String get() = TYPE
     override val slot: TileSlot get() = TileSlot.FLOOR
-    override val fixedZ: Float get() = -0.5f
+    override val fixedZ: Float? get() = null
+
+    init { zOffset = -0.45f }
 }
 
 abstract class WallTile(
