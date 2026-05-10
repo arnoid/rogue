@@ -177,6 +177,23 @@ class MapEditor(private val game: Game) : Screen {
         stage = Stage(ScreenViewport())
         val scrollHandler = object : com.badlogic.gdx.InputAdapter() {
             override fun scrolled(amountX: Float, amountY: Float): Boolean {
+                // Check if mouse is over a scrollable UI widget (e.g. palette ScrollPane)
+                val stageX = Gdx.input.x.toFloat()
+                val stageY = (Gdx.graphics.height - Gdx.input.y).toFloat()
+                val hitActor = stage.hit(stageX, stageY, true)
+                if (hitActor != null) {
+                    // Find if any ancestor is a ScrollPane
+                    var actor: com.badlogic.gdx.scenes.scene2d.Actor? = hitActor
+                    while (actor != null) {
+                        if (actor is com.badlogic.gdx.scenes.scene2d.ui.ScrollPane) {
+                            // Let the stage handle the scroll for the palette
+                            stage.scrolled(amountX, amountY)
+                            return true
+                        }
+                        actor = actor.parent
+                    }
+                }
+                // Mouse is over the world view — zoom camera
                 cameraDistance = (cameraDistance + amountY * 1.5f).coerceIn(2f, 100f)
                 updateCamera()
                 scrolledThisFrame = true
@@ -1005,6 +1022,8 @@ class MapEditor(private val game: Game) : Screen {
         )
 
         var bestT = Float.MAX_VALUE
+        var bestEmptyT = Float.MAX_VALUE
+        var emptyX = -1; var emptyY = -1; var emptyZ = -1
         hoveredX = -1
         for (x in 0 until world.width) {
             for (y in 0 until world.height) {
@@ -1027,9 +1046,22 @@ class MapEditor(private val game: Game) : Screen {
                         tmin = maxOf(tmin, minOf(t1, t2)); tmax = minOf(tmax, maxOf(t1, t2))
                     } else if (ray.origin.z < minZ || ray.origin.z > maxZ) continue
                     if (tmax < tmin || tmax < 0) continue
-                    if (tmin < bestT) { bestT = tmin; hoveredX = x; hoveredY = y; hoveredZ = z }
+                    // Prioritise nodes with content over empty ones so the user
+                    // can pick items/tags on different Z layers without empty
+                    // nodes in front blocking the selection.
+                    val node = world.getNode(x, y, z)
+                    val hasContent = node != null && (node.tiles.isNotEmpty() || node.items.isNotEmpty() || node.tags.isNotEmpty())
+                    if (hasContent) {
+                        if (tmin < bestT) { bestT = tmin; hoveredX = x; hoveredY = y; hoveredZ = z }
+                    } else {
+                        if (tmin < bestEmptyT) { bestEmptyT = tmin; emptyX = x; emptyY = y; emptyZ = z }
+                    }
                 }
             }
+        }
+        // Fall back to nearest empty node if no content node was hit
+        if (hoveredX == -1 && emptyX != -1) {
+            hoveredX = emptyX; hoveredY = emptyY; hoveredZ = emptyZ
         }
     }
 

@@ -505,6 +505,14 @@ nodes: [
 				type: FloorTile
 			}
 		]
+		items: [
+			{
+				id: 6e905908-78aa-405c-8c70-fd2cac7d3099
+				type: Key
+				color: 0000ffff
+				name: Blue Key
+			}
+		]
 	}
 	{
 		x: 1
@@ -535,6 +543,14 @@ nodes: [
 		tiles: [
 			{
 				type: FloorTile
+			}
+		]
+		items: [
+			{
+				id: 1902ae8d-37fc-4e83-a4d6-13067189b178
+				type: Key
+				color: 00ff00ff
+				name: Green Key
 			}
 		]
 	}
@@ -1196,6 +1212,9 @@ nodes: [
 		x: 4
 		y: 1
 		z: 1
+		tags: [
+			toggle
+		]
 		tiles: [
 			{
 				type: FloorTile
@@ -2154,6 +2173,40 @@ nodes: [
 				rotY: 180
 			}
 		]
+	}
+]
+associations: [
+	{
+		sourceX: 1
+		sourceY: 5
+		sourceZ: 4
+		targetX: 4
+		targetY: 1
+		targetZ: 1
+		type: toggle
+	}
+	{
+		sourceX: 6
+		sourceY: 2
+		targetX: 6
+		targetY: 5
+		type: toggle
+	}
+	{
+		sourceX: 3
+		sourceY: 7
+		targetX: 1
+		targetY: 8
+		type: key
+		data: Green Key
+	}
+	{
+		sourceX: 3
+		sourceY: 7
+		targetX: 1
+		targetY: 7
+		type: key
+		data: Blue Key
 	}
 ]
 }

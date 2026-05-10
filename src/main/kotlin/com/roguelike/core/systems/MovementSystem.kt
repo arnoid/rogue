@@ -47,6 +47,8 @@ class MovementSystem(private val world: World) {
      * See game_rules.md §2 — Movement Logic
      */
     fun move(actor: Actor, moveDir: Vec3, delta: Float, speed: Float) {
+        val prevPos = Vec3(actor.position)
+
         // ── XY movement (only when there is input) ──────────────────────
         if (!moveDir.isZero) {
             val dir = Vec3(moveDir).nor()
@@ -69,11 +71,22 @@ class MovementSystem(private val world: World) {
                 actor.position.x = nextX
             } else if (canMove(actor.position.x, nextY, actor.position.z, actor.collisionSize, skipNode)) {
                 actor.position.y = nextY
+            } else {
+                println("[Move BLOCKED] pos=(${actor.position.x},${actor.position.y},${actor.position.z}) dir=(${dir.x},${dir.y}) nextXY=($nextX,$nextY)")
             }
         }
 
         // ── Z resolution (always runs — §4.1, §7 step 2d) ──────────────
         resolveZ(actor)
+
+        // Log significant Z changes
+        if (actor.position.z != prevPos.z) {
+            val nx = round(actor.position.x).toInt()
+            val ny = round(actor.position.y).toInt()
+            val node = world.getNode(nx, ny, floor(actor.position.z.toDouble()).toInt())
+            val tiles = node?.tiles?.map { it.type } ?: emptyList()
+            println("[ResolveZ] pos=(${actor.position.x},${actor.position.y}) z: ${prevPos.z} -> ${actor.position.z} node($nx,$ny,${floor(actor.position.z.toDouble()).toInt()}) tiles=$tiles")
+        }
     }
 
     /**
@@ -100,10 +113,17 @@ class MovementSystem(private val world: World) {
         val nx = round(actor.position.x).toInt()
         val ny = round(actor.position.y).toInt()
 
-        // PRIORITY 1: already on stairs → stair interpolation owns Z
+        // PRIORITY 1: already on stairs at floor(z) → stair interpolation owns Z
         val baseZ = floor(actor.position.z.toDouble()).toInt()
         if (hasStairs(nx, ny, baseZ)) {
             applyStairs(actor, nx, ny, baseZ)
+            return
+        }
+
+        // PRIORITY 1b: entering stairs from the top — actor at integer Z,
+        // stairs one level below connect up to this Z
+        if (actor.position.z == baseZ.toFloat() && hasStairs(nx, ny, baseZ - 1)) {
+            applyStairs(actor, nx, ny, baseZ - 1)
             return
         }
 
@@ -114,6 +134,10 @@ class MovementSystem(private val world: World) {
         val landedZ = floor(actor.position.z.toDouble()).toInt()
         if (hasStairs(nx, ny, landedZ)) {
             applyStairs(actor, nx, ny, landedZ)
+            val snappedZ = round(actor.position.z).toInt()
+            if (snappedZ > landedZ) {
+                actor.position.z = snappedZ.toFloat()
+            }
         }
     }
 
@@ -160,11 +184,9 @@ class MovementSystem(private val world: World) {
             val node = world.getNode(nx, ny, z)
             if (node != null && node.tiles.isNotEmpty()) {
                 if (node.tiles.none { it.isBlocking() }) {
-                    // Walkable surface (floor, stairs, open door) → stand on it
                     actor.position.z = z.toFloat()
                     return
                 } else {
-                    // Solid obstacle (wall, corner, closed door) → stand on top
                     actor.position.z = (z + 1).toFloat()
                     return
                 }
@@ -172,7 +194,6 @@ class MovementSystem(private val world: World) {
             z--
         }
 
-        // §6.4 — Fell through everything → clamp to ground
         actor.position.z = 0f
     }
 
@@ -202,28 +223,79 @@ class MovementSystem(private val world: World) {
         )
 
         val zFloor = floor(targetZ.toDouble()).toInt()
-        val zCeil  = ceil(targetZ.toDouble()).toInt()
-        val onStairs = zCeil != zFloor  // fractional Z means actor is on stairs
+        val zCeil = ceil(targetZ.toDouble()).toInt()
+        val onStairs = zFloor != zCeil
+
+        // When on stairs (fractional Z), only check the relevant Z level:
+        // - Upper half (z > base+0.5) → check zCeil only (player is effectively at the upper level)
+        // - Lower half (z ≤ base+0.5) → check zFloor only (player is effectively at the lower level)
+        val checkZ = if (onStairs) {
+            if (targetZ - zFloor > 0.5f) zCeil else zFloor
+        } else {
+            zFloor
+        }
 
         for ((fx, fy) in corners) {
             val cx = round(fx).toInt()
             val cy = round(fy).toInt()
 
             // §6.3 — Out-of-bounds check
-            if (cx < 0 || cx >= world.width || cy < 0 || cy >= world.height) return false
+            if (cx < 0 || cx >= world.width || cy < 0 || cy >= world.height) {
+                println("[canMove BLOCKED] OOB cx=$cx cy=$cy target=($targetX,$targetY,$targetZ)")
+                return false
+            }
 
-            if (onStairs) {
-                // Actor is on stairs (fractional Z, transitioning between levels).
-                // Only check the destination level (zCeil) — the base level (zFloor)
-                // is the level the actor is climbing *out of*, so walls there
-                // should not block lateral movement.
-                if (!isPassable(cx, cy, zCeil, skipNode)) return false
-            } else {
-                // Actor is on flat ground (integer Z) — check the current level
-                if (!isPassable(cx, cy, zFloor, skipNode)) return false
+            if (!isPassable(cx, cy, checkZ, skipNode)) {
+                val node = world.getNode(cx, cy, checkZ)
+                println("[canMove BLOCKED] notPassable($cx,$cy,$checkZ) tiles=${node?.tiles?.map{it.type}} target=($targetX,$targetY,$targetZ)")
+                return false
             }
         }
+
+        // Ground check: verify the actor's center has a solid surface.
+        // Skip if the center node has stairs (actor is on stairs = has ground).
+        val centerX = round(targetX).toInt()
+        val centerY = round(targetY).toInt()
+        val centerNode = world.getNode(centerX, centerY, zFloor)
+        val onStairsNode = centerNode != null && centerNode.tiles.any { it.type.startsWith("Stairs") }
+        if (!onStairsNode && !hasSolidGround(centerX, centerY, checkZ, targetX, targetY)) {
+            println("[canMove BLOCKED] noGround($centerX,$centerY,$checkZ) target=($targetX,$targetY,$targetZ)")
+            return false
+        }
+
         return true
+    }
+
+    /**
+     * Returns `true` if there is a walkable surface that supports the actor at level [z].
+     * - Walkable node at z (floor, stairs, open door) → supported
+     * - Blocking node at z-1 (wall) → actor stands on top = z → supported
+     * - Stairs at z-1, but only if actor is at the HIGH end (t > 0.5) → supported
+     */
+    private fun hasSolidGround(x: Int, y: Int, z: Int, actorX: Float, actorY: Float): Boolean {
+        // Walkable surface at z
+        val node = world.getNode(x, y, z)
+        if (node != null && node.tiles.isNotEmpty() && node.tiles.none { it.isBlocking() }) return true
+        // Standing on top of blocking surface at z-1
+        val below = world.getNode(x, y, z - 1)
+        if (below != null && below.tiles.isNotEmpty()) {
+            if (below.tiles.any { it.isBlocking() }) return true
+            // Stairs at z-1: only allow if actor is at the high end (t > 0.5)
+            val stair = below.tiles.firstOrNull { it.type.startsWith("Stairs") }
+            if (stair != null) {
+                val ox = actorX - x.toFloat()
+                val oy = actorY - y.toFloat()
+                val t = when (stair.type) {
+                    "StairsNTile" -> oy + 0.5f
+                    "StairsSTile" -> 0.5f - oy
+                    "StairsETile" -> ox + 0.5f
+                    "StairsWTile" -> 0.5f - ox
+                    else -> 0f
+                }.coerceIn(0f, 1f)
+                if (t > 0.5f) return true
+            }
+        }
+        return false
     }
 
     /**

@@ -13,18 +13,20 @@ class InteractionSystem(
 ) {
 
     fun interact(actor: Actor, cameraDir: Vec3) {
+        val nx = Math.round(actor.position.x)
+        val ny = Math.round(actor.position.y)
+        val nz = Math.round(actor.position.z)
+        // Also check the level below — the actor may be standing on top of walls
+        // at z+1 while the interactive tile is at z
+        val nzBelow = nz - 1
+
         // 0. Check if actor is standing on a node with items — pick up, no facing needed
-        val currentNode = world.getNode(
-            Math.round(actor.position.x),
-            Math.round(actor.position.y),
-            Math.round(actor.position.z)
-        )
+        val currentNode = world.getNode(nx, ny, nz) ?: world.getNode(nx, ny, nzBelow)
         if (currentNode != null && currentNode.items.isNotEmpty()) {
             val item = currentNode.items.removeAt(0)
             actor.inventory.add(item)
             logger.log("Interaction", "Picked up: ${item.name}")
 
-            // Remove item_key tag when no more keys remain on this node
             if (item is KeyItem && currentNode.items.none { it is KeyItem }) {
                 currentNode.tags.remove(WorldNode.Tags.ITEM_KEY)
             }
@@ -32,33 +34,49 @@ class InteractionSystem(
         }
 
         // 1. Check if actor is standing on a toggle — no facing needed
-        if (currentNode != null && currentNode.tags.contains(WorldNode.Tags.TOGGLE)) {
-            handleToggleInteraction(currentNode)
+        //    Check both current Z and level below
+        val toggleNode = when {
+            currentNode != null && currentNode.tags.contains(WorldNode.Tags.TOGGLE) -> currentNode
+            else -> {
+                val below = world.getNode(nx, ny, nzBelow)
+                if (below != null && below.tags.contains(WorldNode.Tags.TOGGLE)) below else null
+            }
+        }
+        if (toggleNode != null) {
+            handleToggleInteraction(toggleNode)
             return
         }
 
         // 2. Check if actor is standing on a door node — interact ignoring facing
-        if (currentNode != null && currentNode.tiles.any { isDoorTile(it) }) {
-            handleDoorInteraction(actor, currentNode)
+        val doorNode = when {
+            currentNode != null && currentNode.tiles.any { isDoorTile(it) } -> currentNode
+            else -> {
+                val below = world.getNode(nx, ny, nzBelow)
+                if (below != null && below.tiles.any { isDoorTile(it) }) below else null
+            }
+        }
+        if (doorNode != null) {
+            handleDoorInteraction(actor, doorNode)
             return
         }
 
-        val facingNode = getFacingNode(actor, cameraDir) ?: return
+        // 3. Check facing node at current Z and level below
+        val facingNode = getFacingNode(actor, cameraDir, nz)
+            ?: getFacingNode(actor, cameraDir, nzBelow)
+            ?: return
 
-        // 3. Check for door logic on facing node
         val hasDoorTile = facingNode.tiles.any { isDoorTile(it) }
         if (hasDoorTile) {
             handleDoorInteraction(actor, facingNode)
             return
         }
 
-        // 3. Check for toggle logic on facing node
         if (facingNode.tags.contains(WorldNode.Tags.TOGGLE)) {
             handleToggleInteraction(facingNode)
         }
     }
 
-    private fun getFacingNode(actor: Actor, cameraDir: Vec3): WorldNode? {
+    private fun getFacingNode(actor: Actor, cameraDir: Vec3, z: Int): WorldNode? {
         val dir = Vec3(cameraDir.x, cameraDir.y, 0f).nor()
 
         val targetX = if (Math.abs(dir.x) > Math.abs(dir.y)) {
@@ -73,14 +91,11 @@ class InteractionSystem(
             actor.position.y
         }
 
-        val node = world.getNode(
-            Math.round(targetX),
-            Math.round(targetY),
-            Math.round(actor.position.z)
-        )
-        logger.log("Interaction",
-            "Facing node at: (${Math.round(targetX)}, ${Math.round(targetY)}, ${Math.round(actor.position.z)})")
-        return node
+        val node = world.getNode(Math.round(targetX), Math.round(targetY), z)
+        if (node != null && (node.tiles.isNotEmpty() || node.tags.isNotEmpty())) {
+            return node
+        }
+        return null
     }
 
     /**
@@ -89,8 +104,9 @@ class InteractionSystem(
      * properties to avoid importing world-layer classes.
      */
     private fun isDoorTile(tile: Tile): Boolean {
-        // We detect door tiles by checking the type string prefix
-        return tile.type.contains("Door", ignoreCase = true)
+        // Match only actual door tiles (DoorHorizontalTile / DoorVerticalTile),
+        // NOT wall doorways (WallDoorwayHorizontalTile / WallDoorwayVerticalTile)
+        return tile.slot == TileSlot.DOOR
     }
 
     private fun handleDoorInteraction(actor: Actor, node: WorldNode) {
@@ -156,8 +172,11 @@ class InteractionSystem(
     }
 
     private fun handleToggleInteraction(node: WorldNode) {
-        world.associations.filter { it.target == node && it.type == "toggle" }.forEach { assoc ->
+        val matchingAssocs = world.associations.filter { it.target == node && it.type == "toggle" }
+        logger.log("Interaction", "Toggle at (${node.x},${node.y},${node.z}): found ${matchingAssocs.size} associations (total: ${world.associations.size})")
+        matchingAssocs.forEach { assoc ->
             val doorTile = assoc.source.tiles.firstOrNull { isDoorTile(it) }
+            logger.log("Interaction", "  → door at (${assoc.source.x},${assoc.source.y},${assoc.source.z}): tile=$doorTile")
             if (doorTile != null) {
                 doorTile.onInteract()
                 syncAdjacentDoors(assoc.source, doorTile.isBlocking())

@@ -14,11 +14,11 @@ class WorldRenderer(
             for (y in 0 until world.height) {
                 for (z in 0..maxZ.coerceAtMost(world.depth - 1)) {
                     val node = world.getNode(x, y, z) ?: continue
-                    
+
                     node.tiles.forEach {
                         tileRenderer.render(it, batch, environment, x.toFloat(), y.toFloat(), z.toFloat())
                     }
-                    
+
                     itemRenderer?.let { renderer ->
                         node.items.forEach { item ->
                             renderer.render(item, batch, environment, x.toFloat(), y.toFloat(), z.toFloat())
