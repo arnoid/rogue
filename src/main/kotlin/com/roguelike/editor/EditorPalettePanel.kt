@@ -10,29 +10,35 @@ import com.badlogic.gdx.math.Vector2
 import com.badlogic.gdx.scenes.scene2d.Actor
 import com.badlogic.gdx.scenes.scene2d.InputEvent
 import com.badlogic.gdx.scenes.scene2d.Touchable
-import com.badlogic.gdx.scenes.scene2d.ui.Image
 import com.badlogic.gdx.scenes.scene2d.ui.TextButton
 import com.badlogic.gdx.scenes.scene2d.utils.ClickListener
 import com.kotcrab.vis.ui.VisUI
 import com.kotcrab.vis.ui.widget.*
 import com.roguelike.core.model.Tile
+import com.roguelike.core.model.WorldNode
 import com.roguelike.core.model.WorldNode.Tags as NodeTags
 import com.roguelike.rendering.TileRenderer
 import com.roguelike.utils.ModelLoader
-import com.roguelike.world.*
 
 /**
- * Unified palette selection — only one item (tile, item, or tag) can be active at a time.
+ * Palette selection types for the map editor.
  */
 sealed class PaletteSelection {
-    data class TileSel(val type: String) : PaletteSelection()
-    data class ItemSel(val name: String, val colorHex: String) : PaletteSelection()
+    /** Place a floor tile on a node. */
+    object FloorSel : PaletteSelection()
+    /** Place a wall on a node edge. */
+    object WallSel : PaletteSelection()
+    /** Place a door on a node edge. */
+    object DoorSel : PaletteSelection()
+    /** Place stairs on a node center. */
+    object StairsSel : PaletteSelection()
+    /** Toggle a tag on a node. */
     data class TagSel(val tag: String) : PaletteSelection()
 }
 
 /**
- * Extracted palette panel for the map editor.
- * Builds the tile/item/tag selection UI and manages selection state.
+ * Palette panel for the map editor.
+ * Provides floor, wall, door, and tag selections.
  */
 class EditorPalettePanel(
     private val modelLoader: ModelLoader,
@@ -43,9 +49,8 @@ class EditorPalettePanel(
     var paletteSelection: PaletteSelection? = null
         private set
 
-    private val tileContainers = HashMap<String, VisTable>()
-    private val itemContainers = HashMap<String, VisTable>()
     private val tagButtons = HashMap<String, TextButton>()
+    private val selectionButtons = HashMap<String, VisTable>()
 
     private val previewEnvironment = Environment().apply {
         set(ColorAttribute(ColorAttribute.AmbientLight, 0.6f, 0.6f, 0.6f, 1f))
@@ -72,56 +77,87 @@ class EditorPalettePanel(
         val content = VisTable()
         content.top()
 
-        // Tiles
+        // ── Floor ────────────────────────────────────────────────────────────
         content.add(VisLabel("TILES")).pad(10f).row()
-        val tileGroups = listOf(
-            "Floors"      to listOf(FloorTile.TYPE),
-            "Walls"       to listOf(WallHorizontalTile.TYPE, WallVerticalTile.TYPE,
-                                    WallDoorwayHorizontalTile.TYPE, WallDoorwayVerticalTile.TYPE, WallCrossingTile.TYPE,
-                                    WallTsplitNTile.TYPE, WallTsplitETile.TYPE,
-                                    WallTsplitSTile.TYPE, WallTsplitWTile.TYPE,
-                                    CornerNETile.TYPE, CornerSETile.TYPE,
-                                    CornerSWTile.TYPE, CornerNWTile.TYPE),
-            "Doors"       to listOf(DoorHorizontalTile.TYPE, DoorVerticalTile.TYPE),
-            "Stairs"      to listOf(StairsNTile.TYPE, StairsETile.TYPE,
-                                    StairsSTile.TYPE, StairsWTile.TYPE),
-            "Interaction" to listOf(ToggleTile.TYPE)
-        )
-        tileGroups.forEach { (name, types) -> addTileGroup(content, name, types) }
+        content.addSeparator().padTop(6f).padBottom(2f)
+        content.add(VisLabel("Floor")).padLeft(8f).padBottom(2f).left().row()
 
-        // Items
-        content.addSeparator().padTop(10f).padBottom(4f)
-        content.add(VisLabel("ITEMS")).pad(10f).row()
-        val itemsGrid = VisTable()
-        content.add(itemsGrid).fillX().expandX().row()
-        val items = listOf(
-            Triple(Color.BLUE.toString(), "Blue Key", "Key"),
-            Triple(Color.GREEN.toString(), "Green Key", "Key"),
-            Triple(Color.RED.toString(), "Red Key", "Key")
-        )
-        items.forEachIndexed { index, (colorHex, name, _) ->
-            val container = SelectionBorderGroup { paletteSelection.let { it is PaletteSelection.ItemSel && it.name == name } }
-            val preview = Image(VisUI.getSkin().getDrawable("white"))
-            preview.color = Color.valueOf(colorHex)
-            container.add(preview).size(32f).pad(5f).row()
-            container.add(VisLabel(name)).expandX().center()
-            container.addListener(object : ClickListener() {
+        val floorTile = modelLoader.createTile("FloorTile")
+        if (floorTile != null) {
+            val floorContainer = SelectionBorderGroup { paletteSelection is PaletteSelection.FloorSel }
+            floorContainer.add(TilePreviewActor(floorTile)).size(64f).pad(5f).row()
+            floorContainer.add(VisLabel("Floor")).expandX().center()
+            floorContainer.addListener(object : ClickListener() {
                 override fun clicked(event: InputEvent, x: Float, y: Float) {
-                    toggleSelection(PaletteSelection.ItemSel(name, colorHex))
+                    toggleSelection(PaletteSelection.FloorSel)
                 }
             })
-            itemsGrid.add(container).pad(5f).uniform().fill()
-            if ((index + 1) % 2 == 0) itemsGrid.row()
-            itemContainers[name] = container
+            content.add(floorContainer).pad(5f).row()
+            selectionButtons["floor"] = floorContainer
         }
 
-        // Tags
+        // ── Wall ─────────────────────────────────────────────────────────────
+        content.addSeparator().padTop(6f).padBottom(2f)
+        content.add(VisLabel("Wall")).padLeft(8f).padBottom(2f).left().row()
+
+        val wallTile = modelLoader.createTile("WallNorthTile")
+        if (wallTile != null) {
+            val wallContainer = SelectionBorderGroup { paletteSelection is PaletteSelection.WallSel }
+            wallContainer.add(TilePreviewActor(wallTile)).size(64f).pad(5f).row()
+            wallContainer.add(VisLabel("Wall")).expandX().center()
+            wallContainer.addListener(object : ClickListener() {
+                override fun clicked(event: InputEvent, x: Float, y: Float) {
+                    toggleSelection(PaletteSelection.WallSel)
+                }
+            })
+            content.add(wallContainer).pad(5f).row()
+            selectionButtons["wall"] = wallContainer
+        }
+
+        // ── Door ─────────────────────────────────────────────────────────────
+        content.addSeparator().padTop(6f).padBottom(2f)
+        content.add(VisLabel("Door")).padLeft(8f).padBottom(2f).left().row()
+
+        val doorTile = modelLoader.createTile("DoorNorthTile")
+        if (doorTile != null) {
+            val doorContainer = SelectionBorderGroup { paletteSelection is PaletteSelection.DoorSel }
+            doorContainer.add(TilePreviewActor(doorTile)).size(64f).pad(5f).row()
+            doorContainer.add(VisLabel("Door")).expandX().center()
+            doorContainer.addListener(object : ClickListener() {
+                override fun clicked(event: InputEvent, x: Float, y: Float) {
+                    toggleSelection(PaletteSelection.DoorSel)
+                }
+            })
+            content.add(doorContainer).pad(5f).row()
+            selectionButtons["door"] = doorContainer
+        }
+
+        // ── Stairs ──────────────────────────────────────────────────────────
+        content.addSeparator().padTop(6f).padBottom(2f)
+        content.add(VisLabel("Stairs")).padLeft(8f).padBottom(2f).left().row()
+
+        val stairsTile = modelLoader.createTile("StairsTile")
+        if (stairsTile != null) {
+            val stairsContainer = SelectionBorderGroup { paletteSelection is PaletteSelection.StairsSel }
+            stairsContainer.add(TilePreviewActor(stairsTile)).size(64f).pad(5f).row()
+            stairsContainer.add(VisLabel("Stairs")).expandX().center()
+            stairsContainer.addListener(object : ClickListener() {
+                override fun clicked(event: InputEvent, x: Float, y: Float) {
+                    toggleSelection(PaletteSelection.StairsSel)
+                }
+            })
+            content.add(stairsContainer).pad(5f).row()
+            selectionButtons["stairs"] = stairsContainer
+        }
+
+        // ── Tags ─────────────────────────────────────────────────────────────
         content.addSeparator().padTop(10f).padBottom(4f)
         content.add(VisLabel("TAGS")).pad(10f).row()
         val nodeTags = listOf(
             NodeTags.PLAYER_SPAWN, NodeTags.ENEMY_SPAWN,
             NodeTags.ITEM_SPAWN, NodeTags.EXIT,
-            NodeTags.TOGGLE
+            NodeTags.DOOR_MANUAL,
+            NodeTags.NODE_CONNECTOR
         )
         nodeTags.forEach { tag ->
             val btn = VisTextButton(tag, "toggle")
@@ -139,52 +175,6 @@ class EditorPalettePanel(
         return content
     }
 
-    private fun addTileGroup(content: VisTable, groupName: String, types: List<String>) {
-        content.addSeparator().padTop(6f).padBottom(2f)
-        content.add(VisLabel(groupName)).padLeft(8f).padBottom(2f).left().row()
-        val grid = VisTable()
-        content.add(grid).fillX().expandX().row()
-        types.forEachIndexed { index, type ->
-            val tile = modelLoader.createTile(type)!!
-            val container = SelectionBorderGroup { paletteSelection.let { it is PaletteSelection.TileSel && it.type == type } }
-            container.add(TilePreviewActor(tile)).size(64f).pad(5f).row()
-            container.add(VisLabel(tileShortName(type))).expandX().center()
-            container.addListener(object : ClickListener() {
-                override fun clicked(event: InputEvent, x: Float, y: Float) {
-                    toggleSelection(PaletteSelection.TileSel(type))
-                }
-            })
-            grid.add(container).pad(5f).uniform().fill()
-            if ((index + 1) % 2 == 0) grid.row()
-            tileContainers[type] = container
-        }
-    }
-
-    private fun tileShortName(type: String): String = when (type) {
-        FloorTile.TYPE                  -> "Floor"
-        WallHorizontalTile.TYPE         -> "WallHor"
-        WallVerticalTile.TYPE           -> "WallVert"
-        WallDoorwayHorizontalTile.TYPE  -> "WallDoorH"
-        WallDoorwayVerticalTile.TYPE    -> "WallDoorV"
-        WallCrossingTile.TYPE           -> "WallCross"
-        WallTsplitNTile.TYPE            -> "WallTN"
-        WallTsplitETile.TYPE            -> "WallTE"
-        WallTsplitSTile.TYPE            -> "WallTS"
-        WallTsplitWTile.TYPE            -> "WallTW"
-        CornerNETile.TYPE               -> "CornNE"
-        CornerSETile.TYPE               -> "CornSE"
-        CornerSWTile.TYPE               -> "CornSW"
-        CornerNWTile.TYPE               -> "CornNW"
-        DoorHorizontalTile.TYPE         -> "DoorHor"
-        DoorVerticalTile.TYPE           -> "DoorVert"
-        ToggleTile.TYPE                 -> "Toggle"
-        StairsNTile.TYPE                -> "StairsN"
-        StairsETile.TYPE                -> "StairsE"
-        StairsSTile.TYPE                -> "StairsS"
-        StairsWTile.TYPE                -> "StairsW"
-        else                            -> type.removeSuffix("Tile")
-    }
-
     fun refreshHighlights() {
         val sel = paletteSelection
         tagButtons.forEach { (tag, btn) ->
@@ -195,14 +185,14 @@ class EditorPalettePanel(
     fun updateHighlightsForNode(node: WorldNode?) {
         if (node == null) { refreshHighlights(); return }
         val sel = paletteSelection
-        val darkGray = VisUI.getSkin().newDrawable("white", Color.DARK_GRAY)
-        tileContainers.forEach { (type, table) ->
-            table.background = if (node.hasTileType(type) &&
-                !(sel is PaletteSelection.TileSel && sel.type == type)) darkGray
-            else null
-        }
         tagButtons.forEach { (tag, btn) ->
-            btn.isChecked = (sel is PaletteSelection.TagSel && sel.tag == tag) || node.tags.contains(tag)
+            btn.isChecked = if (tag == NodeTags.DOOR_MANUAL) {
+                (sel is PaletteSelection.TagSel && sel.tag == tag) || node.manualDoorSlots.isNotEmpty()
+            } else if (tag == NodeTags.NODE_CONNECTOR) {
+                (sel is PaletteSelection.TagSel && sel.tag == tag) || node.connectorSlots.isNotEmpty()
+            } else {
+                (sel is PaletteSelection.TagSel && sel.tag == tag) || node.tags.contains(tag)
+            }
         }
     }
 
@@ -219,7 +209,6 @@ class EditorPalettePanel(
             val bw = (width * scaleX).toInt()
             val bh = (height * scaleY).toInt()
 
-            // Clip rendering to this actor's screen area
             Gdx.gl.glEnable(GL20.GL_SCISSOR_TEST)
             Gdx.gl.glScissor(bx, by, bw, bh)
             Gdx.gl.glViewport(bx, by, bw, bh)
@@ -252,4 +241,3 @@ class EditorPalettePanel(
         }
     }
 }
-

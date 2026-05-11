@@ -1,153 +1,60 @@
 {
 width: 6
 height: 6
-depth: 6
+depth: 3
 nodes: [
 	{
+		y: 1
+		z: 1
 		tiles: [
+			{
+				type: WallSouthTile
+				slot: WALL_SOUTH
+				rotY: 180
+			}
 			{
 				type: FloorTile
 				slot: FLOOR
 			}
-		]
-	}
-	{
-		y: 1
-		tiles: [
 			{
-				type: FloorTile
-				slot: FLOOR
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
 			}
 		]
 	}
 	{
 		y: 2
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		y: 3
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		y: 4
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		y: 5
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 1
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 1
-		y: 1
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 1
-		y: 1
 		z: 1
 		tiles: [
 			{
 				type: FloorTile
 				slot: FLOOR
 			}
-		]
-	}
-	{
-		x: 1
-		y: 2
-		tiles: [
 			{
-				type: FloorTile
-				slot: FLOOR
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
 			}
 		]
 	}
 	{
-		x: 1
 		y: 3
+		z: 1
 		tiles: [
 			{
 				type: FloorTile
 				slot: FLOOR
 			}
+			{
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
+			}
 		]
 	}
 	{
-		x: 1
 		y: 4
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 1
-		y: 5
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 2
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 2
-		y: 1
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 2
-		y: 1
 		z: 1
 		tiles: [
 			{
@@ -157,6 +64,187 @@ nodes: [
 			{
 				type: WallNorthTile
 				slot: WALL_NORTH
+			}
+			{
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
+			}
+		]
+	}
+	{
+		x: 1
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: WallEastTile
+				slot: WALL_EAST
+				rotY: -90
+			}
+			{
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
+			}
+		]
+		connectorSlots: [
+			WALL_SOUTH
+		]
+	}
+	{
+		x: 1
+		y: 1
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: DoorSouthTile
+				slot: WALL_SOUTH
+				rotY: 180
+			}
+		]
+		doorSlots: [
+			WALL_SOUTH
+		]
+		manualDoorSlots: [
+			WALL_SOUTH
+		]
+	}
+	{
+		x: 1
+		y: 2
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+		]
+	}
+	{
+		x: 1
+		y: 3
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+		]
+	}
+	{
+		x: 1
+		y: 4
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: DoorNorthTile
+				slot: WALL_NORTH
+			}
+		]
+		doorSlots: [
+			WALL_NORTH
+		]
+		manualDoorSlots: [
+			WALL_NORTH
+		]
+	}
+	{
+		x: 1
+		y: 5
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
+			}
+			{
+				type: WallEastTile
+				slot: WALL_EAST
+				rotY: -90
+			}
+		]
+		connectorSlots: [
+			WALL_NORTH
+		]
+	}
+	{
+		x: 2
+		y: 1
+		z: 1
+		tiles: [
+			{
+				type: WallSouthTile
+				slot: WALL_SOUTH
+				rotY: 180
+			}
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+		]
+	}
+	{
+		x: 2
+		y: 2
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+		]
+	}
+	{
+		x: 2
+		y: 3
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+		]
+	}
+	{
+		x: 2
+		y: 4
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: WallNorthTile
+				slot: WALL_NORTH
+			}
+		]
+	}
+	{
+		x: 3
+		y: 1
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
 			}
 			{
 				type: WallSouthTile
@@ -166,8 +254,9 @@ nodes: [
 		]
 	}
 	{
-		x: 2
+		x: 3
 		y: 2
+		z: 1
 		tiles: [
 			{
 				type: FloorTile
@@ -176,8 +265,9 @@ nodes: [
 		]
 	}
 	{
-		x: 2
+		x: 3
 		y: 3
+		z: 1
 		tiles: [
 			{
 				type: FloorTile
@@ -186,57 +276,140 @@ nodes: [
 		]
 	}
 	{
-		x: 2
+		x: 3
 		y: 4
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 2
-		y: 5
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 3
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 3
-		y: 1
+		z: 1
 		tiles: [
 			{
 				type: FloorTile
 				slot: FLOOR
 			}
 			{
-				type: StairsTile
-				slot: STAIRS
-				rotY: -270
+				type: WallNorthTile
+				slot: WALL_NORTH
 			}
 		]
 	}
 	{
-		x: 3
+		x: 4
+		z: 1
+		tiles: [
+			{
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
+			}
+			{
+				type: WallEastTile
+				slot: WALL_EAST
+				rotY: -90
+			}
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+		]
+		connectorSlots: [
+			WALL_SOUTH
+		]
+	}
+	{
+		x: 4
 		y: 1
 		z: 1
 		tiles: [
 			{
-				type: WallNorthTile
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: DoorSouthTile
+				slot: WALL_SOUTH
+				rotY: 180
+			}
+		]
+		doorSlots: [
+			WALL_SOUTH
+		]
+		manualDoorSlots: [
+			WALL_SOUTH
+		]
+	}
+	{
+		x: 4
+		y: 2
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+		]
+	}
+	{
+		x: 4
+		y: 3
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+		]
+	}
+	{
+		x: 4
+		y: 4
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: DoorNorthTile
 				slot: WALL_NORTH
+			}
+		]
+		doorSlots: [
+			WALL_NORTH
+		]
+		manualDoorSlots: [
+			WALL_NORTH
+		]
+	}
+	{
+		x: 4
+		y: 5
+		z: 1
+		tiles: [
+			{
+				type: WallEastTile
+				slot: WALL_EAST
+				rotY: -90
+			}
+			{
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
+			}
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+		]
+		connectorSlots: [
+			WALL_NORTH
+		]
+	}
+	{
+		x: 5
+		y: 1
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
 			}
 			{
 				type: WallSouthTile
@@ -251,235 +424,54 @@ nodes: [
 		]
 	}
 	{
-		x: 3
-		y: 1
-		z: 2
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 3
+		x: 5
 		y: 2
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 3
-		y: 2
-		z: 2
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 3
-		y: 3
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 3
-		y: 3
-		z: 2
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 3
-		y: 4
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 3
-		y: 4
-		z: 2
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 3
-		y: 5
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 4
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 4
-		y: 1
-		tags: [
-			player_spawn
-		]
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 4
-		y: 2
+		z: 1
 		tiles: [
 			{
 				type: FloorTile
 				slot: FLOOR
 			}
 			{
-				type: StairsTile
-				slot: STAIRS
-				rotY: -180
+				type: WallEastTile
+				slot: WALL_EAST
+				rotY: -90
 			}
 		]
 	}
 	{
-		x: 4
-		y: 3
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 4
+		x: 5
 		y: 3
 		z: 1
 		tiles: [
 			{
-				type: StairsTile
-				slot: STAIRS
-				rotY: -180
-			}
-		]
-	}
-	{
-		x: 4
-		y: 4
-		tiles: [
-			{
 				type: FloorTile
 				slot: FLOOR
 			}
-		]
-	}
-	{
-		x: 4
-		y: 4
-		z: 2
-		tiles: [
 			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 4
-		y: 5
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 5
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 5
-		y: 1
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 5
-		y: 2
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-		]
-	}
-	{
-		x: 5
-		y: 3
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
+				type: WallEastTile
+				slot: WALL_EAST
+				rotY: -90
 			}
 		]
 	}
 	{
 		x: 5
 		y: 4
+		z: 1
 		tiles: [
 			{
 				type: FloorTile
 				slot: FLOOR
 			}
-		]
-	}
-	{
-		x: 5
-		y: 5
-		tiles: [
 			{
-				type: FloorTile
-				slot: FLOOR
+				type: WallEastTile
+				slot: WALL_EAST
+				rotY: -90
+			}
+			{
+				type: WallNorthTile
+				slot: WALL_NORTH
 			}
 		]
 	}

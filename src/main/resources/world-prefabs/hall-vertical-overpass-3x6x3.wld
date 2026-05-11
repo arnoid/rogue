@@ -1,0 +1,461 @@
+{
+width: 3
+height: 6
+depth: 3
+nodes: [
+	{
+		y: 1
+		z: 1
+		tiles: [
+			{
+				type: WallSouthTile
+				slot: WALL_SOUTH
+				rotY: 180
+			}
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
+			}
+			{
+				type: WallNorthTile
+				slot: WALL_NORTH
+			}
+			{
+				type: StairsTile
+				slot: STAIRS
+				rotY: -180
+			}
+		]
+	}
+	{
+		y: 1
+		z: 2
+		tiles: [
+			{
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
+			}
+			{
+				type: WallSouthTile
+				slot: WALL_SOUTH
+				rotY: 180
+			}
+		]
+	}
+	{
+		y: 2
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
+			}
+		]
+	}
+	{
+		y: 2
+		z: 2
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
+			}
+		]
+	}
+	{
+		y: 3
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
+			}
+		]
+	}
+	{
+		y: 3
+		z: 2
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
+			}
+		]
+	}
+	{
+		y: 4
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: WallNorthTile
+				slot: WALL_NORTH
+			}
+			{
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
+			}
+			{
+				type: WallSouthTile
+				slot: WALL_SOUTH
+				rotY: 180
+			}
+			{
+				type: StairsTile
+				slot: STAIRS
+			}
+		]
+	}
+	{
+		y: 4
+		z: 2
+		tiles: [
+			{
+				type: WallNorthTile
+				slot: WALL_NORTH
+			}
+			{
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
+			}
+		]
+	}
+	{
+		x: 1
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: WallEastTile
+				slot: WALL_EAST
+				rotY: -90
+			}
+			{
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
+			}
+		]
+		connectorSlots: [
+			WALL_SOUTH
+		]
+	}
+	{
+		x: 1
+		y: 1
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: StairsTile
+				slot: STAIRS
+				rotY: -180
+			}
+		]
+	}
+	{
+		x: 1
+		y: 1
+		z: 2
+		tiles: [
+			{
+				type: WallSouthTile
+				slot: WALL_SOUTH
+				rotY: 180
+			}
+		]
+	}
+	{
+		x: 1
+		y: 2
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+		]
+	}
+	{
+		x: 1
+		y: 2
+		z: 2
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+		]
+	}
+	{
+		x: 1
+		y: 3
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+		]
+	}
+	{
+		x: 1
+		y: 3
+		z: 2
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+		]
+	}
+	{
+		x: 1
+		y: 4
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: StairsTile
+				slot: STAIRS
+			}
+			{
+				type: WallSouthTile
+				slot: WALL_SOUTH
+				rotY: 180
+			}
+		]
+	}
+	{
+		x: 1
+		y: 4
+		z: 2
+		tiles: [
+			{
+				type: WallNorthTile
+				slot: WALL_NORTH
+			}
+		]
+	}
+	{
+		x: 1
+		y: 5
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
+			}
+			{
+				type: WallEastTile
+				slot: WALL_EAST
+				rotY: -90
+			}
+		]
+		connectorSlots: [
+			WALL_NORTH
+		]
+	}
+	{
+		x: 2
+		y: 1
+		z: 1
+		tiles: [
+			{
+				type: WallSouthTile
+				slot: WALL_SOUTH
+				rotY: 180
+			}
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: WallEastTile
+				slot: WALL_EAST
+				rotY: -90
+			}
+			{
+				type: WallNorthTile
+				slot: WALL_NORTH
+			}
+			{
+				type: StairsTile
+				slot: STAIRS
+				rotY: -180
+			}
+		]
+	}
+	{
+		x: 2
+		y: 1
+		z: 2
+		tiles: [
+			{
+				type: WallSouthTile
+				slot: WALL_SOUTH
+				rotY: 180
+			}
+			{
+				type: WallEastTile
+				slot: WALL_EAST
+				rotY: -90
+			}
+		]
+	}
+	{
+		x: 2
+		y: 2
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: WallEastTile
+				slot: WALL_EAST
+				rotY: -90
+			}
+		]
+	}
+	{
+		x: 2
+		y: 2
+		z: 2
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: WallEastTile
+				slot: WALL_EAST
+				rotY: -90
+			}
+		]
+	}
+	{
+		x: 2
+		y: 3
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: WallEastTile
+				slot: WALL_EAST
+				rotY: -90
+			}
+		]
+	}
+	{
+		x: 2
+		y: 3
+		z: 2
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: WallEastTile
+				slot: WALL_EAST
+				rotY: -90
+			}
+		]
+	}
+	{
+		x: 2
+		y: 4
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: WallNorthTile
+				slot: WALL_NORTH
+			}
+			{
+				type: WallEastTile
+				slot: WALL_EAST
+				rotY: -90
+			}
+			{
+				type: WallSouthTile
+				slot: WALL_SOUTH
+				rotY: 180
+			}
+			{
+				type: StairsTile
+				slot: STAIRS
+			}
+		]
+	}
+	{
+		x: 2
+		y: 4
+		z: 2
+		tiles: [
+			{
+				type: WallEastTile
+				slot: WALL_EAST
+				rotY: -90
+			}
+			{
+				type: WallNorthTile
+				slot: WALL_NORTH
+			}
+		]
+	}
+]
+}

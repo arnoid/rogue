@@ -10,7 +10,7 @@ abstract class Actor {
     val position = Vec3()
     /** The direction the actor is facing (updated on movement). Defaults to +Y (north). */
     val facingDirection = Vec3(0f, 1f, 0f)
-    var collisionSize: Float = 0.3f
+    var collisionSize: Float = 0.15f
     val inventory = mutableListOf<Item>()
 
     open fun update(delta: Float) {}

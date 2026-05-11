@@ -16,17 +16,25 @@ data class NodeData(
     val z: Int = 0,
     val tags: ArrayList<String> = ArrayList(),
     val tiles: ArrayList<TileData> = ArrayList(),
-    val items: ArrayList<ItemData> = ArrayList()
+    val items: ArrayList<ItemData> = ArrayList(),
+    /** Wall slots tagged as doors (e.g. "WALL_NORTH"). */
+    val doorSlots: ArrayList<String> = ArrayList(),
+    /** Wall slots tagged as manual-interact doors. */
+    val manualDoorSlots: ArrayList<String> = ArrayList(),
+    /** Wall slots tagged as node connectors (for map generation). */
+    val connectorSlots: ArrayList<String> = ArrayList()
 )
 
 data class TileData(
     var type: String = "",
+    var slot: String = "",
     var rotX: Float = 0f,
     var rotY: Float = 0f,
     var rotZ: Float = 0f
 ) : com.badlogic.gdx.utils.Json.Serializable {
     override fun write(json: com.badlogic.gdx.utils.Json) {
         json.writeValue("type", type)
+        json.writeValue("slot", slot)
         if (rotX != 0f) json.writeValue("rotX", rotX)
         if (rotY != 0f) json.writeValue("rotY", rotY)
         if (rotZ != 0f) json.writeValue("rotZ", rotZ)
@@ -37,6 +45,7 @@ data class TileData(
             type = jsonData.asString()
         } else {
             type = jsonData.getString("type", "")
+            slot = jsonData.getString("slot", "")
             rotX = jsonData.getFloat("rotX", 0f)
             rotY = jsonData.getFloat("rotY", 0f)
             rotZ = jsonData.getFloat("rotZ", 0f)

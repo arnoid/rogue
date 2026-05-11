@@ -2,14 +2,23 @@ package com.roguelike.editor
 
 import com.badlogic.gdx.Gdx
 import com.badlogic.gdx.Input
-import com.roguelike.core.model.KeyItem
+import com.roguelike.core.model.TileSlot
 import com.roguelike.core.model.World
-import com.roguelike.core.model.WorldNode.Tags as NodeTags
 import com.roguelike.utils.ModelLoader
 
 /**
- * Extracted input handler for the map editor.
- * Handles paint, erase, selection, camera orbit/pan, and association creation.
+ * Handles input for the map editor.
+ *
+ * Camera controls:
+ *  - Middle mouse drag → pan camera
+ *  - Right mouse drag → rotate camera
+ *  - Scroll wheel → zoom in/out
+ *
+ * Editing:
+ *  - Left click on node → select node
+ *  - Left click on edge → select edge (for wall/door placement)
+ *  - Left click with palette selection → paint
+ *  - Ctrl + Left click → erase
  */
 class EditorInputHandler(
     private val getWorld: () -> World,
@@ -17,108 +26,176 @@ class EditorInputHandler(
     private val palette: EditorPalettePanel,
     private val onCameraOrbit: (dx: Float, dy: Float) -> Unit,
     private val onCameraPan: (dx: Float, dy: Float) -> Unit,
+    private val onCameraZoom: (amount: Float) -> Unit,
     private val onUpdatePaletteHighlights: () -> Unit
 ) {
     var selectedX = -1
     var selectedY = -1
     var selectedZ = -1
 
+    /** Currently selected edge (wall slot) on the selected node, or null for whole-node selection. */
+    var selectedEdge: TileSlot? = null
+
     private var lastPaintX = -1
     private var lastPaintY = -1
     private var lastPaintZ = -1
 
-    private var lastEraseX = -1
-    private var lastEraseY = -1
-    private var lastEraseZ = -1
-
-    fun handleInput(delta: Float, hoveredX: Int, hoveredY: Int, hoveredZ: Int) {
+    fun handleInput(
+        delta: Float,
+        hoveredX: Int, hoveredY: Int, hoveredZ: Int,
+        hoveredEdge: TileSlot?
+    ) {
         val dragging = Math.abs(Gdx.input.deltaX) > 1 || Math.abs(Gdx.input.deltaY) > 1
-        if (Gdx.input.isButtonPressed(Input.Buttons.LEFT) && dragging) {
-            val dx = Gdx.input.deltaX.toFloat()
-            val dy = Gdx.input.deltaY.toFloat()
-            val isShift = Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT) || Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT)
-            val isAlt   = Gdx.input.isKeyPressed(Input.Keys.ALT_LEFT)   || Gdx.input.isKeyPressed(Input.Keys.ALT_RIGHT)
 
-            when {
-                isAlt   -> onCameraOrbit(dx, dy)
-                isShift -> onCameraPan(dx, dy)
-            }
+        // Middle mouse drag → pan camera
+        if (Gdx.input.isButtonPressed(Input.Buttons.MIDDLE) && dragging) {
+            onCameraPan(Gdx.input.deltaX.toFloat(), Gdx.input.deltaY.toFloat())
+            return
         }
 
-        val isShiftHeld = Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT) || Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT)
-        val isAltHeld   = Gdx.input.isKeyPressed(Input.Keys.ALT_LEFT)   || Gdx.input.isKeyPressed(Input.Keys.ALT_RIGHT)
-        val isCtrlHeld  = Gdx.input.isKeyPressed(Input.Keys.CONTROL_LEFT) || Gdx.input.isKeyPressed(Input.Keys.CONTROL_RIGHT)
-        val noModifier  = !isShiftHeld && !isAltHeld && !isCtrlHeld
+        // Right mouse drag → rotate camera
+        if (Gdx.input.isButtonPressed(Input.Buttons.RIGHT) && dragging) {
+            onCameraOrbit(Gdx.input.deltaX.toFloat(), Gdx.input.deltaY.toFloat())
+            return
+        }
 
+        val isCtrlHeld = Gdx.input.isKeyPressed(Input.Keys.CONTROL_LEFT) || Gdx.input.isKeyPressed(Input.Keys.CONTROL_RIGHT)
         val world = getWorld()
 
-        // Ctrl + LMB: erase
-        if (Gdx.input.isButtonPressed(Input.Buttons.LEFT) && isCtrlHeld && !isShiftHeld && !isAltHeld
+        // ── Ctrl + LMB: erase ──────────────────────────────────────────────
+        if (Gdx.input.isButtonPressed(Input.Buttons.LEFT) && isCtrlHeld
             && palette.paletteSelection != null && hoveredX != -1) {
             val node = world.getNode(hoveredX, hoveredY, hoveredZ)
-            val isNewEraseNode = hoveredX != lastEraseX || hoveredY != lastEraseY || hoveredZ != lastEraseZ
             when (val sel = palette.paletteSelection) {
-                is PaletteSelection.TileSel -> {
-                    if (node != null && node.removeTileByType(sel.type)) {
-                        lastEraseX = hoveredX; lastEraseY = hoveredY; lastEraseZ = hoveredZ
+                is PaletteSelection.FloorSel -> {
+                    node?.removeTile(TileSlot.FLOOR)
+                }
+                is PaletteSelection.WallSel -> {
+                    if (hoveredEdge != null && hoveredEdge != TileSlot.FLOOR) {
+                        node?.removeTile(hoveredEdge)
+                        node?.untagDoor(hoveredEdge)
                     }
                 }
-                is PaletteSelection.ItemSel -> {
-                    if (node != null && isNewEraseNode) {
-                        node.items.removeIf { it is KeyItem && it.name == sel.name }
-                        lastEraseX = hoveredX; lastEraseY = hoveredY; lastEraseZ = hoveredZ
+                is PaletteSelection.DoorSel -> {
+                    if (hoveredEdge != null && hoveredEdge != TileSlot.FLOOR) {
+                        node?.removeTile(hoveredEdge)
+                        node?.untagDoor(hoveredEdge)
                     }
+                }
+                is PaletteSelection.StairsSel -> {
+                    val oldTile = node?.removeTile(TileSlot.STAIRS)
+                    if (oldTile != null) modelLoader.renderRegistry.remove(oldTile)
                 }
                 is PaletteSelection.TagSel -> {
-                    if (isNewEraseNode) {
-                        selectedX = hoveredX; selectedY = hoveredY; selectedZ = hoveredZ
-                        val n = world.getNode(hoveredX, hoveredY, hoveredZ)
-                        if (n != null) { world.removeTag(n, sel.tag); onUpdatePaletteHighlights() }
-                        lastEraseX = hoveredX; lastEraseY = hoveredY; lastEraseZ = hoveredZ
+                    val n = world.getNode(hoveredX, hoveredY, hoveredZ)
+                    if (n != null) {
+                        if (sel.tag == com.roguelike.core.model.WorldNode.Tags.DOOR_MANUAL) {
+                            if (hoveredEdge != null && hoveredEdge != TileSlot.FLOOR) {
+                                n.untagManualDoor(hoveredEdge)
+                            }
+                        } else if (sel.tag == com.roguelike.core.model.WorldNode.Tags.NODE_CONNECTOR) {
+                            if (hoveredEdge != null && hoveredEdge != TileSlot.FLOOR) {
+                                n.untagConnector(hoveredEdge)
+                            }
+                        } else {
+                            world.removeTag(n, sel.tag)
+                        }
+                        onUpdatePaletteHighlights()
                     }
                 }
                 null -> {}
             }
-        } else if (!Gdx.input.isButtonPressed(Input.Buttons.LEFT)) {
-            lastEraseX = -1; lastEraseY = -1; lastEraseZ = -1
+            return
         }
 
-        // Normal LMB: paint / select
-        if (Gdx.input.isButtonPressed(Input.Buttons.LEFT) && noModifier && hoveredX != -1) {
-            val node = world.getNode(hoveredX, hoveredY, hoveredZ)
+        // ── Normal LMB: paint / select ─────────────────────────────────────
+        if (Gdx.input.isButtonPressed(Input.Buttons.LEFT) && hoveredX != -1) {
+            val node = world.getNode(hoveredX, hoveredY, hoveredZ) ?: return
             val isNewNode = hoveredX != lastPaintX || hoveredY != lastPaintY || hoveredZ != lastPaintZ
 
             when (val sel = palette.paletteSelection) {
-                is PaletteSelection.TileSel -> {
-                    if (node != null && !node.hasTileType(sel.type)) {
-                        node.setTile(modelLoader.createTile(sel.type)!!)
+                is PaletteSelection.FloorSel -> {
+                    if (!node.hasTile(TileSlot.FLOOR)) {
+                        val tile = modelLoader.createTile(FloorTile_TYPE) ?: return
+                        node.setTile(tile)
                         lastPaintX = hoveredX; lastPaintY = hoveredY; lastPaintZ = hoveredZ
                     }
                 }
-                is PaletteSelection.ItemSel -> {
-                    if (node != null && isNewNode) {
-                        node.items.removeIf { it is KeyItem }
-                        node.items.add(KeyItem(colorHex = sel.colorHex, name = sel.name))
+                is PaletteSelection.WallSel -> {
+                    if (hoveredEdge != null && hoveredEdge != TileSlot.FLOOR && !node.hasTile(hoveredEdge)) {
+                        val wallType = wallTypeForSlot(hoveredEdge) ?: return
+                        val tile = modelLoader.createTile(wallType) ?: return
+                        node.setTile(tile)
+                        lastPaintX = hoveredX; lastPaintY = hoveredY; lastPaintZ = hoveredZ
+                    }
+                }
+                is PaletteSelection.DoorSel -> {
+                    if (hoveredEdge != null && hoveredEdge != TileSlot.FLOOR) {
+                        // Remove existing wall tile on this edge before placing door
+                        val oldTile = node.removeTile(hoveredEdge)
+                        if (oldTile != null) {
+                            modelLoader.renderRegistry.remove(oldTile)
+                        }
+                        val doorType = doorTypeForSlot(hoveredEdge) ?: return
+                        val tile = modelLoader.createTile(doorType) ?: return
+                        node.setTile(tile)
+                        node.tagAsDoor(hoveredEdge)
+                        lastPaintX = hoveredX; lastPaintY = hoveredY; lastPaintZ = hoveredZ
+                    }
+                }
+                is PaletteSelection.StairsSel -> {
+                    if (!node.hasTile(TileSlot.STAIRS)) {
+                        val tile = modelLoader.createTile("StairsTile") ?: return
+                        node.setTile(tile)
                         lastPaintX = hoveredX; lastPaintY = hoveredY; lastPaintZ = hoveredZ
                     }
                 }
                 is PaletteSelection.TagSel -> {
                     if (isNewNode) {
                         selectedX = hoveredX; selectedY = hoveredY; selectedZ = hoveredZ
-                        val n = world.getNode(hoveredX, hoveredY, hoveredZ)
-                        if (n != null && !n.tags.contains(sel.tag)) {
-                            world.addTag(n, sel.tag)
-                            onUpdatePaletteHighlights()
-                        } else if (n != null && Gdx.input.justTouched()) {
-                            n.tags.remove(sel.tag)
-                            onUpdatePaletteHighlights()
+                        selectedEdge = null
+                        if (sel.tag == com.roguelike.core.model.WorldNode.Tags.DOOR_MANUAL) {
+                            // door_manual is per-edge: require a hovered edge that is a door
+                            if (hoveredEdge != null && hoveredEdge != TileSlot.FLOOR && node.isDoor(hoveredEdge)) {
+                                if (!node.isManualDoor(hoveredEdge)) {
+                                    node.tagAsManualDoor(hoveredEdge)
+                                } else if (Gdx.input.justTouched()) {
+                                    node.untagManualDoor(hoveredEdge)
+                                }
+                            }
+                        } else if (sel.tag == com.roguelike.core.model.WorldNode.Tags.NODE_CONNECTOR) {
+                            // node_connector is per-edge: only allowed on outer world boundary walls
+                            if (hoveredEdge != null && hoveredEdge != TileSlot.FLOOR) {
+                                val w = world
+                                val isOuterEdge = when (hoveredEdge) {
+                                    TileSlot.WALL_NORTH -> hoveredY == w.height - 1
+                                    TileSlot.WALL_SOUTH -> hoveredY == 0
+                                    TileSlot.WALL_EAST  -> hoveredX == w.width - 1
+                                    TileSlot.WALL_WEST  -> hoveredX == 0
+                                    else -> false
+                                }
+                                if (isOuterEdge) {
+                                    if (!node.isConnector(hoveredEdge)) {
+                                        node.tagAsConnector(hoveredEdge)
+                                    } else if (Gdx.input.justTouched()) {
+                                        node.untagConnector(hoveredEdge)
+                                    }
+                                }
+                            }
+                        } else if (!node.tags.contains(sel.tag)) {
+                            world.addTag(node, sel.tag)
+                        } else if (Gdx.input.justTouched()) {
+                            world.removeTag(node, sel.tag)
                         }
+                        onUpdatePaletteHighlights()
                         lastPaintX = hoveredX; lastPaintY = hoveredY; lastPaintZ = hoveredZ
                     }
                 }
                 null -> {
+                    // No palette selection → just select node/edge
                     if (Gdx.input.justTouched()) {
                         selectedX = hoveredX; selectedY = hoveredY; selectedZ = hoveredZ
+                        selectedEdge = hoveredEdge
                         onUpdatePaletteHighlights()
                     }
                 }
@@ -127,19 +204,38 @@ class EditorInputHandler(
             lastPaintX = -1; lastPaintY = -1; lastPaintZ = -1
         }
 
-        // Right-click: create association
-        if (Gdx.input.justTouched() && noModifier && Gdx.input.isButtonPressed(Input.Buttons.RIGHT)) {
-            if (selectedX != -1 && hoveredX != -1) {
-                val source = world.getNode(selectedX, selectedY, selectedZ)
-                val target = world.getNode(hoveredX, hoveredY, hoveredZ)
-                if (source != null && target != null) {
-                    var assocData: String? = null
-                    val type = if (target.items.any { it is KeyItem }) {
-                        assocData = target.items.firstOrNull { it is KeyItem }?.name; "key"
-                    } else if (target.tags.contains(NodeTags.TOGGLE)) "toggle" else null
-                    if (type != null) world.addAssociation(source, target, type, assocData)
+        // ── Q / E: rotate stairs on hovered node ────────────────────────────
+        if (hoveredX != -1) {
+            val rotNode = world.getNode(hoveredX, hoveredY, hoveredZ)
+            val stairsTile = rotNode?.getTile(TileSlot.STAIRS)
+            if (stairsTile is com.roguelike.world.BaseTile) {
+                if (Gdx.input.isKeyJustPressed(Input.Keys.Q)) {
+                    stairsTile.rotationY = (stairsTile.rotationY - 90f) % 360f
+                }
+                if (Gdx.input.isKeyJustPressed(Input.Keys.E)) {
+                    stairsTile.rotationY = (stairsTile.rotationY + 90f) % 360f
                 }
             }
+        }
+    }
+
+    companion object {
+        private const val FloorTile_TYPE = "FloorTile"
+
+        fun wallTypeForSlot(slot: TileSlot): String? = when (slot) {
+            TileSlot.WALL_NORTH -> "WallNorthTile"
+            TileSlot.WALL_SOUTH -> "WallSouthTile"
+            TileSlot.WALL_EAST  -> "WallEastTile"
+            TileSlot.WALL_WEST  -> "WallWestTile"
+            else -> null
+        }
+
+        fun doorTypeForSlot(slot: TileSlot): String? = when (slot) {
+            TileSlot.WALL_NORTH -> "DoorNorthTile"
+            TileSlot.WALL_SOUTH -> "DoorSouthTile"
+            TileSlot.WALL_EAST  -> "DoorEastTile"
+            TileSlot.WALL_WEST  -> "DoorWestTile"
+            else -> null
         }
     }
 }

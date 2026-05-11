@@ -1,14 +1,15 @@
 package com.roguelike.core.model
 
 /**
- * Categories of tiles that can occupy a single world node.
- * Each node holds at most one tile per slot.
+ * Identifies the role a model plays on a [WorldNode].
  */
 enum class TileSlot {
     FLOOR,
-    WALL,
-    DOOR,
-    INTERACTION
+    WALL_NORTH,
+    WALL_SOUTH,
+    WALL_EAST,
+    WALL_WEST,
+    STAIRS
 }
 
 /**

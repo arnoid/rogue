@@ -1,63 +1,116 @@
 package com.roguelike.core.model
 
 /**
- * Represents a single node (cell) in the 3-D game world grid.
- * No LibGDX dependencies.
+ * Represents a single cell in the 3-D game world grid.
  *
- * Each node holds at most one [Tile] per [TileSlot] (floor, wall, door, interaction).
+ * Each node can have:
+ *  - An optional floor tile (if absent, actors fall through along Z).
+ *  - Up to four wall tiles (north, south, east, west), each impassable by default.
+ *  - Any wall can be tagged as a door, which replaces its model with a "doorway"
+ *    model that has a hole so actors can pass through.
  */
 class WorldNode(val x: Int, val y: Int, val z: Int) {
+
     object Tags {
         const val PLAYER_SPAWN = "player_spawn"
         const val ENEMY_SPAWN  = "enemy_spawn"
         const val ITEM_SPAWN   = "item_spawn"
         const val EXIT         = "exit"
         const val DOOR_MANUAL  = "door_manual"
-        const val DOOR_KEY     = "door_key"
-        const val DOOR_TOGGLE  = "door_toggle"
-        const val TOGGLE       = "toggle"
-        const val ITEM_KEY     = "item_key"
+        const val NODE_CONNECTOR = "node_connector"
     }
 
-    /** Slot-based tile storage: at most one tile per [TileSlot]. */
+    // ── Tile storage (floor + 4 walls) ──────────────────────────────────
+
     private val tileSlots = mutableMapOf<TileSlot, Tile>()
 
     /** Read-only view of all tiles currently placed on this node. */
     val tiles: Collection<Tile> get() = tileSlots.values
 
-    /** Sets a tile into its slot, replacing any existing tile in that slot. Returns the previous tile or null. */
     fun setTile(tile: Tile): Tile? = tileSlots.put(tile.slot, tile)
-
-    /** Gets the tile in the given slot, or null. */
     fun getTile(slot: TileSlot): Tile? = tileSlots[slot]
-
-    /** Removes the tile in the given slot. Returns the removed tile or null. */
     fun removeTile(slot: TileSlot): Tile? = tileSlots.remove(slot)
-
-    /** Removes a specific tile (by identity). Returns true if removed. */
-    fun removeTile(tile: Tile): Boolean = if (tileSlots[tile.slot] === tile) { tileSlots.remove(tile.slot); true } else false
-
-    /** Returns true if the given slot has a tile. */
     fun hasTile(slot: TileSlot): Boolean = tileSlots.containsKey(slot)
 
-    /** Returns true if any tile of the given type string is present. */
-    fun hasTileType(type: String): Boolean = tileSlots.values.any { it.type == type }
+    // ── Floor helpers ───────────────────────────────────────────────────
 
-    /** Removes tiles matching the given type. Returns true if any were removed. */
-    fun removeTileByType(type: String): Boolean {
-        val keys = tileSlots.entries.filter { it.value.type == type }.map { it.key }
-        keys.forEach { tileSlots.remove(it) }
-        return keys.isNotEmpty()
+    /** True when this node has a floor; false means actors fall through. */
+    val hasFloor: Boolean get() = hasTile(TileSlot.FLOOR)
+
+    // ── Door tags ───────────────────────────────────────────────────────
+
+    private val _doorSlots = mutableSetOf<TileSlot>()
+
+    /** Wall slots that are tagged as doors. */
+    val doorSlots: Set<TileSlot> get() = _doorSlots
+
+    /** Wall slots that are tagged as manual-interact doors. */
+    private val _manualDoorSlots = mutableSetOf<TileSlot>()
+    val manualDoorSlots: Set<TileSlot> get() = _manualDoorSlots
+
+    /**
+     * Tag a wall slot as a door.  Only wall slots (WALL_NORTH/SOUTH/EAST/WEST) are accepted.
+     */
+    fun tagAsDoor(slot: TileSlot) {
+        require(slot != TileSlot.FLOOR) { "Only wall slots can be tagged as doors" }
+        _doorSlots.add(slot)
     }
 
-    val items = mutableListOf<Item>()
+    fun untagDoor(slot: TileSlot) { _doorSlots.remove(slot); _manualDoorSlots.remove(slot) }
 
-    /** Metadata tags for this node. */
+    fun isDoor(slot: TileSlot): Boolean = slot in _doorSlots
+
+    fun tagAsManualDoor(slot: TileSlot) {
+        require(slot != TileSlot.FLOOR) { "Only wall slots can be tagged as manual doors" }
+        _manualDoorSlots.add(slot)
+    }
+
+    fun untagManualDoor(slot: TileSlot) { _manualDoorSlots.remove(slot) }
+
+    fun isManualDoor(slot: TileSlot): Boolean = slot in _manualDoorSlots
+
+    // ── Node connector tags (per-edge, outer walls only) ────────────────
+
+    private val _connectorSlots = mutableSetOf<TileSlot>()
+    val connectorSlots: Set<TileSlot> get() = _connectorSlots
+
+    fun tagAsConnector(slot: TileSlot) {
+        require(slot != TileSlot.FLOOR) { "Only wall slots can be tagged as connectors" }
+        _connectorSlots.add(slot)
+    }
+
+    fun untagConnector(slot: TileSlot) { _connectorSlots.remove(slot) }
+
+    fun isConnector(slot: TileSlot): Boolean = slot in _connectorSlots
+
+    // ── Items & general tags ────────────────────────────────────────────
+
+    val items = mutableListOf<Item>()
     val tags = mutableSetOf<String>()
 
-    /** Resets the node to an empty state. */
+    // ── Collision ───────────────────────────────────────────────────────
+
+    /**
+     * Returns true if movement through this node's wall in the given direction is blocked.
+     * A wall blocks unless it is tagged as a door AND the door tile is open.
+     */
+    fun isWallBlocking(slot: TileSlot): Boolean {
+        if (slot == TileSlot.FLOOR) return false
+        val wall = tileSlots[slot] ?: return false
+        if (isDoor(slot)) {
+            // Door tile's isBlocking() returns false when open, true when closed
+            return wall.isBlocking()
+        }
+        return true
+    }
+
+    // ── Reset ───────────────────────────────────────────────────────────
+
     fun clear() {
         tileSlots.clear()
+        _doorSlots.clear()
+        _manualDoorSlots.clear()
+        _connectorSlots.clear()
         items.clear()
         tags.clear()
     }

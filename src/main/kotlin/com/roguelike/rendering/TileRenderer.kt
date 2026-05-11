@@ -3,10 +3,8 @@ package com.roguelike.rendering
 import com.badlogic.gdx.graphics.Color
 import com.badlogic.gdx.graphics.g3d.*
 import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute
-import com.badlogic.gdx.math.Quaternion
 import com.badlogic.gdx.math.Vector3
 import com.roguelike.core.model.Tile
-import com.roguelike.systems.DoorAnimationSystem
 import com.roguelike.world.*
 
 /**
@@ -17,14 +15,15 @@ import com.roguelike.world.*
  * keeping tile classes free of any LibGDX state.
  */
 class TileRenderer(
-    private val registry: TileRenderRegistry,
-    var doorAnimationSystem: DoorAnimationSystem? = null
+    private val registry: TileRenderRegistry
 ) {
 
     /** Primary (closed-door / default) ModelInstance per tile. */
-    private val instanceCache    = mutableMapOf<Any, ModelInstance>()
-    /** Secondary (open-door) ModelInstance — only populated for DoorTile. */
+    private val instanceCache = mutableMapOf<Any, ModelInstance>()
+    /** Alternate (open-door) ModelInstance per tile. */
     private val altInstanceCache = mutableMapOf<Any, ModelInstance>()
+    /** Frame (wall_doorway) ModelInstance per tile. */
+    private val frameInstanceCache = mutableMapOf<Any, ModelInstance>()
 
     private fun getInstance(tile: BaseTile): ModelInstance? {
         instanceCache[tile]?.let { return it }
@@ -43,6 +42,26 @@ class TileRenderer(
         return inst
     }
 
+    private fun getFrameInstance(tile: BaseTile): ModelInstance? {
+        frameInstanceCache[tile]?.let { return it }
+        val data = registry[tile] ?: return null
+        val frameModel = data.frameModel ?: return null
+        val inst = ModelInstance(frameModel)
+        frameInstanceCache[tile] = inst
+        return inst
+    }
+
+    private fun isDoorTile(tile: Tile): Boolean =
+        tile is DoorNorthTile || tile is DoorSouthTile || tile is DoorEastTile || tile is DoorWestTile
+
+    private fun isDoorOpen(tile: Tile): Boolean = when (tile) {
+        is DoorNorthTile -> tile.isOpen
+        is DoorSouthTile -> tile.isOpen
+        is DoorEastTile  -> tile.isOpen
+        is DoorWestTile  -> tile.isOpen
+        else -> false
+    }
+
     fun render(
         tile: Tile,
         batch: ModelBatch,
@@ -55,23 +74,30 @@ class TileRenderer(
         if (tile !is BaseTile) return
         val renderData = registry[tile] ?: return
 
-        // Doors always use the same model; the animation system rotates it open/closed
-        val instanceToRender = when {
-            tile is DoorTile -> getInstance(tile) ?: return
-            else             -> getInstance(tile) ?: return
+        // For door tiles, pick the correct model based on open/closed state
+        val instance = if (isDoorTile(tile) && isDoorOpen(tile)) {
+            getAltInstance(tile) ?: getInstance(tile) ?: return
+        } else {
+            getInstance(tile) ?: return
         }
 
-        // Use animated quaternion rotation when available, otherwise create instant quaternion
-        val doorQuat: Quaternion? = if (tile is DoorTile) {
-            doorAnimationSystem?.getCurrentRotation(tile)
-                ?: if (tile.isOpen) Quaternion().setFromAxis(0f, 1f, 0f, -90f) else null
-        } else null
-        val extraRotY = 0f
+        updateTransform(instance, tile, renderData, x, y, z, ignoreYRotation)
+        updateColor(instance, tile)
 
-        updateTransform(instanceToRender, tile, renderData, x, y, z, ignoreYRotation, extraRotY, doorQuat)
-        updateColor(instanceToRender, tile)
+        batch.render(instance, environment)
 
-        batch.render(instanceToRender, environment)
+        // Render wall_doorway frame alongside door tiles
+        if (isDoorTile(tile) && renderData.frameModel != null) {
+            val frameInst = getFrameInstance(tile)
+            if (frameInst != null) {
+                updateTransform(frameInst, tile, renderData, x, y, z, ignoreYRotation)
+                // Apply wall color to the frame
+                if (frameInst.materials.size > 0) {
+                    frameInst.materials.get(0).set(ColorAttribute.createDiffuse(Color.GRAY))
+                }
+                batch.render(frameInst, environment)
+            }
+        }
     }
 
     private fun updateTransform(
@@ -79,16 +105,14 @@ class TileRenderer(
         tile: BaseTile,
         renderData: TileRenderData,
         x: Float, y: Float, z: Float,
-        ignoreYRotation: Boolean,
-        additionalRotY: Float = 0f,
-        doorQuat: Quaternion? = null
+        ignoreYRotation: Boolean
     ) {
         var rotX = -90f
         var rotY = 0f
         var rotZ = 180f
 
         rotX += tile.rotationX
-        rotY += tile.rotationY + additionalRotY
+        rotY += tile.rotationY
         rotZ += tile.rotationZ
 
         val baseZ = tile.fixedZ ?: z
@@ -105,36 +129,17 @@ class TileRenderer(
         if (!ignoreYRotation && rotY != 0f)   instance.transform.rotate(Vector3.Y, rotY)
         if (rotZ != 0f)                       instance.transform.rotate(Vector3.Z, rotZ)
 
-        // Apply smooth door swing quaternion with pivot at the door's hinge edge.
-        // Horizontal doors pivot at +X edge, vertical doors pivot at +Y edge (in model space after base rotations).
-        if (doorQuat != null && tile is DoorTile) {
-            val pivotOffset = renderData.center.x  // half-width in model space
-            val isVertical = tile is DoorVerticalTile
-            if (isVertical) {
-                instance.transform.translate(-0.5f, 0f, 0f)
-                instance.transform.rotate(doorQuat)
-                instance.transform.translate(0.5f, 0f, 0f)
-            } else {
-                instance.transform.translate(-0.5f, 0f, 0f)
-                instance.transform.rotate(doorQuat)
-                instance.transform.translate(0.5f, 0f, 0f)
-            }
-        } else if (doorQuat != null) {
-            instance.transform.rotate(doorQuat)
-        }
-
         instance.transform.translate(-renderData.center.x, -renderData.center.y, -renderData.center.z)
     }
 
     private fun updateColor(instance: ModelInstance, tile: Tile) {
         if (instance.materials.isEmpty) return
         val color: Color? = when (tile) {
-            is DoorTile    -> if (tile.isOpen) Color.GREEN else Color.RED
-            is ToggleTile  -> if (tile.linkedDoor?.isOpen == true) Color.GREEN else Color.RED
-            is FloorTile   -> Color(0.6f, 0.4f, 0.2f, 1f)
-            is WallTile    -> Color.GRAY
-            is CornerTile  -> null
-            else           -> null
+            is FloorTile -> Color(0.6f, 0.4f, 0.2f, 1f)
+            is WallNorthTile, is WallSouthTile, is WallEastTile, is WallWestTile -> Color.GRAY
+            is DoorNorthTile, is DoorSouthTile, is DoorEastTile, is DoorWestTile -> Color.BROWN
+            is StairsTile -> Color(0.5f, 0.5f, 0.4f, 1f)
+            else -> null
         }
         color?.let { instance.materials.get(0).set(ColorAttribute.createDiffuse(it)) }
     }

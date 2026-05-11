@@ -15,7 +15,7 @@ class WorldIOTest {
     fun testSaveAndLoad() {
         val tempFile = File.createTempFile("world", ".wld")
         try {
-            val world = World(3, 1, 3)
+            val world = World(3, 3, 3)
             val node = world.getNode(1, 0, 1)!!
             node.setTile(MockTile("TestTile"))
             world.addTag(node, "TestTag")

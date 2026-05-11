@@ -16,7 +16,6 @@ import com.badlogic.gdx.scenes.scene2d.Stage
 import com.badlogic.gdx.scenes.scene2d.ui.Skin
 import com.badlogic.gdx.utils.viewport.ScreenViewport
 import com.roguelike.core.model.GameLogger
-import com.roguelike.core.model.TileSlot
 import com.roguelike.core.systems.InteractionSystem
 import com.roguelike.core.systems.MovementSystem
 import com.roguelike.rendering.InventoryUI
@@ -25,7 +24,6 @@ import com.roguelike.rendering.TileRenderer
 import com.roguelike.rendering.WorldRenderer
 import com.roguelike.serialization.WorldIO
 import com.roguelike.systems.CameraManager
-import com.roguelike.systems.DoorAnimationSystem
 import com.roguelike.systems.InputHandler
 import com.roguelike.core.model.WorldNode.Tags as NodeTags
 import com.roguelike.utils.*
@@ -49,7 +47,6 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
     private lateinit var interactionSystem: InteractionSystem
     private val inputHandler = InputHandler()
     private lateinit var cameraManager: CameraManager
-    private val doorAnimationSystem = DoorAnimationSystem()
 
     // UI
     private lateinit var stage: Stage
@@ -75,25 +72,19 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
     override fun show() {
         modelBatch = ModelBatch()
         itemRenderer = ItemRenderer(assetLoader)
-        val tileRenderer = TileRenderer(modelLoader.renderRegistry, doorAnimationSystem)
+        val tileRenderer = TileRenderer(modelLoader.renderRegistry)
         worldRenderer = WorldRenderer(tileRenderer, itemRenderer)
 
         // --- World Generation or Loading ---
         if (worldPath != null) {
             loadWorld(worldPath)
         } else {
-            world = World(10, 10, 1)
-            WorldGenerator(world, modelLoader).generate()
+            world = World(9, 9, 3)
+            WorldGenerator(world).generate()
         }
 
         movementSystem = MovementSystem(world)
         interactionSystem = InteractionSystem(world, gdxLogger)
-
-        // Register all existing doors with the animation system
-        registerDoorAnimations()
-
-        // Wire ToggleTile.linkedDoor from world associations
-        wireToggleLinks()
 
         camera = PerspectiveCamera(67f, Gdx.graphics.width.toFloat(), Gdx.graphics.height.toFloat())
         camera.near = 0.1f
@@ -190,29 +181,7 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
             { type -> modelLoader.createTile(type) }
         )
         world = loadedWorld ?: run {
-            World(10, 10, 1).also { WorldGenerator(it, modelLoader).generate() }
-        }
-    }
-
-    /** Scans the world grid and registers every DoorTile with the animation system. */
-    private fun registerDoorAnimations() {
-        doorAnimationSystem.clear()
-        for (x in 0 until world.width)
-            for (y in 0 until world.height)
-                for (z in 0 until world.depth) {
-                    val node = world.nodes[x][y][z]
-                    node.tiles.filterIsInstance<DoorTile>().forEach { doorAnimationSystem.register(it) }
-                }
-    }
-
-    /** Wires each ToggleTile's linkedDoor from world associations so rendering can reflect door state. */
-    private fun wireToggleLinks() {
-        world.associations.filter { it.type == "toggle" }.forEach { assoc ->
-            val doorTile = assoc.source.tiles.filterIsInstance<DoorTile>().firstOrNull()
-            val toggleTile = assoc.target.tiles.filterIsInstance<ToggleTile>().firstOrNull()
-            if (doorTile != null && toggleTile != null) {
-                toggleTile.linkedDoor = doorTile
-            }
+            World(9, 9, 3).also { WorldGenerator(it).generate() }
         }
     }
 
@@ -237,7 +206,6 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         }
 
         player.update(delta)
-        doorAnimationSystem.update(delta)
         inventoryUI.update(player)
 
         // ── Rendering ────────────────────────────────────────────────────────
@@ -276,7 +244,7 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
 
                         val color = when {
                             x == playerNodeX && y == playerNodeY && z == playerNodeZ -> Color.BLUE
-                            node.tiles.any { it.slot == TileSlot.DOOR } -> Color.GREEN
+                            node.doorSlots.isNotEmpty() -> Color.GREEN
                             else -> Color(1f, 1f, 1f, 0.3f)
                         }
                         debugShapeRenderer.color = color
@@ -316,6 +284,40 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
             Gdx.gl.glLineWidth(1f)
             Gdx.gl.glDisable(GL20.GL_BLEND)
 
+            // ── Stairs direction arrows (light blue) ─────────────────────────
+            Gdx.gl.glEnable(GL20.GL_BLEND)
+            Gdx.gl.glLineWidth(3f)
+            debugShapeRenderer.projectionMatrix = camera.combined
+            debugShapeRenderer.begin(com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType.Line)
+            debugShapeRenderer.color = Color(0.5f, 0.8f, 1f, 1f)
+            for (x in 0 until world.width) {
+                for (y in 0 until world.height) {
+                    val z = playerNodeZ
+                    val node = world.getNode(x, y, z) ?: continue
+                    val stairsTile = node.getTile(com.roguelike.core.model.TileSlot.STAIRS)
+                    if (stairsTile is com.roguelike.world.StairsTile) {
+                        val facing = stairsTile.facingDirection()
+                        val dx: Float; val dy: Float
+                        when (facing) {
+                            com.roguelike.core.model.TileSlot.WALL_NORTH -> { dx = 0f; dy = 1f }
+                            com.roguelike.core.model.TileSlot.WALL_SOUTH -> { dx = 0f; dy = -1f }
+                            com.roguelike.core.model.TileSlot.WALL_EAST  -> { dx = 1f; dy = 0f }
+                            com.roguelike.core.model.TileSlot.WALL_WEST  -> { dx = -1f; dy = 0f }
+                            else -> continue
+                        }
+                        val sx = x.toFloat(); val sy = y.toFloat(); val sz = z.toFloat()
+                        val len = 0.4f; val headLen = 0.15f
+                        val tipX = sx + dx * len; val tipY = sy + dy * len
+                        debugShapeRenderer.line(sx - dx * len, sy - dy * len, sz, tipX, tipY, sz)
+                        debugShapeRenderer.line(tipX, tipY, sz, tipX - dx * headLen + dy * headLen, tipY - dy * headLen - dx * headLen, sz)
+                        debugShapeRenderer.line(tipX, tipY, sz, tipX - dx * headLen - dy * headLen, tipY - dy * headLen + dx * headLen, sz)
+                    }
+                }
+            }
+            debugShapeRenderer.end()
+            Gdx.gl.glLineWidth(1f)
+            Gdx.gl.glDisable(GL20.GL_BLEND)
+
             // ── Tag text labels — projected to screen 2D ──────────────────────
             val viewW = Gdx.graphics.width.toFloat()
             val viewH = Gdx.graphics.height.toFloat()
@@ -326,12 +328,22 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
                 for (y in 0 until world.height) {
                     val z = playerNodeZ
                         val node = world.getNode(x, y, z) ?: continue
-                        if (node.tags.isEmpty()) continue
-                        projPos.set(x.toFloat(), y.toFloat() + 0.45f, z.toFloat())
-                        camera.project(projPos)
-                        if (projPos.z in 0f..1f) {
-                            val label = node.tags.joinToString("\n")
-                            debugFont.draw(debugSpriteBatch, label, projPos.x - 30f, projPos.y + 4f)
+                        if (node.tags.isNotEmpty()) {
+                            projPos.set(x.toFloat(), y.toFloat() + 0.45f, z.toFloat())
+                            camera.project(projPos)
+                            if (projPos.z in 0f..1f) {
+                                val label = node.tags.joinToString("\n")
+                                debugFont.draw(debugSpriteBatch, label, projPos.x - 30f, projPos.y + 4f)
+                            }
+                        }
+                        // Render door_manual at edge positions
+                        for (slot in node.manualDoorSlots) {
+                            val off = edgeOffsetFor(slot)
+                            projPos.set(x + off.x, y + off.y + 0.45f, z + off.z)
+                            camera.project(projPos)
+                            if (projPos.z in 0f..1f) {
+                                debugFont.draw(debugSpriteBatch, com.roguelike.core.model.WorldNode.Tags.DOOR_MANUAL, projPos.x - 30f, projPos.y + 4f)
+                            }
                         }
                 }
             }
@@ -359,35 +371,6 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
                 )
             }
             debugShapeRenderer.end()
-
-            // ── Stairs direction arrows ───────────────────────────────────────
-            Gdx.gl.glLineWidth(3f)
-            debugShapeRenderer.projectionMatrix = camera.combined
-            debugShapeRenderer.begin(com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType.Line)
-            debugShapeRenderer.color = Color(0.2f, 0.5f, 1f, 1f)
-            for (x in 0 until world.width) {
-                for (y in 0 until world.height) {
-                    val z = playerNodeZ
-                        val node = world.getNode(x, y, z) ?: continue
-                        node.tiles.filterIsInstance<StairsTile>().forEach { stair ->
-                            val fx = x.toFloat(); val fy = y.toFloat(); val fz = z.toFloat() + 0.05f
-                            val (dx, dy) = when (stair) {
-                                is StairsNTile -> 0f to 1f
-                                is StairsSTile -> 0f to -1f
-                                is StairsETile -> 1f to 0f
-                                is StairsWTile -> -1f to 0f
-                                else -> 0f to 0f
-                            }
-                            val len = 0.35f; val head = 0.12f
-                            val ex = fx + dx * len; val ey = fy + dy * len
-                            debugShapeRenderer.line(fx, fy, fz, ex, ey, fz)
-                            debugShapeRenderer.line(ex, ey, fz, ex - dx * head + dy * head, ey - dy * head + dx * head, fz)
-                            debugShapeRenderer.line(ex, ey, fz, ex - dx * head - dy * head, ey - dy * head - dx * head, fz)
-                        }
-                }
-            }
-            debugShapeRenderer.end()
-            Gdx.gl.glLineWidth(1f)
             Gdx.gl.glDisable(GL20.GL_BLEND)
         }
 
@@ -410,6 +393,14 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         debugShapeRenderer.dispose()
         debugSpriteBatch.dispose()
         debugFont.dispose()
+    }
+
+    private fun edgeOffsetFor(slot: com.roguelike.core.model.TileSlot): com.badlogic.gdx.math.Vector3 = when (slot) {
+        com.roguelike.core.model.TileSlot.WALL_NORTH -> com.badlogic.gdx.math.Vector3(0f, 0.5f, 0f)
+        com.roguelike.core.model.TileSlot.WALL_SOUTH -> com.badlogic.gdx.math.Vector3(0f, -0.5f, 0f)
+        com.roguelike.core.model.TileSlot.WALL_EAST  -> com.badlogic.gdx.math.Vector3(0.5f, 0f, 0f)
+        com.roguelike.core.model.TileSlot.WALL_WEST  -> com.badlogic.gdx.math.Vector3(-0.5f, 0f, 0f)
+        else -> com.badlogic.gdx.math.Vector3(0f, 0f, 0f)
     }
 
     override fun hide() {}

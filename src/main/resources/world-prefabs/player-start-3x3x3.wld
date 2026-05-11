@@ -1,0 +1,153 @@
+{
+width: 3
+height: 3
+depth: 3
+nodes: [
+	{
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
+			}
+			{
+				type: WallSouthTile
+				slot: WALL_SOUTH
+				rotY: 180
+			}
+		]
+	}
+	{
+		y: 1
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+		]
+		connectorSlots: [
+			WALL_WEST
+		]
+	}
+	{
+		y: 2
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: WallNorthTile
+				slot: WALL_NORTH
+			}
+			{
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
+			}
+		]
+	}
+	{
+		x: 1
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+		]
+		connectorSlots: [
+			WALL_SOUTH
+		]
+	}
+	{
+		x: 1
+		y: 1
+		z: 1
+		tags: [
+			player_spawn
+		]
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+		]
+	}
+	{
+		x: 1
+		y: 2
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+		]
+		connectorSlots: [
+			WALL_NORTH
+		]
+	}
+	{
+		x: 2
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: WallSouthTile
+				slot: WALL_SOUTH
+				rotY: 180
+			}
+			{
+				type: WallEastTile
+				slot: WALL_EAST
+				rotY: -90
+			}
+		]
+	}
+	{
+		x: 2
+		y: 1
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+		]
+		connectorSlots: [
+			WALL_EAST
+		]
+	}
+	{
+		x: 2
+		y: 2
+		z: 1
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+			{
+				type: WallEastTile
+				slot: WALL_EAST
+				rotY: -90
+			}
+			{
+				type: WallNorthTile
+				slot: WALL_NORTH
+			}
+		]
+	}
+]
+}

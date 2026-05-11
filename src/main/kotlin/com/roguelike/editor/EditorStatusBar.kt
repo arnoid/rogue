@@ -9,8 +9,8 @@ import com.kotcrab.vis.ui.widget.VisTextButton
 import com.roguelike.core.model.World
 
 /**
- * Extracted bottom status bar for the map editor.
- * Shows X/Y/Z dimensions and layer controls.
+ * Bottom status bar for the map editor.
+ * Dimensions change by 3 to satisfy World's divisible-by-3 requirement.
  */
 class EditorStatusBar(
     private val getWorld: () -> World,
@@ -40,19 +40,19 @@ class EditorStatusBar(
             })
         }
 
-        bottomBar.add(mkBtn("-") { onResize(getWorld().width - 1, getWorld().height, getWorld().depth) }).width(28f)
+        bottomBar.add(mkBtn("-") { onResize(getWorld().width - 3, getWorld().height, getWorld().depth) }).width(28f)
         bottomBar.add(xLabel).width(28f).center()
-        bottomBar.add(mkBtn("+") { onResize(getWorld().width + 1, getWorld().height, getWorld().depth) }).width(28f)
+        bottomBar.add(mkBtn("+") { onResize(getWorld().width + 3, getWorld().height, getWorld().depth) }).width(28f)
 
         bottomBar.add(VisLabel("  Y:")).padLeft(10f)
-        bottomBar.add(mkBtn("-") { onResize(getWorld().width, getWorld().height - 1, getWorld().depth) }).width(28f)
+        bottomBar.add(mkBtn("-") { onResize(getWorld().width, getWorld().height - 3, getWorld().depth) }).width(28f)
         bottomBar.add(yLabel).width(28f).center()
-        bottomBar.add(mkBtn("+") { onResize(getWorld().width, getWorld().height + 1, getWorld().depth) }).width(28f)
+        bottomBar.add(mkBtn("+") { onResize(getWorld().width, getWorld().height + 3, getWorld().depth) }).width(28f)
 
         bottomBar.add(VisLabel("  Z:")).padLeft(10f)
-        bottomBar.add(mkBtn("-") { onResize(getWorld().width, getWorld().height, getWorld().depth - 1) }).width(28f)
+        bottomBar.add(mkBtn("-") { onResize(getWorld().width, getWorld().height, getWorld().depth - 3) }).width(28f)
         bottomBar.add(zLabel).width(28f).center()
-        bottomBar.add(mkBtn("+") { onResize(getWorld().width, getWorld().height, getWorld().depth + 1) }).width(28f)
+        bottomBar.add(mkBtn("+") { onResize(getWorld().width, getWorld().height, getWorld().depth + 3) }).width(28f)
 
         bottomBar.add(VisLabel("  Layer:")).padLeft(20f)
         layerLabel = VisLabel(maxRenderZ.toString())
@@ -77,4 +77,3 @@ class EditorStatusBar(
         layerLabel.setText(maxRenderZ.toString())
     }
 }
-

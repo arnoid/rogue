@@ -16,147 +16,113 @@ abstract class BaseTile : Tile {
     var zOffset   = 0f
 }
 
+// ── Floor ────────────────────────────────────────────────────────────────
+
 class FloorTile : BaseTile() {
     companion object { const val TYPE = "FloorTile" }
     override val type: String get() = TYPE
     override val slot: TileSlot get() = TileSlot.FLOOR
-    override val fixedZ: Float? get() = null
 
     init { zOffset = -0.45f }
 }
 
-abstract class WallTile(
-    /** Whether this wall allows passage. Default is false (impassable). */
-    val passable: Boolean = false
-) : BaseTile() {
-    override fun isBlocking(): Boolean = !passable
-    override val slot: TileSlot get() = TileSlot.WALL
-}
+// ── Walls (one class per cardinal direction) ─────────────────────────────
 
-class WallHorizontalTile : WallTile() {
-    companion object { const val TYPE = "WallHorizontalTile" }
+class WallNorthTile : BaseTile() {
+    companion object { const val TYPE = "WallNorthTile" }
     override val type: String get() = TYPE
+    override val slot: TileSlot get() = TileSlot.WALL_NORTH
+    override fun isBlocking(): Boolean = true
 }
 
-class WallVerticalTile : WallTile() {
-    companion object { const val TYPE = "WallVerticalTile" }
+class WallSouthTile : BaseTile() {
+    companion object { const val TYPE = "WallSouthTile" }
     override val type: String get() = TYPE
+    override val slot: TileSlot get() = TileSlot.WALL_SOUTH
+    override fun isBlocking(): Boolean = true
 }
 
-/**
- * Door tile. Pure logic — open/close state only.
- * The renderer looks up closed/open Models from TileRenderRegistry.
- */
-abstract class DoorTile(var isOpen: Boolean = false) : BaseTile() {
-    override val slot: TileSlot get() = TileSlot.DOOR
+class WallEastTile : BaseTile() {
+    companion object { const val TYPE = "WallEastTile" }
+    override val type: String get() = TYPE
+    override val slot: TileSlot get() = TileSlot.WALL_EAST
+    override fun isBlocking(): Boolean = true
+}
+
+class WallWestTile : BaseTile() {
+    companion object { const val TYPE = "WallWestTile" }
+    override val type: String get() = TYPE
+    override val slot: TileSlot get() = TileSlot.WALL_WEST
+    override fun isBlocking(): Boolean = true
+}
+
+// ── Door tiles (walls with open/closed state — used when a wall is tagged as door) ──
+
+class DoorNorthTile(var isOpen: Boolean = false) : BaseTile() {
+    companion object { const val TYPE = "DoorNorthTile" }
+    override val type: String get() = TYPE
+    override val slot: TileSlot get() = TileSlot.WALL_NORTH
     override fun isBlocking(): Boolean = !isOpen
     override fun onInteract() { isOpen = !isOpen }
 }
 
-class DoorHorizontalTile(isOpen: Boolean = false) : DoorTile(isOpen) {
-    companion object { const val TYPE = "DoorHorizontalTile" }
+class DoorSouthTile(var isOpen: Boolean = false) : BaseTile() {
+    companion object { const val TYPE = "DoorSouthTile" }
     override val type: String get() = TYPE
+    override val slot: TileSlot get() = TileSlot.WALL_SOUTH
+    override fun isBlocking(): Boolean = !isOpen
+    override fun onInteract() { isOpen = !isOpen }
 }
 
-class DoorVerticalTile(isOpen: Boolean = false) : DoorTile(isOpen) {
-    companion object { const val TYPE = "DoorVerticalTile" }
+class DoorEastTile(var isOpen: Boolean = false) : BaseTile() {
+    companion object { const val TYPE = "DoorEastTile" }
     override val type: String get() = TYPE
+    override val slot: TileSlot get() = TileSlot.WALL_EAST
+    override fun isBlocking(): Boolean = !isOpen
+    override fun onInteract() { isOpen = !isOpen }
 }
 
-class ToggleTile(var linkedDoor: DoorTile? = null) : BaseTile() {
-    companion object { const val TYPE = "ToggleTile" }
+class DoorWestTile(var isOpen: Boolean = false) : BaseTile() {
+    companion object { const val TYPE = "DoorWestTile" }
     override val type: String get() = TYPE
-    override val slot: TileSlot get() = TileSlot.INTERACTION
-    override fun onInteract() { linkedDoor?.onInteract() }
+    override val slot: TileSlot get() = TileSlot.WALL_WEST
+    override fun isBlocking(): Boolean = !isOpen
+    override fun onInteract() { isOpen = !isOpen }
 }
 
-abstract class CornerTile : BaseTile() {
-    override fun isBlocking(): Boolean = true
-    override val slot: TileSlot get() = TileSlot.WALL
-}
+// ── Stairs ────────────────────────────────────────────────────────────────
 
-class CornerNETile : CornerTile() {
-    companion object { const val TYPE = "CornerNETile" }
+class StairsTile : BaseTile() {
+    companion object { const val TYPE = "StairsTile" }
     override val type: String get() = TYPE
-}
+    override val slot: TileSlot get() = TileSlot.STAIRS
+    override fun isBlocking(): Boolean = false
 
-class CornerSETile : CornerTile() {
-    companion object { const val TYPE = "CornerSETile" }
-    override val type: String get() = TYPE
-}
+    /**
+     * Returns the cardinal direction the stairs face (the "top" of the stairs).
+     * rotationY: 0° = north, 90° = west, 180° = south, -90°/270° = east.
+     */
+    fun facingDirection(): TileSlot {
+        val normalized = ((rotationY % 360f) + 360f) % 360f
+        return when {
+            normalized < 45f || normalized >= 315f -> TileSlot.WALL_SOUTH
+            normalized < 135f                      -> TileSlot.WALL_WEST
+            normalized < 225f                      -> TileSlot.WALL_NORTH
+            else                                   -> TileSlot.WALL_EAST
+        }
+    }
 
-class CornerSWTile : CornerTile() {
-    companion object { const val TYPE = "CornerSWTile" }
-    override val type: String get() = TYPE
-}
-
-class CornerNWTile : CornerTile() {
-    companion object { const val TYPE = "CornerNWTile" }
-    override val type: String get() = TYPE
-}
-
-
-class WallDoorwayHorizontalTile : WallTile(passable = true) {
-    companion object { const val TYPE = "WallDoorwayHorizontalTile" }
-    override val type: String get() = TYPE
-}
-
-class WallDoorwayVerticalTile : WallTile(passable = true) {
-    companion object { const val TYPE = "WallDoorwayVerticalTile" }
-    override val type: String get() = TYPE
-}
-
-class WallCrossingTile : WallTile() {
-    companion object { const val TYPE = "WallCrossingTile" }
-    override val type: String get() = TYPE
-}
-
-class WallTsplitNTile : WallTile() {
-    companion object { const val TYPE = "WallTsplitNTile" }
-    override val type: String get() = TYPE
-}
-
-class WallTsplitETile : WallTile() {
-    companion object { const val TYPE = "WallTsplitETile" }
-    override val type: String get() = TYPE
-}
-
-class WallTsplitSTile : WallTile() {
-    companion object { const val TYPE = "WallTsplitSTile" }
-    override val type: String get() = TYPE
-}
-
-class WallTsplitWTile : WallTile() {
-    companion object { const val TYPE = "WallTsplitWTile" }
-    override val type: String get() = TYPE
-}
-
-class GenericTile(val modelName: String) : BaseTile() {
-    override val type: String get() = "Generic:$modelName"
-    override val slot: TileSlot get() = TileSlot.FLOOR
-}
-
-abstract class StairsTile : BaseTile() {
-    override val slot: TileSlot get() = TileSlot.FLOOR
-}
-
-class StairsNTile : StairsTile() {
-    companion object { const val TYPE = "StairsNTile" }
-    override val type: String get() = TYPE
-}
-
-class StairsETile : StairsTile() {
-    companion object { const val TYPE = "StairsETile" }
-    override val type: String get() = TYPE
-}
-
-class StairsSTile : StairsTile() {
-    companion object { const val TYPE = "StairsSTile" }
-    override val type: String get() = TYPE
-}
-
-class StairsWTile : StairsTile() {
-    companion object { const val TYPE = "StairsWTile" }
-    override val type: String get() = TYPE
+    /**
+     * Returns the entry edge that makes the player go up.
+     * The player goes up when walking in the stairs' facing direction
+     * (i.e., entering from the opposite side).
+     */
+    fun climbEdge(): TileSlot = when (facingDirection()) {
+        TileSlot.WALL_NORTH -> TileSlot.WALL_NORTH
+        TileSlot.WALL_SOUTH -> TileSlot.WALL_SOUTH
+        TileSlot.WALL_EAST  -> TileSlot.WALL_EAST
+        TileSlot.WALL_WEST  -> TileSlot.WALL_WEST
+        else -> TileSlot.WALL_NORTH
+    }
 }
 

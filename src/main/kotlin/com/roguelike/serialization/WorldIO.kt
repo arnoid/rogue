@@ -31,12 +31,27 @@ object WorldIO {
                         node.setTile(tile)
                     }
                 }
+                nodeData.doorSlots.forEach { slotName ->
+                    try {
+                        node.tagAsDoor(TileSlot.valueOf(slotName))
+                    } catch (_: IllegalArgumentException) { }
+                }
+                nodeData.manualDoorSlots.forEach { slotName ->
+                    try {
+                        node.tagAsManualDoor(TileSlot.valueOf(slotName))
+                    } catch (_: IllegalArgumentException) { }
+                }
+                nodeData.connectorSlots.forEach { slotName ->
+                    try {
+                        node.tagAsConnector(TileSlot.valueOf(slotName))
+                    } catch (_: IllegalArgumentException) { }
+                }
                 nodeData.items.forEach { itemData ->
                     node.items.add(
                         KeyItem(
                             id       = itemData.id,
                             type     = itemData.type,
-                            colorHex = itemData.color,  // stored as hex string
+                            colorHex = itemData.color,
                             name     = itemData.name
                         )
                     )
@@ -73,21 +88,24 @@ object WorldIO {
                 for (y in 0 until world.height) {
                     for (z in 0 until world.depth) {
                         val node = world.getNode(x, y, z) ?: continue
-                        if (node.tags.isEmpty() && node.tiles.isEmpty() && node.items.isEmpty()) continue
+                        if (node.tags.isEmpty() && node.tiles.isEmpty() && node.items.isEmpty() && node.doorSlots.isEmpty() && node.manualDoorSlots.isEmpty() && node.connectorSlots.isEmpty()) continue
 
                         val nodeData = NodeData(
                             x = x, y = y, z = z,
                             tags  = ArrayList(node.tags.toList()),
                             tiles = ArrayList(node.tiles.map { tile ->
                                 if (tile is BaseTile) {
-                                    TileData(tile.type, tile.rotationX, tile.rotationY, tile.rotationZ)
+                                    TileData(tile.type, tile.slot.name, tile.rotationX, tile.rotationY, tile.rotationZ)
                                 } else {
-                                    TileData(tile.type)
+                                    TileData(tile.type, tile.slot.name)
                                 }
                             }),
                             items = ArrayList(node.items.map { item ->
                                 ItemData(item.id, item.type, item.colorHex, item.name)
-                            })
+                            }),
+                            doorSlots = ArrayList(node.doorSlots.map { it.name }),
+                            manualDoorSlots = ArrayList(node.manualDoorSlots.map { it.name }),
+                            connectorSlots = ArrayList(node.connectorSlots.map { it.name })
                         )
                         data.nodes.add(nodeData)
                     }

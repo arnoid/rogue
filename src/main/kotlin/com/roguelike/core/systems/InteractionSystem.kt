@@ -2,213 +2,95 @@ package com.roguelike.core.systems
 
 import com.roguelike.core.math.Vec3
 import com.roguelike.core.model.*
+import kotlin.math.abs
+import kotlin.math.round
 
 /**
- * Handles player ↔ world interactions (item pick-up, doors, toggles).
+ * Handles player ↔ world interactions (item pick-up, door toggle).
  * No LibGDX dependency — logging is delegated to an injected [GameLogger].
  */
 class InteractionSystem(
     private val world: World,
     private val logger: GameLogger = GameLogger.NOOP
 ) {
-    /** All actors in the world — used to prevent doors from closing on actors. */
+    /** All actors in the world. */
     val actors = mutableListOf<Actor>()
 
-    fun interact(actor: Actor, cameraDir: Vec3) {
-        val nx = Math.round(actor.position.x)
-        val ny = Math.round(actor.position.y)
-        val nz = Math.round(actor.position.z)
-        // Also check the level below — the actor may be standing on top of walls
-        // at z+1 while the interactive tile is at z
-        val nzBelow = nz - 1
+    /** How close (in world units) the actor must be to an edge to interact with a door. */
+    private val doorInteractRange = 1.2f
 
-        // 0. Check if actor is standing on a node with items — pick up, no facing needed
-        val currentNode = world.getNode(nx, ny, nz) ?: world.getNode(nx, ny, nzBelow)
+    fun interact(actor: Actor, cameraDir: Vec3) {
+        val nx = round(actor.position.x).toInt()
+        val ny = round(actor.position.y).toInt()
+        val nz = round(actor.position.z).toInt()
+
+        // 1. Check if actor is standing on a node with items — pick up
+        val currentNode = world.getNode(nx, ny, nz)
         if (currentNode != null && currentNode.items.isNotEmpty()) {
             val item = currentNode.items.removeAt(0)
             actor.inventory.add(item)
             logger.log("Interaction", "Picked up: ${item.name}")
-
-            if (item is KeyItem && currentNode.items.none { it is KeyItem }) {
-                currentNode.tags.remove(WorldNode.Tags.ITEM_KEY)
-            }
             return
         }
 
-        // 1. Check if actor is standing on a toggle — no facing needed
-        //    Check both current Z and level below
-        val toggleNode = when {
-            currentNode != null && currentNode.tags.contains(WorldNode.Tags.TOGGLE) -> currentNode
-            else -> {
-                val below = world.getNode(nx, ny, nzBelow)
-                if (below != null && below.tags.contains(WorldNode.Tags.TOGGLE)) below else null
-            }
-        }
-        if (toggleNode != null) {
-            handleToggleInteraction(toggleNode)
-            return
-        }
-
-        // 2. Check if actor is standing on a door node — interact ignoring facing
-        val doorNode = when {
-            currentNode != null && currentNode.tiles.any { isDoorTile(it) } -> currentNode
-            else -> {
-                val below = world.getNode(nx, ny, nzBelow)
-                if (below != null && below.tiles.any { isDoorTile(it) }) below else null
-            }
-        }
-        if (doorNode != null) {
-            handleDoorInteraction(actor, doorNode)
-            return
-        }
-
-        // 3. Check facing node at current Z and level below
-        val facingNode = getFacingNode(actor, cameraDir, nz)
-            ?: getFacingNode(actor, cameraDir, nzBelow)
-            ?: return
-
-        val hasDoorTile = facingNode.tiles.any { isDoorTile(it) }
-        if (hasDoorTile) {
-            handleDoorInteraction(actor, facingNode)
-            return
-        }
-
-        if (facingNode.tags.contains(WorldNode.Tags.TOGGLE)) {
-            handleToggleInteraction(facingNode)
-        }
-    }
-
-    private fun getFacingNode(actor: Actor, cameraDir: Vec3, z: Int): WorldNode? {
-        val dir = Vec3(cameraDir.x, cameraDir.y, 0f).nor()
-
-        val targetX = if (Math.abs(dir.x) > Math.abs(dir.y)) {
-            actor.position.x + dir.signX()
-        } else {
-            actor.position.x
-        }
-
-        val targetY = if (Math.abs(dir.y) >= Math.abs(dir.x)) {
-            actor.position.y + dir.signY()
-        } else {
-            actor.position.y
-        }
-
-        val node = world.getNode(Math.round(targetX), Math.round(targetY), z)
-        if (node != null && (node.tiles.isNotEmpty() || node.tags.isNotEmpty())) {
-            return node
-        }
-        return null
+        // 2. Check nearby edges for door_manual doors and toggle them
+        if (tryInteractDoor(actor, nx, ny, nz)) return
     }
 
     /**
-     * Check if a tile is a door tile by examining if it blocks when "closed"
-     * and supports onInteract toggling. Uses duck-typing via the Tile interface
-     * properties to avoid importing world-layer classes.
+     * Scan the current node and adjacent nodes for door_manual tagged edges
+     * within interaction range of the actor. Toggle the closest one.
      */
-    private fun isDoorTile(tile: Tile): Boolean {
-        // Match only actual door tiles (DoorHorizontalTile / DoorVerticalTile),
-        // NOT wall doorways (WallDoorwayHorizontalTile / WallDoorwayVerticalTile)
-        return tile.slot == TileSlot.DOOR
-    }
+    private fun tryInteractDoor(actor: Actor, nx: Int, ny: Int, nz: Int): Boolean {
+        val ax = actor.position.x
+        val ay = actor.position.y
 
-    /** Returns true if any tracked actor's collision box overlaps the given node. */
-    private fun isActorInNode(node: WorldNode): Boolean {
-        return actors.any { actor ->
-            val ax = Math.round(actor.position.x)
-            val ay = Math.round(actor.position.y)
-            val az = Math.round(actor.position.z)
-            ax == node.x && ay == node.y && az == node.z
-        }
-    }
+        data class DoorCandidate(val node: WorldNode, val slot: TileSlot, val dist: Float)
+        val candidates = mutableListOf<DoorCandidate>()
 
-    private fun handleDoorInteraction(actor: Actor, node: WorldNode) {
-        val doorTile = node.tiles.firstOrNull { isDoorTile(it) } ?: return
-
-        // Doors tagged as toggle-only cannot be opened directly
-        if (node.tags.contains(WorldNode.Tags.DOOR_TOGGLE)) {
-            logger.log("Interaction", "This door can only be opened by a toggle.")
-            return
-        }
-
-        // Doors tagged as key-locked: check if actor has the linked key in inventory
-        if (node.tags.contains(WorldNode.Tags.DOOR_KEY)) {
-            val keyAssocs = world.associations.filter { it.source == node && it.type == "key" }
-            if (keyAssocs.isNotEmpty()) {
-                val hasAllKeys = keyAssocs.all { assoc ->
-                    val requiredName = assoc.data ?: "Key"
-                    actor.inventory.any { it.name == requiredName || (requiredName == "Key" && it is KeyItem) }
-                }
-                if (hasAllKeys) {
-                    val wouldClose = !doorTile.isBlocking()
-                    if (wouldClose && isActorInNode(node)) {
-                        logger.log("Interaction", "Cannot close door — someone is in the way.")
-                    } else {
-                        doorTile.onInteract()
-                        syncAdjacentDoors(node, doorTile.isBlocking())
-                    }
-                } else {
-                    val missing = keyAssocs.firstOrNull { assoc ->
-                        val requiredName = assoc.data ?: "Key"
-                        actor.inventory.none { it.name == requiredName || (requiredName == "Key" && it is KeyItem) }
-                    }
-                    logger.log("Interaction", "Locked! Missing key: ${missing?.data ?: "Key"}")
-                }
-            } else {
-                logger.log("Interaction", "This door requires a key but none is linked.")
-            }
-            return
-        }
-
-        val doorIsOpen = !doorTile.isBlocking()
-
-        if (doorIsOpen) {
-            if (isActorInNode(node)) {
-                logger.log("Interaction", "Cannot close door — someone is in the way.")
-                return
-            }
-            doorTile.onInteract() // close it
-            syncAdjacentDoors(node, doorTile.isBlocking())
-            return
-        }
-
-        // Default: manual door — just open it
-        doorTile.onInteract()
-        syncAdjacentDoors(node, doorTile.isBlocking())
-    }
-
-    private fun syncAdjacentDoors(node: WorldNode, shouldBlock: Boolean) {
-        val neighbors = listOf(
-            world.getNode(node.x + 1, node.y, node.z),
-            world.getNode(node.x - 1, node.y, node.z),
-            world.getNode(node.x, node.y + 1, node.z),
-            world.getNode(node.x, node.y - 1, node.z)
+        // Check all nodes the actor could be near (current + 4 neighbors)
+        val nodesToCheck = listOf(
+            nx to ny,
+            nx - 1 to ny,
+            nx + 1 to ny,
+            nx to ny - 1,
+            nx to ny + 1
         )
 
-        neighbors.forEach { neighbor ->
-            neighbor?.tiles?.filter { isDoorTile(it) }?.forEach { adjDoor ->
-                // If adjacent door's blocking state doesn't match, toggle it
-                if (adjDoor.isBlocking() != shouldBlock) adjDoor.onInteract()
+        for ((x, y) in nodesToCheck) {
+            val node = world.getNode(x, y, nz) ?: continue
+
+            // Check each door slot on this node
+            for (slot in node.doorSlots) {
+                if (!node.isManualDoor(slot)) continue
+                val tile = node.getTile(slot) ?: continue
+                // Calculate distance from actor to this edge
+                val edgeDist = distanceToEdge(ax, ay, x, y, slot)
+                if (edgeDist <= doorInteractRange) {
+                    candidates.add(DoorCandidate(node, slot, edgeDist))
+                }
             }
         }
+
+        // Toggle the closest door
+        val closest = candidates.minByOrNull { it.dist } ?: return false
+        val tile = closest.node.getTile(closest.slot) ?: return false
+        tile.onInteract()
+        val state = if (tile.isBlocking()) "closed" else "opened"
+        logger.log("Interaction", "Door $state at (${closest.node.x},${closest.node.y},${closest.node.z}) ${closest.slot}")
+        return true
     }
 
-    private fun handleToggleInteraction(node: WorldNode) {
-        val matchingAssocs = world.associations.filter { it.target == node && it.type == "toggle" }
-        logger.log("Interaction", "Toggle at (${node.x},${node.y},${node.z}): found ${matchingAssocs.size} associations (total: ${world.associations.size})")
-        matchingAssocs.forEach { assoc ->
-            val doorTile = assoc.source.tiles.firstOrNull { isDoorTile(it) }
-            logger.log("Interaction", "  → door at (${assoc.source.x},${assoc.source.y},${assoc.source.z}): tile=$doorTile")
-            if (doorTile != null) {
-                // Prevent closing if an actor is in the door node
-                val wouldClose = !doorTile.isBlocking()
-                if (wouldClose && isActorInNode(assoc.source)) {
-                    logger.log("Interaction", "  → cannot close door — someone is in the way.")
-                    return@forEach
-                }
-                doorTile.onInteract()
-                syncAdjacentDoors(assoc.source, doorTile.isBlocking())
-            }
+    /**
+     * Calculate the distance from actor position (ax, ay) to a wall edge on node (nx, ny).
+     */
+    private fun distanceToEdge(ax: Float, ay: Float, nx: Int, ny: Int, slot: TileSlot): Float {
+        return when (slot) {
+            TileSlot.WALL_NORTH -> abs(ay - (ny + 0.5f))
+            TileSlot.WALL_SOUTH -> abs(ay - (ny - 0.5f))
+            TileSlot.WALL_EAST  -> abs(ax - (nx + 0.5f))
+            TileSlot.WALL_WEST  -> abs(ax - (nx - 0.5f))
+            else -> Float.MAX_VALUE
         }
     }
 }
-
