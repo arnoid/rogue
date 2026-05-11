@@ -18,6 +18,7 @@ dependencies {
     implementation("com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-desktop")
     implementation("com.kotcrab.vis:vis-ui:1.5.3")
     implementation("io.github.libktx:ktx-scene2d:1.12.1-rc1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.1")
 }
 

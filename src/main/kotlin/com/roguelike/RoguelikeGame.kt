@@ -28,6 +28,8 @@ import com.roguelike.systems.InputHandler
 import com.roguelike.core.model.WorldNode.Tags as NodeTags
 import com.roguelike.utils.*
 import com.roguelike.world.*
+import com.roguelike.generation.*
+import kotlinx.coroutines.*
 
 class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Screen {
     private lateinit var camera: PerspectiveCamera
@@ -57,6 +59,10 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
     private val assetLoader = AssetLoader()
     private val modelLoader = ModelLoader(assetLoader)
 
+    // Procedural generation
+    private var mapManager: ProceduralMapManager? = null
+    private var generationDebugUI: GenerationDebugUI? = null
+
     // Debug
     private var debugMode = false
     private lateinit var axesInstance: ModelInstance
@@ -77,7 +83,7 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
 
         // --- World Generation or Loading ---
         if (worldPath != null) {
-            loadWorld(worldPath)
+            loadWorldProcedural(worldPath)
         } else {
             world = World(9, 9, 3)
             WorldGenerator(world).generate()
@@ -112,6 +118,9 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         inventoryUI = InventoryUI(skin)
         inventoryUI.setFillParent(true)
         stage.addActor(inventoryUI)
+
+        // Generation debug UI (created early so it's available for procedural loading)
+        generationDebugUI = GenerationDebugUI(stage, skin)
 
         // Player — pure logic object, no LibGDX
         player = Player()
@@ -185,10 +194,44 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         }
     }
 
+    /**
+     * Loads the selected file as the initial submap for procedural generation.
+     * Also loads any templates from the same directory.
+     */
+    private fun loadWorldProcedural(path: String) {
+        val manager = ProceduralMapManager(
+            tileFactory = { type -> modelLoader.createTile(type) },
+            worldFactory = { w, h, d -> World(w, h, d) }
+        )
+        mapManager = manager
+
+        // Enable debug step-through and wire the UI callback
+        manager.debugEnabled = false
+        manager.debugCallback = generationDebugUI
+
+        // Load templates from the default-submaps directory (sibling of starting-submaps)
+        val templateDir = java.io.File(path).parentFile?.parentFile?.resolve("default-submaps")?.absolutePath
+        if (templateDir != null) {
+            manager.loadTemplates(templateDir)
+        }
+
+        // Initialize with the selected file as the starting submap
+        val generatedWorld = manager.initialize(path)
+        if (generatedWorld != null) {
+            world = generatedWorld
+        } else {
+            // Fallback: load directly as a static world
+            loadWorld(path)
+        }
+    }
+
     override fun render(delta: Float) {
         // ── Input & Logic ────────────────────────────────────────────────────
         val moveDir = inputHandler.getMovementDirection()
         movementSystem.move(player, moveDir, delta, moveSpeed)
+
+        // Notify procedural map manager of player movement
+        mapManager?.onPlayerMove(player.position.x, player.position.y, player.position.z)
 
         cameraManager.cameraYaw += inputHandler.getCameraYawChange(delta)
         cameraManager.zoom(inputHandler.getZoomChange(delta))
@@ -393,6 +436,7 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         debugShapeRenderer.dispose()
         debugSpriteBatch.dispose()
         debugFont.dispose()
+        mapManager?.dispose()
     }
 
     private fun edgeOffsetFor(slot: com.roguelike.core.model.TileSlot): com.badlogic.gdx.math.Vector3 = when (slot) {

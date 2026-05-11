@@ -6,7 +6,7 @@ package com.roguelike.core.model
  * All three dimensions must be divisible by 3 (e.g. 3×6×12, 6×6×6).
  * No LibGDX dependencies.
  */
-class World(val width: Int, val height: Int, val depth: Int) {
+class World(width: Int, height: Int, depth: Int) {
 
     init {
         require(width > 0 && width % 3 == 0)  { "width must be a positive multiple of 3, got $width" }
@@ -14,7 +14,14 @@ class World(val width: Int, val height: Int, val depth: Int) {
         require(depth > 0 && depth % 3 == 0)   { "depth must be a positive multiple of 3, got $depth" }
     }
 
-    val nodes = Array(width) { x -> Array(height) { y -> Array(depth) { z -> WorldNode(x, y, z) } } }
+    var width: Int = width
+        private set
+    var height: Int = height
+        private set
+    var depth: Int = depth
+        private set
+
+    private var nodes = Array(width) { x -> Array(height) { y -> Array(depth) { z -> WorldNode(x, y, z) } } }
 
     private val nodesByTag = mutableMapOf<String, MutableList<WorldNode>>()
     val associations = mutableListOf<Association>()
@@ -67,5 +74,33 @@ class World(val width: Int, val height: Int, val depth: Int) {
     fun isBlocked(x: Int, y: Int, z: Int, direction: TileSlot): Boolean {
         val node = getNode(x, y, z) ?: return true
         return node.isWallBlocking(direction)
+    }
+
+    /**
+     * Ensures the world is large enough to contain coordinates up to (maxX-1, maxY-1, maxZ-1).
+     * If the world is already large enough, this is a no-op.
+     * New dimensions are rounded up to the nearest multiple of 3.
+     */
+    fun ensureSize(needWidth: Int, needHeight: Int, needDepth: Int) {
+        val newW = ((maxOf(width, needWidth) + 2) / 3) * 3
+        val newH = ((maxOf(height, needHeight) + 2) / 3) * 3
+        val newD = ((maxOf(depth, needDepth) + 2) / 3) * 3
+        if (newW <= width && newH <= height && newD <= depth) return
+        expand(newW, newH, newD)
+    }
+
+    private fun expand(newWidth: Int, newHeight: Int, newDepth: Int) {
+        val newNodes = Array(newWidth) { x ->
+            Array(newHeight) { y ->
+                Array(newDepth) { z ->
+                    if (x < width && y < height && z < depth) nodes[x][y][z]
+                    else WorldNode(x, y, z)
+                }
+            }
+        }
+        nodes = newNodes
+        width = newWidth
+        height = newHeight
+        depth = newDepth
     }
 }
