@@ -2,14 +2,21 @@ package com.roguelike.generation
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
+import kotlin.random.Random
 
 /**
  * Socket-Based 3D Procedural Map Generator.
  */
 class MapGenerator(
-    private val templates: List<SubmapTemplate>,
-    private val debugMode: Boolean = false
+    templates: List<SubmapTemplate>,
+    private val debugMode: Boolean = false,
+    /** Probability (0..1) that an adjacent bonus connection is sealed instead of opened. */
+    val adjacentSealProbability: Float = 0.25f
 ) {
+    /** All templates expanded to include all 4 rotation variants. */
+    private val allTemplates: List<SubmapTemplate> = templates.flatMap { it.allRotations() }.distinctBy {
+        Triple(it.name, it.rotation, it.sockets.map { s -> s.localPosition to s.direction })
+    }
     private val occupiedGrid = mutableSetOf<Vector3Int>()
     val placedSubmaps = mutableListOf<PlacedSubmap>()
     val debugChannel = Channel<DebugCandidate>(Channel.RENDEZVOUS)
@@ -31,7 +38,7 @@ class MapGenerator(
             val absolutePos = placed.absoluteSocketPosition(socket)
             val oppositeDir = socket.direction.negate()
 
-            val candidates = templates.filter { template ->
+            val candidates = allTemplates.filter { template ->
                 template.sockets.any { s -> s.direction == oppositeDir && s.tag == socket.tag }
             }.shuffled()
 
@@ -57,6 +64,7 @@ class MapGenerator(
                     }?.state = SocketState.CONNECTED
 
                     listener?.onSubmapPlaced(placedCandidate)
+                    resolveAdjacentSockets(placedCandidate)
                     connected = true
                     break
                 }
@@ -78,7 +86,7 @@ class MapGenerator(
             val absolutePos = target.absoluteSocketPosition(socket)
             val oppositeDir = socket.direction.negate()
 
-            val candidates = templates.filter { template ->
+            val candidates = allTemplates.filter { template ->
                 template.sockets.any { s -> s.direction == oppositeDir && s.tag == socket.tag }
             }.shuffled()
 
@@ -106,7 +114,8 @@ class MapGenerator(
                     }?.state = SocketState.CONNECTED
 
                     listener?.onSubmapPlaced(placedCandidate)
-                    println("[MapGenerator]     CONNECTED '${candidate.name}' at $candidateOrigin")
+                    resolveAdjacentSockets(placedCandidate)
+                    println("[MapGenerator]     CONNECTED '${candidate.name}' rot=${candidate.rotation} at $candidateOrigin")
                     connected = true
                     break
                 }
@@ -117,6 +126,47 @@ class MapGenerator(
                 socket.state = SocketState.SEALED
                 println("[MapGenerator]   Socket SEALED (no candidate fit)")
                 listener?.onSocketSealed(target, socket)
+            }
+        }
+    }
+
+    /**
+     * After placing a new submap, checks if any of its OPEN sockets are adjacent to
+     * existing submaps' OPEN sockets. If so, with (1 - adjacentSealProbability) chance
+     * they are connected; otherwise both are sealed.
+     */
+    private fun resolveAdjacentSockets(newlyPlaced: PlacedSubmap) {
+        for (socket in newlyPlaced.sockets) {
+            if (socket.state != SocketState.OPEN) continue
+
+            val absPos = newlyPlaced.absoluteSocketPosition(socket)
+            val neighborNodePos = absPos + socket.direction
+            val oppositeDir = socket.direction.negate()
+
+            // Find an existing placed submap (not this one) that has an OPEN socket
+            // at the neighbor position facing back toward us
+            for (other in placedSubmaps) {
+                if (other === newlyPlaced) continue
+                for (otherSocket in other.sockets) {
+                    if (otherSocket.state != SocketState.OPEN) continue
+                    val otherAbsPos = other.absoluteSocketPosition(otherSocket)
+                    if (otherAbsPos == neighborNodePos && otherSocket.direction == oppositeDir) {
+                        // Found an adjacent matching socket pair
+                        if (Random.nextFloat() < adjacentSealProbability) {
+                            // Seal both sides
+                            socket.state = SocketState.SEALED
+                            otherSocket.state = SocketState.SEALED
+                            println("[MapGenerator]     Adjacent socket SEALED (probability): ${socket.localPosition} dir=${socket.direction} <-> ${otherSocket.localPosition} dir=${otherSocket.direction}")
+                            listener?.onSocketSealed(newlyPlaced, socket)
+                            listener?.onSocketSealed(other, otherSocket)
+                        } else {
+                            // Connect both sides
+                            socket.state = SocketState.CONNECTED
+                            otherSocket.state = SocketState.CONNECTED
+                            println("[MapGenerator]     Adjacent socket CONNECTED: ${socket.localPosition} dir=${socket.direction} <-> ${otherSocket.localPosition} dir=${otherSocket.direction}")
+                        }
+                    }
+                }
             }
         }
     }

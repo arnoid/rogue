@@ -40,13 +40,33 @@ class WorldStamper(
                         val newTile = tileFactory(tile.type)
                         if (newTile != null) {
                             // Copy rotation/offset from source if it's a BaseTile
-                            if (tile is com.roguelike.world.BaseTile && newTile is com.roguelike.world.BaseTile) {
-                                newTile.rotationX = tile.rotationX
-                                newTile.rotationY = tile.rotationY
-                                newTile.rotationZ = tile.rotationZ
-                                newTile.xOffset = tile.xOffset
-                                newTile.yOffset = tile.yOffset
-                                newTile.zOffset = tile.zOffset
+                            if (newTile is com.roguelike.world.BaseTile) {
+                                if (tile is RotatedTileRef) {
+                                    if (tile.useFactoryDefaults) {
+                                        // Wall/door whose type changed: factory already set correct
+                                        // rotation and offset — keep factory defaults, only copy zOffset
+                                        if (tile.originalTile is com.roguelike.world.BaseTile) {
+                                            newTile.zOffset = tile.originalTile.zOffset
+                                        }
+                                    } else if (tile.originalTile is com.roguelike.world.BaseTile) {
+                                        // Non-directional tile (floor, stairs): copy original + add rotation
+                                        val orig = tile.originalTile
+                                        newTile.rotationX = orig.rotationX
+                                        newTile.rotationY = orig.rotationY + tile.additionalRotY
+                                        newTile.rotationZ = orig.rotationZ
+                                        newTile.xOffset = orig.xOffset
+                                        newTile.yOffset = orig.yOffset
+                                        newTile.zOffset = orig.zOffset
+                                    }
+                                } else if (tile is com.roguelike.world.BaseTile) {
+                                    // Non-rotated tile: direct copy
+                                    newTile.rotationX = tile.rotationX
+                                    newTile.rotationY = tile.rotationY
+                                    newTile.rotationZ = tile.rotationZ
+                                    newTile.xOffset = tile.xOffset
+                                    newTile.yOffset = tile.yOffset
+                                    newTile.zOffset = tile.zOffset
+                                }
                             }
                             targetNode.setTile(newTile)
                         }
@@ -106,6 +126,26 @@ class WorldStamper(
         neighborNode.untagConnector(oppositeSlot)
     }
 
+    /**
+     * Places a wall on a sealed socket to close off the opening.
+     * Called when no neighbor could be connected to this socket.
+     */
+    fun sealConnection(placed: PlacedSubmap, socket: Socket, target: World) {
+        val absPos = placed.absoluteSocketPosition(socket)
+        val node = target.getNode(absPos.x, absPos.y, absPos.z) ?: return
+        val wallSlot = directionToSlot(socket.direction) ?: return
+
+        // Only add a wall if there isn't one already
+        if (node.hasTile(wallSlot)) return
+
+        val wallType = slotToWallType(wallSlot)
+        val wallTile = tileFactory(wallType)
+        if (wallTile != null) {
+            node.setTile(wallTile)
+            node.untagConnector(wallSlot)
+        }
+    }
+
     companion object {
         fun directionToSlot(direction: Vector3Int): TileSlot? {
             if (direction == Vector3Int.NORTH) return TileSlot.WALL_NORTH
@@ -114,7 +154,13 @@ class WorldStamper(
             if (direction == Vector3Int.WEST) return TileSlot.WALL_WEST
             return null
         }
+
+        fun slotToWallType(slot: TileSlot): String = when (slot) {
+            TileSlot.WALL_NORTH -> "WallNorthTile"
+            TileSlot.WALL_SOUTH -> "WallSouthTile"
+            TileSlot.WALL_EAST -> "WallEastTile"
+            TileSlot.WALL_WEST -> "WallWestTile"
+            else -> "WallNorthTile"
+        }
     }
 }
-
-

@@ -26,6 +26,8 @@ import com.roguelike.rendering.*
 import com.roguelike.serialization.WorldIO
 import com.roguelike.utils.*
 import com.roguelike.world.*
+import com.roguelike.generation.SubmapTemplate
+import com.roguelike.generation.RotatedTileRef
 
 class MapEditor(private val game: Game) : Screen {
     private lateinit var camera: PerspectiveCamera
@@ -250,9 +252,56 @@ class MapEditor(private val game: Game) : Screen {
         loadRecentFiles()
         rebuildFileMenu()
 
-        // ── Main Area: viewport | palette ─────────────────────────────────
+        // ── Main Area: toolbar | viewport | palette ─────────────────────────
         val mainRow = VisTable()
         rootTable.add(mainRow).fill().expand().row()
+
+        // ── Left toolbar column ─────────────────────────────────────────
+        val toolbar = VisTable()
+        toolbar.top().pad(4f)
+        toolbar.background = VisUI.getSkin().newDrawable("white", Color(0.15f, 0.15f, 0.15f, 1f))
+
+        try {
+            val gridTex = com.badlogic.gdx.graphics.Texture(Gdx.files.internal("icons/view-grid-outline.png"))
+            val gridDrawable = com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable(
+                com.badlogic.gdx.graphics.g2d.TextureRegion(gridTex)
+            )
+            val gridBtn = VisImageButton(gridDrawable)
+            gridBtn.addListener(object : com.badlogic.gdx.scenes.scene2d.utils.ClickListener() {
+                override fun clicked(event: com.badlogic.gdx.scenes.scene2d.InputEvent, x: Float, y: Float) {
+                    showFrames = !showFrames
+                }
+            })
+            toolbar.add(gridBtn).size(32f).pad(2f).row()
+
+            val ccwTex = com.badlogic.gdx.graphics.Texture(Gdx.files.internal("icons/rotate-counter-clockwise.png"))
+            val ccwDrawable = com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable(
+                com.badlogic.gdx.graphics.g2d.TextureRegion(ccwTex)
+            )
+            val ccwBtn = VisImageButton(ccwDrawable)
+            ccwBtn.addListener(object : com.badlogic.gdx.scenes.scene2d.utils.ClickListener() {
+                override fun clicked(event: com.badlogic.gdx.scenes.scene2d.InputEvent, x: Float, y: Float) {
+                    rotateWorld(clockwise = false)
+                }
+            })
+            toolbar.add(ccwBtn).size(32f).pad(2f).row()
+
+            val cwTex = com.badlogic.gdx.graphics.Texture(Gdx.files.internal("icons/rotate-clockwise.png"))
+            val cwDrawable = com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable(
+                com.badlogic.gdx.graphics.g2d.TextureRegion(cwTex)
+            )
+            val cwBtn = VisImageButton(cwDrawable)
+            cwBtn.addListener(object : com.badlogic.gdx.scenes.scene2d.utils.ClickListener() {
+                override fun clicked(event: com.badlogic.gdx.scenes.scene2d.InputEvent, x: Float, y: Float) {
+                    rotateWorld(clockwise = true)
+                }
+            })
+            toolbar.add(cwBtn).size(32f).pad(2f).row()
+        } catch (e: Exception) {
+            toolbar.add(VisLabel("!")).row()
+        }
+
+        mainRow.add(toolbar).fillY().expandY().width(40f)
 
         viewportArea = VisTable()
 
@@ -302,6 +351,83 @@ class MapEditor(private val game: Game) : Screen {
         }
         maxRenderZ = world.depth - 1
         statusBar.refresh(world)
+        updateCamera()
+    }
+
+    /**
+     * Rotates the entire world 90° around the Z axis.
+     * Uses the procedural generation rotation to structurally rearrange nodes,
+     * then recreates proper tiles via the tile factory.
+     */
+    private fun rotateWorld(clockwise: Boolean) {
+        val template = SubmapTemplate.fromWorld("editor", world)
+        // CW = one CW rotation, CCW = three CW rotations
+        val steps = if (clockwise) 1 else 3
+        var rotated = template
+        repeat(steps) { rotated = rotated.rotatedCW90() }
+
+        val rotatedWorldData = rotated.worldData
+        // Create a new world and stamp with proper tiles from factory
+        val newWorld = World(rotatedWorldData.width, rotatedWorldData.height, rotatedWorldData.depth)
+        for (x in 0 until rotatedWorldData.width) {
+            for (y in 0 until rotatedWorldData.height) {
+                for (z in 0 until rotatedWorldData.depth) {
+                    val srcNode = rotatedWorldData.getNode(x, y, z) ?: continue
+                    val dstNode = newWorld.getNode(x, y, z) ?: continue
+
+                    for (tile in srcNode.tiles) {
+                        if (tile is RotatedTileRef) {
+                            val newTile = modelLoader.createTile(tile.rotatedType)
+                            if (newTile != null) {
+                                if (newTile is BaseTile) {
+                                    if (tile.useFactoryDefaults) {
+                                        // Wall/door: factory already set correct rotation/offset
+                                        if (tile.originalTile is BaseTile) {
+                                            newTile.zOffset = tile.originalTile.zOffset
+                                        }
+                                    } else if (tile.originalTile is BaseTile) {
+                                        // Non-directional tile (floor, stairs): copy + add rotation
+                                        val orig = tile.originalTile
+                                        newTile.rotationX = orig.rotationX
+                                        newTile.rotationY = orig.rotationY + tile.additionalRotY
+                                        newTile.rotationZ = orig.rotationZ
+                                        newTile.xOffset = orig.xOffset
+                                        newTile.yOffset = orig.yOffset
+                                        newTile.zOffset = orig.zOffset
+                                    }
+                                }
+                                dstNode.setTile(newTile)
+                            }
+                        } else {
+                            val newTile = modelLoader.createTile(tile.type)
+                            if (newTile != null) {
+                                if (tile is BaseTile && newTile is BaseTile) {
+                                    newTile.rotationX = tile.rotationX
+                                    newTile.rotationY = tile.rotationY
+                                    newTile.rotationZ = tile.rotationZ
+                                    newTile.xOffset = tile.xOffset
+                                    newTile.yOffset = tile.yOffset
+                                    newTile.zOffset = tile.zOffset
+                                }
+                                dstNode.setTile(newTile)
+                            }
+                        }
+                    }
+
+                    for (slot in srcNode.doorSlots) dstNode.tagAsDoor(slot)
+                    for (slot in srcNode.manualDoorSlots) dstNode.tagAsManualDoor(slot)
+                    for (slot in srcNode.connectorSlots) dstNode.tagAsConnector(slot)
+                    for (tag in srcNode.tags) newWorld.addTag(dstNode, tag)
+                    for (item in srcNode.items) dstNode.items.add(item)
+                }
+            }
+        }
+
+        world = newWorld
+        maxRenderZ = world.depth - 1
+        statusBar.refresh(world)
+        // Only re-center the camera target, keep perspective/zoom/pitch/yaw unchanged
+        cameraTarget.set(world.width / 2f, world.height / 2f, world.depth / 2f)
         updateCamera()
     }
 

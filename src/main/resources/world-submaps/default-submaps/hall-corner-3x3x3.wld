@@ -36,39 +36,37 @@ nodes: [
 				slot: FLOOR
 			}
 			{
-				type: WallEastTile
-				slot: WALL_EAST
-				rotY: -90
-			}
-			{
 				type: WallWestTile
 				slot: WALL_WEST
 				rotY: 90
+			}
+			{
+				type: WallNorthTile
+				slot: WALL_NORTH
 			}
 		]
 	}
 	{
-		x: 1
-		y: 2
+		x: 2
+		y: 1
 		z: 1
 		tiles: [
+			{
+				type: WallNorthTile
+				slot: WALL_NORTH
+			}
+			{
+				type: WallSouthTile
+				slot: WALL_SOUTH
+				rotY: 180
+			}
 			{
 				type: FloorTile
 				slot: FLOOR
 			}
-			{
-				type: WallEastTile
-				slot: WALL_EAST
-				rotY: -90
-			}
-			{
-				type: WallWestTile
-				slot: WALL_WEST
-				rotY: 90
-			}
 		]
 		connectorSlots: [
-			WALL_NORTH
+			WALL_EAST
 		]
 	}
 ]

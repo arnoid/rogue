@@ -48,15 +48,23 @@ class MovementSystem(private val world: World) {
 
             val nextX = actor.position.x + step.x
             val nextY = actor.position.y + step.y
-            // When on stairs, use floor(z) for collision so we don't hit walls on the upper floor
+            // When on stairs, check both floor(z) and round(z) — only block if BOTH levels block.
+            // This prevents getting stuck at the top of stairs (where floor(z) is the lower level
+            // with walls, but round(z) is the upper open level).
             val onStairs = isOnStairs(actor)
-            val z = if (onStairs) floor(actor.position.z).toInt() else round(actor.position.z).toInt()
+            val zFloor = floor(actor.position.z).toInt()
+            val zRound = round(actor.position.z).toInt()
+            val z = if (onStairs) zFloor else zRound
             val size = actor.collisionSize
 
             val actorNodeX = round(actor.position.x).toInt()
             val actorNodeY = round(actor.position.y).toInt()
 
-            val canMove = canMoveTo(nextX, nextY, z, size, actorNodeX, actorNodeY, log = logCooldown <= 0f)
+            var canMove = canMoveTo(nextX, nextY, z, size, actorNodeX, actorNodeY, log = logCooldown <= 0f)
+            // If blocked on stairs and floor/round differ, try the other z level
+            if (!canMove && onStairs && zFloor != zRound) {
+                canMove = canMoveTo(nextX, nextY, zRound, size, actorNodeX, actorNodeY, log = logCooldown <= 0f)
+            }
 
             if (logCooldown <= 0f) {
                 println("[$LOG_TAG] pos=(${actor.position.x}, ${actor.position.y}, ${actor.position.z}) z_col=$z onStairs=$onStairs dir=(${dir.x}, ${dir.y}) next=($nextX, $nextY) size=$size canMove=$canMove")
@@ -67,8 +75,13 @@ class MovementSystem(private val world: World) {
                 actor.position.x = nextX
                 actor.position.y = nextY
             } else {
-                val canX = canMoveTo(nextX, actor.position.y, z, size, actorNodeX, actorNodeY, log = logCooldown <= 0f)
-                val canY = canMoveTo(actor.position.x, nextY, z, size, actorNodeX, actorNodeY, log = logCooldown <= 0f)
+                var canX = canMoveTo(nextX, actor.position.y, z, size, actorNodeX, actorNodeY, log = logCooldown <= 0f)
+                var canY = canMoveTo(actor.position.x, nextY, z, size, actorNodeX, actorNodeY, log = logCooldown <= 0f)
+                // Try alternate z level on stairs for slides too
+                if (onStairs && zFloor != zRound) {
+                    if (!canX) canX = canMoveTo(nextX, actor.position.y, zRound, size, actorNodeX, actorNodeY, log = logCooldown <= 0f)
+                    if (!canY) canY = canMoveTo(actor.position.x, nextY, zRound, size, actorNodeX, actorNodeY, log = logCooldown <= 0f)
+                }
                 if (logCooldown <= 0f) {
                     println("[$LOG_TAG]   BLOCKED full move. canX=$canX canY=$canY")
                 }

@@ -209,15 +209,27 @@ class ProceduralMapManager(
                 val needed = placed.origin + placed.template.footprint
                 world.ensureSize(needed.x, needed.y, needed.z)
 
-                Gdx.app?.log("ProceduralMapManager", "Stamping '${placed.template.name}' at ${placed.origin}, world now ${world.width}x${world.height}x${world.depth}")
+                Gdx.app?.log("ProceduralMapManager", "Stamping '${placed.template.name}' rot=${placed.template.rotation} at ${placed.origin}, world now ${world.width}x${world.height}x${world.depth}")
                 stamper.stamp(placed, world)
 
-                // Open connections between connected sockets
+                // Open connections between connected sockets, seal dead ends
                 for (socket in placed.sockets) {
                     if (socket.state == SocketState.CONNECTED) {
                         stamper.openConnection(placed, socket, world)
                         Gdx.app?.log("ProceduralMapManager", "  Opened connection at ${socket.localPosition} dir=${socket.direction}")
+                    } else if (socket.state == SocketState.SEALED) {
+                        stamper.sealConnection(placed, socket, world)
+                        Gdx.app?.log("ProceduralMapManager", "  Sealed socket at ${socket.localPosition} dir=${socket.direction}")
                     }
+                }
+            }
+        }
+
+        // Seal any newly-sealed sockets on already-stamped submaps (e.g. initial submap)
+        for (placed in gen.placedSubmaps) {
+            for (socket in placed.sockets) {
+                if (socket.state == SocketState.SEALED) {
+                    stamper.sealConnection(placed, socket, world)
                 }
             }
         }
