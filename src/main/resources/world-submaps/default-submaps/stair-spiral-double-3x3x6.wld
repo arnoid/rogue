@@ -95,6 +95,7 @@ nodes: [
 			{
 				type: StairsTile
 				slot: STAIRS
+				rotY: -180
 			}
 			{
 				type: WallSouthTile
@@ -230,7 +231,7 @@ nodes: [
 			{
 				type: StairsTile
 				slot: STAIRS
-				rotY: -90
+				rotY: -270
 			}
 			{
 				type: WallSouthTile
@@ -270,7 +271,7 @@ nodes: [
 			{
 				type: StairsTile
 				slot: STAIRS
-				rotY: -90
+				rotY: -270
 			}
 			{
 				type: WallSouthTile
@@ -342,7 +343,7 @@ nodes: [
 			{
 				type: StairsTile
 				slot: STAIRS
-				rotY: -270
+				rotY: -90
 			}
 			{
 				type: WallNorthTile
@@ -384,7 +385,7 @@ nodes: [
 			{
 				type: StairsTile
 				slot: STAIRS
-				rotY: 90
+				rotY: -90
 			}
 			{
 				type: WallNorthTile
@@ -529,7 +530,6 @@ nodes: [
 			{
 				type: StairsTile
 				slot: STAIRS
-				rotY: -180
 			}
 		]
 	}

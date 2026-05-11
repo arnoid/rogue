@@ -346,6 +346,7 @@ class MapEditor(private val game: Game) : Screen {
                     oldNode.doorSlots.forEach { newNode.tagAsDoor(it) }
                     oldNode.manualDoorSlots.forEach { newNode.tagAsManualDoor(it) }
                     oldNode.connectorSlots.forEach { newNode.tagAsConnector(it) }
+                    oldNode.ladderSlots.forEach { newNode.tagAsLadder(it) }
                 }
             }
         }
@@ -417,6 +418,7 @@ class MapEditor(private val game: Game) : Screen {
                     for (slot in srcNode.doorSlots) dstNode.tagAsDoor(slot)
                     for (slot in srcNode.manualDoorSlots) dstNode.tagAsManualDoor(slot)
                     for (slot in srcNode.connectorSlots) dstNode.tagAsConnector(slot)
+                    for (slot in srcNode.ladderSlots) dstNode.tagAsLadder(slot)
                     for (tag in srcNode.tags) newWorld.addTag(dstNode, tag)
                     for (item in srcNode.items) dstNode.items.add(item)
                 }
@@ -690,6 +692,28 @@ class MapEditor(private val game: Game) : Screen {
             shapeRenderer.end()
             Gdx.gl.glLineWidth(1f)
 
+            // ── Ladder up-arrows (green) ────────────────────────────────────
+            Gdx.gl.glLineWidth(3f)
+            shapeRenderer.projectionMatrix = camera.combined
+            shapeRenderer.begin(ShapeRenderer.ShapeType.Line)
+            shapeRenderer.color = Color(0.3f, 1f, 0.3f, 1f) // green
+            for (x in 0 until world.width) {
+                for (y in 0 until world.height) {
+                    for (z in 0..maxRenderZ.coerceAtMost(world.depth - 1)) {
+                        val node = world.getNode(x, y, z) ?: continue
+                        for (slot in node.ladderSlots) {
+                            val offset = edgeOffset(slot)
+                            val ex = x + offset.x
+                            val ey = y + offset.y
+                            val ez = z.toFloat()
+                            drawLadderUpArrow(ex, ey, ez)
+                        }
+                    }
+                }
+            }
+            shapeRenderer.end()
+            Gdx.gl.glLineWidth(1f)
+
             // ── Tag spheres + labels ────────────────────────────────────────
             modelBatch.begin(camera)
             for (x in 0 until world.width) {
@@ -708,6 +732,12 @@ class MapEditor(private val game: Game) : Screen {
                         }
                         // Render node_connector spheres at each connector edge
                         for (slot in node.connectorSlots) {
+                            val offset = edgeOffset(slot)
+                            tagSphereInstance.transform.setToTranslation(x + offset.x, y + offset.y, z + offset.z)
+                            modelBatch.render(tagSphereInstance, environment)
+                        }
+                        // Render ladder spheres at each ladder edge
+                        for (slot in node.ladderSlots) {
                             val offset = edgeOffset(slot)
                             tagSphereInstance.transform.setToTranslation(x + offset.x, y + offset.y, z + offset.z)
                             modelBatch.render(tagSphereInstance, environment)
@@ -749,6 +779,15 @@ class MapEditor(private val game: Game) : Screen {
                             camera.project(projPos, 0f, 0f, viewW.toFloat(), viewH.toFloat())
                             if (projPos.z in 0f..1f) {
                                 tagFont.draw(tagSpriteBatch, WorldNode.Tags.NODE_CONNECTOR, projPos.x - 30f, projPos.y + 4f)
+                            }
+                        }
+                        // Render ladder labels at each ladder edge
+                        for (slot in node.ladderSlots) {
+                            val offset = edgeOffset(slot)
+                            projPos.set(x + offset.x, y + offset.y + 0.45f, z + offset.z)
+                            camera.project(projPos, 0f, 0f, viewW.toFloat(), viewH.toFloat())
+                            if (projPos.z in 0f..1f) {
+                                tagFont.draw(tagSpriteBatch, WorldNode.Tags.LADDER, projPos.x - 30f, projPos.y + 4f)
                             }
                         }
                     }
@@ -809,6 +848,18 @@ class MapEditor(private val game: Game) : Screen {
         // Arrowhead wings (perpendicular)
         shapeRenderer.line(tipX, tipY, z, tipX - dx * headLen + dy * headLen, tipY - dy * headLen - dx * headLen, z)
         shapeRenderer.line(tipX, tipY, z, tipX - dx * headLen - dy * headLen, tipY - dy * headLen + dx * headLen, z)
+    }
+
+    /** Draw an arrow pointing up along Z axis at the given edge position. */
+    private fun drawLadderUpArrow(x: Float, y: Float, z: Float) {
+        val len = 0.4f
+        val headLen = 0.15f
+        val tipZ = z + len
+        // Shaft pointing up
+        shapeRenderer.line(x, y, z - len, x, y, tipZ)
+        // Arrowhead wings in X and Y
+        shapeRenderer.line(x, y, tipZ, x + headLen, y, tipZ - headLen)
+        shapeRenderer.line(x, y, tipZ, x - headLen, y, tipZ - headLen)
     }
 
     private fun drawEdge(x: Float, y: Float, z: Float, slot: TileSlot) {

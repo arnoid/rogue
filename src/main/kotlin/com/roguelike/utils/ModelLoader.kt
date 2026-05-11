@@ -25,6 +25,7 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
         register(DoorEastTile.TYPE)      { createDoorEastTile() }
         register(DoorWestTile.TYPE)      { createDoorWestTile() }
         register(StairsTile.TYPE)        { createStairsTile() }
+        register(LadderTile.TYPE)        { createLadderTile() }
     }
 
     fun register(typeName: String, factory: () -> Tile) {
@@ -132,6 +133,16 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
         val model = assetLoader.loadModel("stairs_n", "models/vox/stairs/stairs_n.obj")
         val (scale, center) = getModelData(model)
         val tile = StairsTile()
+        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        return tile
+    }
+
+    // ── Ladder tile ──────────────────────────────────────────────────────────
+
+    fun createLadderTile(): LadderTile {
+        val model = assetLoader.loadModel("ladder_vertical_n", "models/vox/stairs/ladder_vertical_n.obj")
+        val (scale, center) = getModelData(model)
+        val tile = LadderTile()
         renderRegistry.register(tile, TileRenderData(model, scale, center))
         return tile
     }

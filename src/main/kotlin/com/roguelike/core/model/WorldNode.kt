@@ -18,6 +18,7 @@ class WorldNode(val x: Int, val y: Int, val z: Int) {
         const val EXIT         = "exit"
         const val DOOR_MANUAL  = "door_manual"
         const val NODE_CONNECTOR = "node_connector"
+        const val LADDER = "ladder"
     }
 
     // ── Tile storage (floor + 4 walls) ──────────────────────────────────
@@ -83,6 +84,20 @@ class WorldNode(val x: Int, val y: Int, val z: Int) {
 
     fun isConnector(slot: TileSlot): Boolean = slot in _connectorSlots
 
+    // ── Ladder tags (per-edge) ──────────────────────────────────────────
+
+    private val _ladderSlots = mutableSetOf<TileSlot>()
+    val ladderSlots: Set<TileSlot> get() = _ladderSlots
+
+    fun tagAsLadder(slot: TileSlot) {
+        require(slot != TileSlot.FLOOR) { "Only wall slots can be tagged as ladders" }
+        _ladderSlots.add(slot)
+    }
+
+    fun untagLadder(slot: TileSlot) { _ladderSlots.remove(slot) }
+
+    fun isLadder(slot: TileSlot): Boolean = slot in _ladderSlots
+
     // ── Items & general tags ────────────────────────────────────────────
 
     val items = mutableListOf<Item>()
@@ -111,6 +126,7 @@ class WorldNode(val x: Int, val y: Int, val z: Int) {
         _doorSlots.clear()
         _manualDoorSlots.clear()
         _connectorSlots.clear()
+        _ladderSlots.clear()
         items.clear()
         tags.clear()
     }

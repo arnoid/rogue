@@ -5,6 +5,7 @@ import com.badlogic.gdx.Input
 import com.roguelike.core.model.TileSlot
 import com.roguelike.core.model.World
 import com.roguelike.utils.ModelLoader
+import com.roguelike.world.BaseTile
 
 /**
  * Handles input for the map editor.
@@ -86,6 +87,12 @@ class EditorInputHandler(
                     val oldTile = node?.removeTile(TileSlot.STAIRS)
                     if (oldTile != null) modelLoader.renderRegistry.remove(oldTile)
                 }
+                is PaletteSelection.LadderSel -> {
+                    if (hoveredEdge != null && hoveredEdge != TileSlot.FLOOR) {
+                        val oldTile = node?.removeTile(TileSlot.STAIRS)
+                        if (oldTile != null) modelLoader.renderRegistry.remove(oldTile)
+                    }
+                }
                 is PaletteSelection.TagSel -> {
                     val n = world.getNode(hoveredX, hoveredY, hoveredZ)
                     if (n != null) {
@@ -96,6 +103,10 @@ class EditorInputHandler(
                         } else if (sel.tag == com.roguelike.core.model.WorldNode.Tags.NODE_CONNECTOR) {
                             if (hoveredEdge != null && hoveredEdge != TileSlot.FLOOR) {
                                 n.untagConnector(hoveredEdge)
+                            }
+                        } else if (sel.tag == com.roguelike.core.model.WorldNode.Tags.LADDER) {
+                            if (hoveredEdge != null && hoveredEdge != TileSlot.FLOOR) {
+                                n.untagLadder(hoveredEdge)
                             }
                         } else {
                             world.removeTag(n, sel.tag)
@@ -150,6 +161,14 @@ class EditorInputHandler(
                         lastPaintX = hoveredX; lastPaintY = hoveredY; lastPaintZ = hoveredZ
                     }
                 }
+                is PaletteSelection.LadderSel -> {
+                    if (hoveredEdge != null && hoveredEdge != TileSlot.FLOOR && !node.hasTile(TileSlot.STAIRS)) {
+                        val tile = modelLoader.createTile("LadderTile") ?: return
+                        (tile as BaseTile).rotationY = ladderRotationForEdge(hoveredEdge)
+                        node.setTile(tile)
+                        lastPaintX = hoveredX; lastPaintY = hoveredY; lastPaintZ = hoveredZ
+                    }
+                }
                 is PaletteSelection.TagSel -> {
                     if (isNewNode) {
                         selectedX = hoveredX; selectedY = hoveredY; selectedZ = hoveredZ
@@ -180,6 +199,15 @@ class EditorInputHandler(
                                     } else if (Gdx.input.justTouched()) {
                                         node.untagConnector(hoveredEdge)
                                     }
+                                }
+                            }
+                        } else if (sel.tag == com.roguelike.core.model.WorldNode.Tags.LADDER) {
+                            // ladder is per-edge
+                            if (hoveredEdge != null && hoveredEdge != TileSlot.FLOOR) {
+                                if (!node.isLadder(hoveredEdge)) {
+                                    node.tagAsLadder(hoveredEdge)
+                                } else if (Gdx.input.justTouched()) {
+                                    node.untagLadder(hoveredEdge)
                                 }
                             }
                         } else if (!node.tags.contains(sel.tag)) {
@@ -236,6 +264,14 @@ class EditorInputHandler(
             TileSlot.WALL_EAST  -> "DoorEastTile"
             TileSlot.WALL_WEST  -> "DoorWestTile"
             else -> null
+        }
+
+        fun ladderRotationForEdge(slot: TileSlot): Float = when (slot) {
+            TileSlot.WALL_NORTH -> 0f
+            TileSlot.WALL_EAST  -> 90f
+            TileSlot.WALL_SOUTH -> 180f
+            TileSlot.WALL_WEST  -> 270f
+            else -> 0f
         }
     }
 }

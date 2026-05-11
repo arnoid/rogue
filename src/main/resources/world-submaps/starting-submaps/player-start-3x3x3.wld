@@ -113,6 +113,13 @@ nodes: [
 				slot: WALL_EAST
 				rotY: -90
 			}
+			{
+				type: LadderTile
+				slot: STAIRS
+			}
+		]
+		ladderSlots: [
+			WALL_NORTH
 		]
 	}
 	{
@@ -127,6 +134,17 @@ nodes: [
 		]
 		connectorSlots: [
 			WALL_EAST
+		]
+	}
+	{
+		x: 2
+		y: 1
+		z: 2
+		tiles: [
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
 		]
 	}
 	{

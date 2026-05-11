@@ -84,6 +84,10 @@ data class SubmapTemplate(
                     for (slot in srcNode.manualDoorSlots) {
                         dstNode.tagAsManualDoor(rotateSlot(slot))
                     }
+                    // Copy ladder tags (rotated edge)
+                    for (slot in srcNode.ladderSlots) {
+                        dstNode.tagAsLadder(rotateSlot(slot))
+                    }
                     // Mark that this node had connectors (we'll recompute their slots after rotation)
                     val hadConnectors = srcNode.connectorSlots.isNotEmpty()
 

@@ -87,6 +87,11 @@ class WorldStamper(
                         targetNode.tagAsConnector(slot)
                     }
 
+                    // Copy ladder tags
+                    for (slot in sourceNode.ladderSlots) {
+                        targetNode.tagAsLadder(slot)
+                    }
+
                     // Copy general tags
                     for (tag in sourceNode.tags) {
                         target.addTag(targetNode, tag)

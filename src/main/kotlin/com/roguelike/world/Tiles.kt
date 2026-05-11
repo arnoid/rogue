@@ -100,15 +100,15 @@ class StairsTile : BaseTile() {
 
     /**
      * Returns the cardinal direction the stairs face (the "top" of the stairs).
-     * rotationY: 0° = north, 90° = west, 180° = south, -90°/270° = east.
+     * rotationY: 0° = south, 90° = east, 180° = north, 270° = west.
      */
     fun facingDirection(): TileSlot {
         val normalized = ((rotationY % 360f) + 360f) % 360f
         return when {
-            normalized < 45f || normalized >= 315f -> TileSlot.WALL_SOUTH
-            normalized < 135f                      -> TileSlot.WALL_WEST
-            normalized < 225f                      -> TileSlot.WALL_NORTH
-            else                                   -> TileSlot.WALL_EAST
+            normalized < 45f || normalized >= 315f -> TileSlot.WALL_NORTH
+            normalized < 135f                      -> TileSlot.WALL_EAST
+            normalized < 225f                      -> TileSlot.WALL_SOUTH
+            else                                   -> TileSlot.WALL_WEST
         }
     }
 
@@ -123,6 +123,35 @@ class StairsTile : BaseTile() {
         TileSlot.WALL_EAST  -> TileSlot.WALL_EAST
         TileSlot.WALL_WEST  -> TileSlot.WALL_WEST
         else -> TileSlot.WALL_NORTH
+    }
+}
+
+// ── Ladder ────────────────────────────────────────────────────────────────
+
+/**
+ * A ladder tile that moves the actor straight up when they step onto it.
+ * Uses the STAIRS slot (only one vertical-movement tile per node).
+ * The ladder faces a wall (like stairs) but lifts the actor vertically
+ * instead of ramping them along a horizontal direction.
+ */
+class LadderTile : BaseTile() {
+    companion object { const val TYPE = "LadderTile" }
+    override val type: String get() = TYPE
+    override val slot: TileSlot get() = TileSlot.STAIRS
+    override fun isBlocking(): Boolean = false
+
+    /**
+     * Returns the cardinal direction the ladder faces (which wall it's against).
+     * Same rotation convention as StairsTile.
+     */
+    fun facingDirection(): TileSlot {
+        val normalized = ((rotationY % 360f) + 360f) % 360f
+        return when {
+            normalized < 45f || normalized >= 315f -> TileSlot.WALL_NORTH
+            normalized < 135f                      -> TileSlot.WALL_EAST
+            normalized < 225f                      -> TileSlot.WALL_SOUTH
+            else                                   -> TileSlot.WALL_WEST
+        }
     }
 }
 

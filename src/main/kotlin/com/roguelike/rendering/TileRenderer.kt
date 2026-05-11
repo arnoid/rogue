@@ -5,6 +5,7 @@ import com.badlogic.gdx.graphics.g3d.*
 import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute
 import com.badlogic.gdx.math.Vector3
 import com.roguelike.core.model.Tile
+import com.roguelike.core.model.TileSlot
 import com.roguelike.world.*
 
 /**
@@ -116,9 +117,24 @@ class TileRenderer(
         rotZ += tile.rotationZ
 
         val baseZ = tile.fixedZ ?: z
-        val tx = x + tile.xOffset
-        val ty = y + tile.yOffset
+        var tx = x + tile.xOffset
+        var ty = y + tile.yOffset
         val tz = baseZ + tile.zOffset
+
+        // Shift ladder model toward the wall it faces
+        if (tile is LadderTile) {
+            when (tile.facingDirection()) {
+                TileSlot.WALL_NORTH -> ty += 0.49f
+                TileSlot.WALL_SOUTH -> ty -= 0.49f
+                TileSlot.WALL_EAST  -> tx += 0.49f
+                TileSlot.WALL_WEST  -> tx -= 0.49f
+                else -> {}
+            }
+        }
+
+        if (tile is StairsTile) {
+            rotY += 180f
+        }
 
         instance.transform.setToTranslation(tx, ty, tz)
         val sx = renderData.scaleX ?: renderData.scale

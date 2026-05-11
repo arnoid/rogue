@@ -32,6 +32,8 @@ sealed class PaletteSelection {
     object DoorSel : PaletteSelection()
     /** Place stairs on a node center. */
     object StairsSel : PaletteSelection()
+    /** Place a ladder on a node center. */
+    object LadderSel : PaletteSelection()
     /** Toggle a tag on a node. */
     data class TagSel(val tag: String) : PaletteSelection()
 }
@@ -150,6 +152,24 @@ class EditorPalettePanel(
             selectionButtons["stairs"] = stairsContainer
         }
 
+        // ── Ladder ──────────────────────────────────────────────────────────
+        content.addSeparator().padTop(6f).padBottom(2f)
+        content.add(VisLabel("Ladder")).padLeft(8f).padBottom(2f).left().row()
+
+        val ladderTile = modelLoader.createTile("LadderTile")
+        if (ladderTile != null) {
+            val ladderContainer = SelectionBorderGroup { paletteSelection is PaletteSelection.LadderSel }
+            ladderContainer.add(TilePreviewActor(ladderTile)).size(64f).pad(5f).row()
+            ladderContainer.add(VisLabel("Ladder")).expandX().center()
+            ladderContainer.addListener(object : ClickListener() {
+                override fun clicked(event: InputEvent, x: Float, y: Float) {
+                    toggleSelection(PaletteSelection.LadderSel)
+                }
+            })
+            content.add(ladderContainer).pad(5f).row()
+            selectionButtons["ladder"] = ladderContainer
+        }
+
         // ── Tags ─────────────────────────────────────────────────────────────
         content.addSeparator().padTop(10f).padBottom(4f)
         content.add(VisLabel("TAGS")).pad(10f).row()
@@ -157,7 +177,8 @@ class EditorPalettePanel(
             NodeTags.PLAYER_SPAWN, NodeTags.ENEMY_SPAWN,
             NodeTags.ITEM_SPAWN, NodeTags.EXIT,
             NodeTags.DOOR_MANUAL,
-            NodeTags.NODE_CONNECTOR
+            NodeTags.NODE_CONNECTOR,
+            NodeTags.LADDER
         )
         nodeTags.forEach { tag ->
             val btn = VisTextButton(tag, "toggle")
@@ -190,6 +211,8 @@ class EditorPalettePanel(
                 (sel is PaletteSelection.TagSel && sel.tag == tag) || node.manualDoorSlots.isNotEmpty()
             } else if (tag == NodeTags.NODE_CONNECTOR) {
                 (sel is PaletteSelection.TagSel && sel.tag == tag) || node.connectorSlots.isNotEmpty()
+            } else if (tag == NodeTags.LADDER) {
+                (sel is PaletteSelection.TagSel && sel.tag == tag) || node.ladderSlots.isNotEmpty()
             } else {
                 (sel is PaletteSelection.TagSel && sel.tag == tag) || node.tags.contains(tag)
             }

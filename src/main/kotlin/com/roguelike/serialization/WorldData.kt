@@ -22,7 +22,9 @@ data class NodeData(
     /** Wall slots tagged as manual-interact doors. */
     val manualDoorSlots: ArrayList<String> = ArrayList(),
     /** Wall slots tagged as node connectors (for map generation). */
-    val connectorSlots: ArrayList<String> = ArrayList()
+    val connectorSlots: ArrayList<String> = ArrayList(),
+    /** Wall slots tagged as ladders. */
+    val ladderSlots: ArrayList<String> = ArrayList()
 )
 
 data class TileData(

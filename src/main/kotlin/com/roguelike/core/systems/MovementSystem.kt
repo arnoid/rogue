@@ -2,6 +2,7 @@ package com.roguelike.core.systems
 
 import com.roguelike.core.math.Vec3
 import com.roguelike.core.model.*
+import com.roguelike.world.LadderTile
 import com.roguelike.world.StairsTile
 import kotlin.math.floor
 import kotlin.math.round
@@ -26,14 +27,22 @@ class MovementSystem(private val world: World) {
     private val LOG_TAG = "MovementSystem"
     private var logCooldown = 0f
 
-    /** Returns true if the actor is currently on a stairs tile. */
+    /** Returns true if the node at (x, y, z+1) has a floor tile. */
+    private fun hasFloorAbove(x: Int, y: Int, z: Int): Boolean {
+        val above = world.getNode(x, y, z + 1) ?: return false
+        return above.hasFloor
+    }
+
+    /** Returns true if the actor is currently on a stairs, ladder tile, or near a ladder edge. */
     private fun isOnStairs(actor: Actor): Boolean {
         val nx = round(actor.position.x).toInt()
         val ny = round(actor.position.y).toInt()
         val z = floor(actor.position.z).toInt()
         for (checkZ in intArrayOf(z, z + 1)) {
             val node = world.getNode(nx, ny, checkZ) ?: continue
-            if (node.getTile(TileSlot.STAIRS) is StairsTile) return true
+            val tile = node.getTile(TileSlot.STAIRS)
+            if (tile is StairsTile || tile is LadderTile) return true
+            if (node.ladderSlots.isNotEmpty()) return true
         }
         return false
     }
@@ -97,9 +106,25 @@ class MovementSystem(private val world: World) {
             if (logCooldown <= 0f) logCooldown = 0.3f
         }
 
-        // Apply stairs ramp (adjusts Z smoothly based on position on stairs tile)
-        if (!applyStairsRamp(actor)) {
-            applyGravity(actor)
+        // Apply stairs ramp, ladder climb, or ladder edge climb (adjusts Z smoothly)
+        val ladderClimb = applyLadderClimb(actor, moveDir)
+        if (!ladderClimb) {
+            val ladderEdgeClimb = applyLadderEdgeClimb(actor, moveDir)
+            if (!ladderEdgeClimb) {
+                if (!applyStairsRamp(actor)) {
+                    // Only apply gravity if not clinging to a ladder
+                    val onLadder = isOnLadder(actor, moveDir)
+                    if (!onLadder) {
+                        applyGravity(actor)
+                    } else if (logCooldown <= 0f) {
+                        println("[$LOG_TAG] LADDER CLING: pos=(${actor.position.x}, ${actor.position.y}, ${actor.position.z}) moveDir=(${moveDir.x}, ${moveDir.y}) — gravity suspended")
+                    }
+                }
+            } else if (logCooldown <= 0f) {
+                println("[$LOG_TAG] LADDER EDGE CLIMB: pos=(${actor.position.x}, ${actor.position.y}, ${actor.position.z})")
+            }
+        } else if (logCooldown <= 0f) {
+            println("[$LOG_TAG] LADDER TILE CLIMB: pos=(${actor.position.x}, ${actor.position.y}, ${actor.position.z})")
         }
     }
 
@@ -144,6 +169,181 @@ class MovementSystem(private val world: World) {
     }
 
     /**
+     * If the actor is standing on a ladder tile and moving into the ladder's facing direction,
+     * move them straight up to the next Z level.
+     * Returns true if the actor is on a ladder and climbing.
+     */
+    private fun applyLadderClimb(actor: Actor, moveDir: Vec3): Boolean {
+        if (moveDir.isZero) return false
+
+        val nx = round(actor.position.x).toInt()
+        val ny = round(actor.position.y).toInt()
+        val z = round(actor.position.z).toInt()
+
+         // Check current node and one below
+        for (checkZ in intArrayOf(z, z - 1)) {
+            val node = world.getNode(nx, ny, checkZ) ?: continue
+            val ladderTile = node.getTile(TileSlot.STAIRS) as? LadderTile ?: continue
+
+            // Only climb if actor is near the wall the ladder faces
+            val facing = ladderTile.facingDirection()
+            val size = actor.collisionSize
+            val localX = actor.position.x - nx
+            val localY = actor.position.y - ny
+            val nearLadderWall = when (facing) {
+                TileSlot.WALL_NORTH -> localY + size > 0.35f
+                TileSlot.WALL_SOUTH -> localY - size < -0.35f
+                TileSlot.WALL_EAST  -> localX + size > 0.35f
+                TileSlot.WALL_WEST  -> localX - size < -0.35f
+                else -> false
+            }
+            if (!nearLadderWall) continue
+
+            // If there's a floor above the ladder, don't climb — ladder acts as wall
+            if (hasFloorAbove(nx, ny, checkZ)) continue
+
+            // Only climb if actor is moving into the ladder's facing direction
+            val movingIntoLadder = when (facing) {
+                TileSlot.WALL_NORTH -> moveDir.y > 0f
+                TileSlot.WALL_SOUTH -> moveDir.y < 0f
+                TileSlot.WALL_EAST  -> moveDir.x > 0f
+                TileSlot.WALL_WEST  -> moveDir.x < 0f
+                else -> false
+            }
+            if (!movingIntoLadder) continue
+
+            val baseZ = checkZ.toFloat()
+            val targetZ = baseZ + 1f // Ladder always lifts one full Z level
+
+            // Smoothly move up: interpolate toward the target
+            val climbSpeed = 2.0f // Z units per second — will feel instant with small delta
+            val diff = targetZ - actor.position.z
+            if (diff > 0.01f) {
+                // Still climbing
+                actor.position.z = (actor.position.z + climbSpeed * com.badlogic.gdx.Gdx.graphics.deltaTime)
+                    .coerceAtMost(targetZ)
+            } else {
+                actor.position.z = targetZ
+            }
+            return true
+        }
+        return false
+    }
+
+    /**
+     * If the actor is adjacent to a ladder-tagged edge and actively moving into it,
+     * move them straight up along Z axis.
+     * Returns true if the actor is climbing a ladder edge.
+     */
+    private fun applyLadderEdgeClimb(actor: Actor, moveDir: Vec3): Boolean {
+        if (moveDir.isZero) return false
+
+        val nx = round(actor.position.x).toInt()
+        val ny = round(actor.position.y).toInt()
+        val z = round(actor.position.z).toInt()
+        val size = actor.collisionSize
+
+        val node = world.getNode(nx, ny, z) ?: return false
+
+        // Check if the actor's collision box is pressing against a ladder-tagged edge
+        // AND the actor is moving in the direction of that edge
+        val localX = actor.position.x - nx
+        val localY = actor.position.y - ny
+
+        val nearEdge = when {
+            localY + size > 0.35f && node.isLadder(TileSlot.WALL_NORTH) && moveDir.y > 0f -> true
+            localY - size < -0.35f && node.isLadder(TileSlot.WALL_SOUTH) && moveDir.y < 0f -> true
+            localX + size > 0.35f && node.isLadder(TileSlot.WALL_EAST) && moveDir.x > 0f -> true
+            localX - size < -0.35f && node.isLadder(TileSlot.WALL_WEST) && moveDir.x < 0f -> true
+            else -> false
+        }
+
+        if (!nearEdge) return false
+
+        // If there's a floor above, don't climb — ladder acts as wall
+        if (hasFloorAbove(nx, ny, z)) return false
+
+        val climbSpeed = 2.0f
+        actor.position.z += climbSpeed * com.badlogic.gdx.Gdx.graphics.deltaTime
+        return true
+    }
+
+    /**
+     * Returns true if the actor is currently on/near a ladder (tile or edge) and should not fall.
+     * The actor falls only if actively moving away from the ladder.
+     */
+    private fun isOnLadder(actor: Actor, moveDir: Vec3): Boolean {
+        val nx = round(actor.position.x).toInt()
+        val ny = round(actor.position.y).toInt()
+        val z = round(actor.position.z).toInt()
+        val size = actor.collisionSize
+
+        // Check ladder tile — only if player is near the wall the ladder faces and no floor above
+        for (checkZ in intArrayOf(z, z - 1)) {
+            val node = world.getNode(nx, ny, checkZ) ?: continue
+            val ladderTile = node.getTile(TileSlot.STAIRS) as? LadderTile ?: continue
+            if (hasFloorAbove(nx, ny, checkZ)) continue
+            val facing = ladderTile.facingDirection()
+            val localX = actor.position.x - nx
+            val localY = actor.position.y - ny
+            val nearLadderWall = when (facing) {
+                TileSlot.WALL_NORTH -> localY + size > 0.35f
+                TileSlot.WALL_SOUTH -> localY - size < -0.35f
+                TileSlot.WALL_EAST  -> localX + size > 0.35f
+                TileSlot.WALL_WEST  -> localX - size < -0.35f
+                else -> false
+            }
+            if (!nearLadderWall) continue
+            if (moveDir.isZero) {
+                if (logCooldown <= 0f) println("[$LOG_TAG] isOnLadder=true (tile at node($nx,$ny,$checkZ) facing=$facing, not moving)")
+                return true
+            }
+            val movingAway = when (facing) {
+                TileSlot.WALL_NORTH -> moveDir.y < 0f
+                TileSlot.WALL_SOUTH -> moveDir.y > 0f
+                TileSlot.WALL_EAST  -> moveDir.x < 0f
+                TileSlot.WALL_WEST  -> moveDir.x > 0f
+                else -> false
+            }
+            if (!movingAway) {
+                if (logCooldown <= 0f) println("[$LOG_TAG] isOnLadder=true (tile at node($nx,$ny,$checkZ) facing=$facing, not moving away)")
+                return true
+            }
+        }
+
+        // Check ladder edge — only if no floor above
+        val node = world.getNode(nx, ny, z)
+        if (node != null && !hasFloorAbove(nx, ny, z)) {
+            val localX = actor.position.x - nx
+            val localY = actor.position.y - ny
+            val nearNorth = localY + size > 0.35f && node.isLadder(TileSlot.WALL_NORTH)
+            val nearSouth = localY - size < -0.35f && node.isLadder(TileSlot.WALL_SOUTH)
+            val nearEast  = localX + size > 0.35f && node.isLadder(TileSlot.WALL_EAST)
+            val nearWest  = localX - size < -0.35f && node.isLadder(TileSlot.WALL_WEST)
+
+            if (nearNorth || nearSouth || nearEast || nearWest) {
+                if (moveDir.isZero) {
+                    if (logCooldown <= 0f) println("[$LOG_TAG] isOnLadder=true (edge at node($nx,$ny,$z) N=$nearNorth S=$nearSouth E=$nearEast W=$nearWest, not moving)")
+                    return true
+                }
+                val movingAway = when {
+                    nearNorth -> moveDir.y < 0f
+                    nearSouth -> moveDir.y > 0f
+                    nearEast  -> moveDir.x < 0f
+                    nearWest  -> moveDir.x > 0f
+                    else -> false
+                }
+                if (!movingAway) {
+                    if (logCooldown <= 0f) println("[$LOG_TAG] isOnLadder=true (edge at node($nx,$ny,$z) N=$nearNorth S=$nearSouth E=$nearEast W=$nearWest, not moving away)")
+                    return true
+                }
+            }
+        }
+
+        return false
+    }
+
+    /**
      * Check if the actor's bounding box at (tx, ty) would cross any blocking wall edge.
      *
      * Walls sit at integer boundaries (e.g. x=1.5 is the boundary between node x=1 and x=2).
@@ -176,9 +376,17 @@ class MovementSystem(private val world: World) {
                         if (log) println("[$LOG_TAG]   BLOCKED by EAST wall at node($ix,$iy,$z)")
                         return false
                     }
+                    if (leftNode != null && leftNode.isLadder(TileSlot.WALL_EAST)) {
+                        if (log) println("[$LOG_TAG]   BLOCKED by EAST ladder at node($ix,$iy,$z)")
+                        return false
+                    }
                     val rightNode = world.getNode(ix + 1, iy, z)
                     if (rightNode != null && rightNode.isWallBlocking(TileSlot.WALL_WEST)) {
                         if (log) println("[$LOG_TAG]   BLOCKED by WEST wall at node(${ix+1},$iy,$z)")
+                        return false
+                    }
+                    if (rightNode != null && rightNode.isLadder(TileSlot.WALL_WEST)) {
+                        if (log) println("[$LOG_TAG]   BLOCKED by WEST ladder at node(${ix+1},$iy,$z)")
                         return false
                     }
                 }
@@ -199,9 +407,17 @@ class MovementSystem(private val world: World) {
                         if (log) println("[$LOG_TAG]   BLOCKED by NORTH wall at node($ix,$iy,$z)")
                         return false
                     }
+                    if (belowNode != null && belowNode.isLadder(TileSlot.WALL_NORTH)) {
+                        if (log) println("[$LOG_TAG]   BLOCKED by NORTH ladder at node($ix,$iy,$z)")
+                        return false
+                    }
                     val aboveNode = world.getNode(ix, iy + 1, z)
                     if (aboveNode != null && aboveNode.isWallBlocking(TileSlot.WALL_SOUTH)) {
                         if (log) println("[$LOG_TAG]   BLOCKED by SOUTH wall at node($ix,${iy+1},$z)")
+                        return false
+                    }
+                    if (aboveNode != null && aboveNode.isLadder(TileSlot.WALL_SOUTH)) {
+                        if (log) println("[$LOG_TAG]   BLOCKED by SOUTH ladder at node($ix,${iy+1},$z)")
                         return false
                     }
                 }
@@ -218,6 +434,10 @@ class MovementSystem(private val world: World) {
                     if (log) println("[$LOG_TAG]   BLOCKED by stairs $side side at node($targetNodeX,$targetNodeY,$z)")
                     return false
                 }
+                if (isLadderFacingBlocked(targetNodeX, targetNodeY, z, side, actorNodeX, actorNodeY)) {
+                    if (log) println("[$LOG_TAG]   BLOCKED by ladder $side side at node($targetNodeX,$targetNodeY,$z)")
+                    return false
+                }
             }
             if (targetNodeY != actorNodeY) {
                 val side = if (targetNodeY > actorNodeY) TileSlot.WALL_SOUTH else TileSlot.WALL_NORTH
@@ -225,10 +445,49 @@ class MovementSystem(private val world: World) {
                     if (log) println("[$LOG_TAG]   BLOCKED by stairs $side side at node($targetNodeX,$targetNodeY,$z)")
                     return false
                 }
+                if (isLadderFacingBlocked(targetNodeX, targetNodeY, z, side, actorNodeX, actorNodeY)) {
+                    if (log) println("[$LOG_TAG]   BLOCKED by ladder $side side at node($targetNodeX,$targetNodeY,$z)")
+                    return false
+                }
+            }
+        }
+
+
+        // Check ladder model collision (ladder is a thin obstacle within its node)
+        // Only blocks when there's a floor above (ladder acts as wall); otherwise climbing handles it
+        val ladderCheckX = round(tx).toInt()
+        val ladderCheckY = round(ty).toInt()
+        val ladderNode = world.getNode(ladderCheckX, ladderCheckY, z)
+        if (ladderNode != null) {
+            val ladderTile = ladderNode.getTile(TileSlot.STAIRS) as? LadderTile
+            if (ladderTile != null && hasFloorAbove(ladderCheckX, ladderCheckY, z)) {
+                val facing = ladderTile.facingDirection()
+                val localX = tx - ladderCheckX
+                val localY = ty - ladderCheckY
+                val modelPos = 0.35f
+                val blocked = when (facing) {
+                    TileSlot.WALL_NORTH -> localY + size > modelPos
+                    TileSlot.WALL_SOUTH -> localY - size < -modelPos
+                    TileSlot.WALL_EAST  -> localX + size > modelPos
+                    TileSlot.WALL_WEST  -> localX - size < -modelPos
+                    else -> false
+                }
+                if (blocked) {
+                    if (log) println("[$LOG_TAG]   BLOCKED by ladder model at node($ladderCheckX,$ladderCheckY,$z) facing=$facing")
+                    return false
+                }
             }
         }
 
         return true
+    }
+
+    /**
+     * Returns true if a ladder tile at (nx, ny, z) blocks entry from the given side.
+     * Ladder does not block node entry — collision is handled internally.
+     */
+    private fun isLadderFacingBlocked(nx: Int, ny: Int, z: Int, entrySide: TileSlot, actorNodeX: Int, actorNodeY: Int): Boolean {
+        return false
     }
 
     /**
@@ -265,6 +524,27 @@ class MovementSystem(private val world: World) {
             if (node != null && (node.hasFloor || node.hasTile(TileSlot.STAIRS))) {
                 actor.position.z = z.toFloat()
                 return
+            }
+            // Check if the node below has a ladder tile (ladder top is walkable only above the model)
+            val below = world.getNode(nx, ny, z - 1)
+            if (below != null) {
+                val ladderTile = below.getTile(TileSlot.STAIRS) as? LadderTile
+                if (ladderTile != null) {
+                    val facing = ladderTile.facingDirection()
+                    val localX = actor.position.x - nx
+                    val localY = actor.position.y - ny
+                    val onLadderTop = when (facing) {
+                        TileSlot.WALL_NORTH -> localY > 0.2f
+                        TileSlot.WALL_SOUTH -> localY < -0.2f
+                        TileSlot.WALL_EAST  -> localX > 0.2f
+                        TileSlot.WALL_WEST  -> localX < -0.2f
+                        else -> false
+                    }
+                    if (onLadderTop) {
+                        actor.position.z = z.toFloat()
+                        return
+                    }
+                }
             }
             z--
         }

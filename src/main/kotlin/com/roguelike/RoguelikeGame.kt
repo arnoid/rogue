@@ -361,6 +361,39 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
             Gdx.gl.glLineWidth(1f)
             Gdx.gl.glDisable(GL20.GL_BLEND)
 
+            // ── Ladder up-arrows (green) ─────────────────────────────────────
+            Gdx.gl.glEnable(GL20.GL_BLEND)
+            Gdx.gl.glLineWidth(3f)
+            debugShapeRenderer.projectionMatrix = camera.combined
+            debugShapeRenderer.begin(com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType.Line)
+            debugShapeRenderer.color = Color(0.3f, 1f, 0.3f, 1f)
+            for (x in 0 until world.width) {
+                for (y in 0 until world.height) {
+                    val z = playerNodeZ
+                    val node = world.getNode(x, y, z) ?: continue
+                    for (slot in node.ladderSlots) {
+                        val offset = when (slot) {
+                            com.roguelike.core.model.TileSlot.WALL_NORTH -> com.badlogic.gdx.math.Vector3(0f, 0.5f, 0f)
+                            com.roguelike.core.model.TileSlot.WALL_SOUTH -> com.badlogic.gdx.math.Vector3(0f, -0.5f, 0f)
+                            com.roguelike.core.model.TileSlot.WALL_EAST  -> com.badlogic.gdx.math.Vector3(0.5f, 0f, 0f)
+                            com.roguelike.core.model.TileSlot.WALL_WEST  -> com.badlogic.gdx.math.Vector3(-0.5f, 0f, 0f)
+                            else -> continue
+                        }
+                        val ex = x + offset.x
+                        val ey = y + offset.y
+                        val ez = z.toFloat()
+                        val len = 0.4f; val headLen = 0.15f
+                        val tipZ = ez + len
+                        debugShapeRenderer.line(ex, ey, ez - len, ex, ey, tipZ)
+                        debugShapeRenderer.line(ex, ey, tipZ, ex + headLen, ey, tipZ - headLen)
+                        debugShapeRenderer.line(ex, ey, tipZ, ex - headLen, ey, tipZ - headLen)
+                    }
+                }
+            }
+            debugShapeRenderer.end()
+            Gdx.gl.glLineWidth(1f)
+            Gdx.gl.glDisable(GL20.GL_BLEND)
+
             // ── Tag text labels — projected to screen 2D ──────────────────────
             val viewW = Gdx.graphics.width.toFloat()
             val viewH = Gdx.graphics.height.toFloat()

@@ -53,7 +53,6 @@ nodes: [
 			{
 				type: StairsTile
 				slot: STAIRS
-				rotY: -180
 			}
 		]
 	}
@@ -135,6 +134,7 @@ nodes: [
 			{
 				type: StairsTile
 				slot: STAIRS
+				rotY: -180
 			}
 		]
 	}
@@ -219,7 +219,6 @@ nodes: [
 			{
 				type: StairsTile
 				slot: STAIRS
-				rotY: -180
 			}
 		]
 	}
@@ -280,6 +279,7 @@ nodes: [
 			{
 				type: StairsTile
 				slot: STAIRS
+				rotY: -180
 			}
 		]
 	}
@@ -361,7 +361,6 @@ nodes: [
 			{
 				type: StairsTile
 				slot: STAIRS
-				rotY: -180
 			}
 		]
 	}
@@ -449,6 +448,7 @@ nodes: [
 			{
 				type: StairsTile
 				slot: STAIRS
+				rotY: -180
 			}
 		]
 	}
