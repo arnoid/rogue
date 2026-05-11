@@ -26,26 +26,23 @@ nodes: [
 		]
 	}
 	{
-		x: 1
-		z: 1
+		y: 1
+		z: 2
 		tiles: [
 			{
-				type: FloorTile
-				slot: FLOOR
-			}
-			{
-				type: WallEastTile
-				slot: WALL_EAST
-				rotY: -90
+				type: WallNorthTile
+				slot: WALL_NORTH
 			}
 			{
 				type: WallWestTile
 				slot: WALL_WEST
 				rotY: 90
 			}
-		]
-		connectorSlots: [
-			WALL_SOUTH
+			{
+				type: WallSouthTile
+				slot: WALL_SOUTH
+				rotY: 180
+			}
 		]
 	}
 	{
@@ -54,6 +51,15 @@ nodes: [
 		z: 1
 		tiles: [
 			{
+				type: WallSouthTile
+				slot: WALL_SOUTH
+				rotY: 180
+			}
+			{
+				type: WallNorthTile
+				slot: WALL_NORTH
+			}
+			{
 				type: FloorTile
 				slot: FLOOR
 			}
@@ -61,32 +67,47 @@ nodes: [
 	}
 	{
 		x: 1
-		y: 2
-		z: 1
+		y: 1
+		z: 2
 		tiles: [
 			{
-				type: FloorTile
-				slot: FLOOR
+				type: WallNorthTile
+				slot: WALL_NORTH
 			}
 			{
-				type: WallEastTile
-				slot: WALL_EAST
-				rotY: -90
+				type: WallSouthTile
+				slot: WALL_SOUTH
+				rotY: 180
 			}
-			{
-				type: WallWestTile
-				slot: WALL_WEST
-				rotY: 90
-			}
-		]
-		connectorSlots: [
-			WALL_NORTH
 		]
 	}
 	{
 		x: 2
 		y: 1
 		z: 1
+		tiles: [
+			{
+				type: WallSouthTile
+				slot: WALL_SOUTH
+				rotY: 180
+			}
+			{
+				type: WallNorthTile
+				slot: WALL_NORTH
+			}
+			{
+				type: FloorTile
+				slot: FLOOR
+			}
+		]
+		connectorSlots: [
+			WALL_EAST
+		]
+	}
+	{
+		x: 2
+		y: 1
+		z: 2
 		tiles: [
 			{
 				type: WallNorthTile
@@ -98,12 +119,10 @@ nodes: [
 				rotY: 180
 			}
 			{
-				type: FloorTile
-				slot: FLOOR
+				type: WallEastTile
+				slot: WALL_EAST
+				rotY: -90
 			}
-		]
-		connectorSlots: [
-			WALL_EAST
 		]
 	}
 ]

@@ -4,43 +4,18 @@ height: 3
 depth: 3
 nodes: [
 	{
-		z: 1
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-			{
-				type: WallWestTile
-				slot: WALL_WEST
-				rotY: 90
-			}
-			{
-				type: WallSouthTile
-				slot: WALL_SOUTH
-				rotY: 180
-			}
-		]
-	}
-	{
-		z: 2
-		tiles: [
-			{
-				type: WallSouthTile
-				slot: WALL_SOUTH
-				rotY: 180
-			}
-			{
-				type: WallWestTile
-				slot: WALL_WEST
-				rotY: 90
-			}
-		]
-	}
-	{
 		y: 1
 		z: 1
 		tiles: [
+			{
+				type: WallSouthTile
+				slot: WALL_SOUTH
+				rotY: 180
+			}
+			{
+				type: WallNorthTile
+				slot: WALL_NORTH
+			}
 			{
 				type: FloorTile
 				slot: FLOOR
@@ -55,21 +30,6 @@ nodes: [
 		z: 2
 		tiles: [
 			{
-				type: WallWestTile
-				slot: WALL_WEST
-				rotY: 90
-			}
-		]
-	}
-	{
-		y: 2
-		z: 1
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-			{
 				type: WallNorthTile
 				slot: WALL_NORTH
 			}
@@ -78,20 +38,10 @@ nodes: [
 				slot: WALL_WEST
 				rotY: 90
 			}
-		]
-	}
-	{
-		y: 2
-		z: 2
-		tiles: [
 			{
-				type: WallWestTile
-				slot: WALL_WEST
-				rotY: 90
-			}
-			{
-				type: WallNorthTile
-				slot: WALL_NORTH
+				type: WallSouthTile
+				slot: WALL_SOUTH
+				rotY: 180
 			}
 		]
 	}
@@ -102,6 +52,16 @@ nodes: [
 			{
 				type: FloorTile
 				slot: FLOOR
+			}
+			{
+				type: WallEastTile
+				slot: WALL_EAST
+				rotY: -90
+			}
+			{
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
 			}
 		]
 		connectorSlots: [
@@ -113,9 +73,19 @@ nodes: [
 		z: 2
 		tiles: [
 			{
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
+			}
+			{
 				type: WallSouthTile
 				slot: WALL_SOUTH
 				rotY: 180
+			}
+			{
+				type: WallEastTile
+				slot: WALL_EAST
+				rotY: -90
 			}
 		]
 	}
@@ -123,9 +93,6 @@ nodes: [
 		x: 1
 		y: 1
 		z: 1
-		tags: [
-			player_spawn
-		]
 		tiles: [
 			{
 				type: FloorTile
@@ -141,6 +108,16 @@ nodes: [
 			{
 				type: FloorTile
 				slot: FLOOR
+			}
+			{
+				type: WallEastTile
+				slot: WALL_EAST
+				rotY: -90
+			}
+			{
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
 			}
 		]
 		connectorSlots: [
@@ -153,44 +130,18 @@ nodes: [
 		z: 2
 		tiles: [
 			{
+				type: WallWestTile
+				slot: WALL_WEST
+				rotY: 90
+			}
+			{
 				type: WallNorthTile
 				slot: WALL_NORTH
 			}
-		]
-	}
-	{
-		x: 2
-		z: 1
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
-			}
-			{
-				type: WallSouthTile
-				slot: WALL_SOUTH
-				rotY: 180
-			}
 			{
 				type: WallEastTile
 				slot: WALL_EAST
 				rotY: -90
-			}
-		]
-	}
-	{
-		x: 2
-		z: 2
-		tiles: [
-			{
-				type: WallEastTile
-				slot: WALL_EAST
-				rotY: -90
-			}
-			{
-				type: WallSouthTile
-				slot: WALL_SOUTH
-				rotY: 180
 			}
 		]
 	}
@@ -199,6 +150,15 @@ nodes: [
 		y: 1
 		z: 1
 		tiles: [
+			{
+				type: WallNorthTile
+				slot: WALL_NORTH
+			}
+			{
+				type: WallSouthTile
+				slot: WALL_SOUTH
+				rotY: 180
+			}
 			{
 				type: FloorTile
 				slot: FLOOR
@@ -214,24 +174,9 @@ nodes: [
 		z: 2
 		tiles: [
 			{
-				type: FloorTile
-				slot: FLOOR
-			}
-			{
-				type: WallEastTile
-				slot: WALL_EAST
-				rotY: -90
-			}
-		]
-	}
-	{
-		x: 2
-		y: 2
-		z: 1
-		tiles: [
-			{
-				type: FloorTile
-				slot: FLOOR
+				type: WallSouthTile
+				slot: WALL_SOUTH
+				rotY: 180
 			}
 			{
 				type: WallEastTile
@@ -241,22 +186,6 @@ nodes: [
 			{
 				type: WallNorthTile
 				slot: WALL_NORTH
-			}
-		]
-	}
-	{
-		x: 2
-		y: 2
-		z: 2
-		tiles: [
-			{
-				type: WallNorthTile
-				slot: WALL_NORTH
-			}
-			{
-				type: WallEastTile
-				slot: WALL_EAST
-				rotY: -90
 			}
 		]
 	}

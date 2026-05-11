@@ -46,7 +46,7 @@ class MapGenerator(
             for (candidate in candidates) {
                 val matchingSockets = candidate.sockets.filter { s ->
                     s.direction == oppositeDir && s.tag == socket.tag
-                }
+                }.shuffled()
                 for (matchSocket in matchingSockets) {
                     val candidateOrigin = absolutePos + socket.direction - matchSocket.localPosition
                     if (!canPlace(candidate, candidateOrigin)) continue
@@ -96,7 +96,7 @@ class MapGenerator(
             for (candidate in candidates) {
                 val matchingSockets = candidate.sockets.filter { s ->
                     s.direction == oppositeDir && s.tag == socket.tag
-                }
+                }.shuffled()
                 for (matchSocket in matchingSockets) {
                     val candidateOrigin = absolutePos + socket.direction - matchSocket.localPosition
                     if (!canPlace(candidate, candidateOrigin)) continue

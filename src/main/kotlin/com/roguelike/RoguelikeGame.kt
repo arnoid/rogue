@@ -209,8 +209,8 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         manager.debugEnabled = false
         manager.debugCallback = generationDebugUI
 
-        // Load templates from the default-submaps directory (sibling of starting-submaps)
-        val templateDir = java.io.File(path).parentFile?.parentFile?.resolve("default-submaps")?.absolutePath
+        // Load templates from the submaps directory (sibling of starting-submaps)
+        val templateDir = java.io.File(path).parentFile?.parentFile?.resolve("submaps")?.absolutePath
         if (templateDir != null) {
             manager.loadTemplates(templateDir)
         }

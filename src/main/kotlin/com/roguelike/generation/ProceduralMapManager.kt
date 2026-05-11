@@ -52,7 +52,7 @@ class ProceduralMapManager(
             return
         }
 
-        dir.listFiles { f -> f.extension == "wld" }?.forEach { file ->
+        dir.walkTopDown().filter { it.isFile && it.extension == "wld" }.forEach { file ->
             val world = WorldIO.loadWorld(
                 file.absolutePath,
                 worldFactory,
@@ -115,13 +115,8 @@ class ProceduralMapManager(
         val world = worldFactory(w, h, d)
         activeWorld = world
 
-        // Initialize generator with all templates
-        val allTemplates = loadedTemplates.toMutableList()
-        if (loadedTemplates.none { it.name == "initial" }) {
-            allTemplates.add(initialTemplate)
-        }
-
-        generator = MapGenerator(allTemplates, debugEnabled)
+        // Initialize generator with loaded templates only (starting submap is NOT used as random template)
+        generator = MapGenerator(loadedTemplates, debugEnabled)
 
         // If debug is enabled, launch a coroutine that bridges the generator's
         // debug channels to the UI callback
