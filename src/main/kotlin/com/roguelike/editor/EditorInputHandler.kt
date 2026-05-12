@@ -4,6 +4,7 @@ import com.badlogic.gdx.Gdx
 import com.badlogic.gdx.Input
 import com.roguelike.core.model.TileSlot
 import com.roguelike.core.model.World
+import com.roguelike.core.model.Prop
 import com.roguelike.utils.ModelLoader
 import com.roguelike.world.BaseTile
 
@@ -36,6 +37,10 @@ class EditorInputHandler(
 
     /** Currently selected edge (wall slot) on the selected node, or null for whole-node selection. */
     var selectedEdge: TileSlot? = null
+
+    /** Currently selected prop for movement/deletion. */
+    var selectedProp: Prop? = null
+    private var isDraggingProp = false
 
     private var lastPaintX = -1
     private var lastPaintY = -1
@@ -115,8 +120,25 @@ class EditorInputHandler(
                     }
                 }
                 null -> {}
+                is PaletteSelection.DecorationSel -> {
+                    val prop = findPropAt(world, hoveredX.toFloat(), hoveredY.toFloat(), hoveredZ.toFloat())
+                    if (prop != null) {
+                        world.props.remove(prop)
+                        if (selectedProp == prop) selectedProp = null
+                    }
+                }
             }
             return
+        }
+
+        // ── Ctrl+LMB with no selection: delete prop if hovered ──────────────
+        if (Gdx.input.isButtonPressed(Input.Buttons.LEFT) && isCtrlHeld && hoveredX != -1) {
+            val prop = findPropAt(world, hoveredX.toFloat(), hoveredY.toFloat(), hoveredZ.toFloat())
+            if (prop != null) {
+                world.props.remove(prop)
+                if (selectedProp == prop) selectedProp = null
+                return
+            }
         }
 
         // ── Normal LMB: paint / select ─────────────────────────────────────
@@ -220,11 +242,31 @@ class EditorInputHandler(
                     }
                 }
                 null -> {
-                    // No palette selection → just select node/edge
+                    // No palette selection → select prop or node/edge
                     if (Gdx.input.justTouched()) {
-                        selectedX = hoveredX; selectedY = hoveredY; selectedZ = hoveredZ
-                        selectedEdge = hoveredEdge
+                        val prop = findPropAt(world, hoveredX.toFloat(), hoveredY.toFloat(), hoveredZ.toFloat())
+                        if (prop != null) {
+                            selectedProp = prop
+                        } else {
+                            selectedProp = null
+                            selectedX = hoveredX; selectedY = hoveredY; selectedZ = hoveredZ
+                            selectedEdge = hoveredEdge
+                        }
                         onUpdatePaletteHighlights()
+                    }
+                }
+                is PaletteSelection.DecorationSel -> {
+                    if (Gdx.input.justTouched() && hoveredX != -1) {
+                        // Place a new prop at the hovered position
+                        val prop = Prop(
+                            modelPath = sel.modelPath,
+                            name = sel.name,
+                            x = hoveredX.toFloat(),
+                            y = hoveredY.toFloat(),
+                            z = hoveredZ.toFloat()
+                        )
+                        world.props.add(prop)
+                        selectedProp = prop
                     }
                 }
             }
@@ -245,10 +287,38 @@ class EditorInputHandler(
                 }
             }
         }
+
+        // ── WASD micro-movement & Q/E rotation for selected prop ─────────
+        val prop = selectedProp
+        if (prop != null) {
+            val microStep = 0.05f
+            if (Gdx.input.isKeyJustPressed(Input.Keys.W)) prop.y += microStep
+            if (Gdx.input.isKeyJustPressed(Input.Keys.S)) prop.y -= microStep
+            if (Gdx.input.isKeyJustPressed(Input.Keys.A)) prop.x -= microStep
+            if (Gdx.input.isKeyJustPressed(Input.Keys.D)) prop.x += microStep
+            if (Gdx.input.isKeyJustPressed(Input.Keys.Q)) prop.rotationY -= 15f
+            if (Gdx.input.isKeyJustPressed(Input.Keys.E)) prop.rotationY += 15f
+            if (Gdx.input.isKeyJustPressed(Input.Keys.Z)) prop.scale = (prop.scale - 0.05f).coerceAtLeast(0.05f)
+            if (Gdx.input.isKeyJustPressed(Input.Keys.X)) prop.scale += 0.05f
+            if (Gdx.input.isKeyJustPressed(Input.Keys.R)) prop.z += microStep
+            if (Gdx.input.isKeyJustPressed(Input.Keys.F)) prop.z -= microStep
+        }
     }
 
     companion object {
         private const val FloorTile_TYPE = "FloorTile"
+
+        fun findPropAt(world: World, x: Float, y: Float, z: Float): Prop? {
+            return world.props.find { prop ->
+                val dx = x - prop.x
+                val dy = y - prop.y
+                val dz = z - prop.z
+                val (hsX, hsY) = prop.rotatedHalfSizes()
+                kotlin.math.abs(dx) < hsX + 0.5f &&
+                kotlin.math.abs(dy) < hsY + 0.5f &&
+                kotlin.math.abs(dz) < 1f
+            }
+        }
 
         fun wallTypeForSlot(slot: TileSlot): String? = when (slot) {
             TileSlot.WALL_NORTH -> "WallNorthTile"

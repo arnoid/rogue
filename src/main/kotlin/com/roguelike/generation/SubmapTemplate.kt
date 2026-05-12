@@ -112,6 +112,15 @@ data class SubmapTemplate(
             }
         }
 
+        // Rotate props: 90° CW: (x,y) -> (srcH-1-y, x)
+        for (prop in worldData.props) {
+            rotatedWorld.props.add(prop.copy(
+                x = srcH - 1 - prop.y,
+                y = prop.x,
+                rotationY = prop.rotationY - 90f
+            ))
+        }
+
         // Re-derive sockets from the rotated world's connectors (which are correctly placed on outer boundaries)
         val newSockets = mutableListOf<Socket>()
         for (x in 0 until newW) {

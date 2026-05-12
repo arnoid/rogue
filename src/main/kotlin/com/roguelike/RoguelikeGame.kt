@@ -20,6 +20,7 @@ import com.roguelike.core.systems.InteractionSystem
 import com.roguelike.core.systems.MovementSystem
 import com.roguelike.rendering.InventoryUI
 import com.roguelike.rendering.ItemRenderer
+import com.roguelike.rendering.PropRenderer
 import com.roguelike.rendering.TileRenderer
 import com.roguelike.rendering.WorldRenderer
 import com.roguelike.serialization.WorldIO
@@ -79,7 +80,8 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         modelBatch = ModelBatch()
         itemRenderer = ItemRenderer(assetLoader)
         val tileRenderer = TileRenderer(modelLoader.renderRegistry)
-        worldRenderer = WorldRenderer(tileRenderer, itemRenderer)
+        val propRenderer = PropRenderer(assetLoader)
+        worldRenderer = WorldRenderer(tileRenderer, itemRenderer, propRenderer)
 
         // --- World Generation or Loading ---
         if (worldPath != null) {
@@ -87,6 +89,11 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         } else {
             world = World(9, 9, 3)
             WorldGenerator(world).generate()
+        }
+
+        println("[RoguelikeGame] World loaded: ${world.props.size} props")
+        for (prop in world.props) {
+            println("[RoguelikeGame]   prop '${prop.name}' id=${prop.id} pos=(${prop.x},${prop.y},${prop.z}) rot=${prop.rotationY} scale=${prop.scale} collisionHalfSize=(${prop.collisionHalfSizeX},${prop.collisionHalfSizeY}) rotatedHs=${prop.rotatedHalfSizes()} modelPath=${prop.modelPath}")
         }
 
         movementSystem = MovementSystem(world)

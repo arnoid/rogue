@@ -479,6 +479,27 @@ class MovementSystem(private val world: World) {
             }
         }
 
+        // Check prop collision (decorations/furniture with bounding boxes)
+        if (log) println("[$LOG_TAG]   PROP COLLISION CHECK: actorBox=[$left..$right, $bottom..$top] z=$z propCount=${world.props.size}")
+        for (prop in world.props) {
+            val zDist = kotlin.math.abs(z.toFloat() - prop.z)
+            val (hsX, hsY) = prop.rotatedHalfSizes()
+            if (log) println("[$LOG_TAG]     prop '${prop.name}' pos=(${prop.x},${prop.y},${prop.z}) hsX=$hsX hsY=$hsY rot=${prop.rotationY} rawHs=(${prop.collisionHalfSizeX},${prop.collisionHalfSizeY}) zDist=$zDist " +
+                "propBox=[${prop.x - hsX}..${prop.x + hsX}, ${prop.y - hsY}..${prop.y + hsY}] " +
+                "overlapX=${left < prop.x + hsX && right > prop.x - hsX} overlapY=${bottom < prop.y + hsY && top > prop.y - hsY} " +
+                "zInRange=${zDist <= 1f}")
+            if (zDist > 1f) continue
+            if (hsX <= 0f && hsY <= 0f) {
+                if (log) println("[$LOG_TAG]     SKIPPED prop '${prop.name}': collisionHalfSize is zero or negative")
+                continue
+            }
+            if (left < prop.x + hsX && right > prop.x - hsX &&
+                bottom < prop.y + hsY && top > prop.y - hsY) {
+                if (log) println("[$LOG_TAG]   BLOCKED by prop '${prop.name}' at (${prop.x},${prop.y},${prop.z}) hs=($hsX,$hsY)")
+                return false
+            }
+        }
+
         return true
     }
 

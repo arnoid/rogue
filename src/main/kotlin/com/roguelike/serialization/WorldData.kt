@@ -7,7 +7,8 @@ data class WorldData(
     val height: Int = 0, 
     val depth: Int = 0, 
     val nodes: ArrayList<NodeData> = ArrayList(),
-    val associations: ArrayList<AssociationData> = ArrayList()
+    val associations: ArrayList<AssociationData> = ArrayList(),
+    val props: ArrayList<PropData> = ArrayList()
 )
 
 data class NodeData(
@@ -62,6 +63,20 @@ data class ItemData(
     val type: String = "",
     val color: String = "FFFFFFFF", // RGBA8888 hex
     val name: String = ""
+)
+
+data class PropData(
+    val id: String = "",
+    val modelPath: String = "",
+    val name: String = "",
+    val x: Float = 0f,
+    val y: Float = 0f,
+    val z: Float = 0f,
+    val rotationY: Float = 0f,
+    val scale: Float = 1f,
+    val collisionHalfSize: Float = 0.25f,
+    val collisionHalfSizeX: Float? = null,
+    val collisionHalfSizeY: Float? = null
 )
 
 data class AssociationData(

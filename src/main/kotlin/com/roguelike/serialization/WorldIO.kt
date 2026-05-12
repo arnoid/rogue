@@ -8,6 +8,37 @@ import java.io.File
 object WorldIO {
     private val json = com.badlogic.gdx.utils.Json()
 
+    /** Returns the resource root directory (the libGDX working directory). */
+    private fun resourceRoot(): File {
+        val localRoot = Gdx.files?.local("")?.file()?.absoluteFile
+        return localRoot ?: File(".").absoluteFile
+    }
+
+    /** Converts an absolute model path to a path relative to the resource root. */
+    private fun toRelativeModelPath(absolutePath: String): String {
+        val root = resourceRoot().canonicalPath.replace('\\', '/').trimEnd('/') + "/"
+        val normalized = absolutePath.replace('\\', '/')
+        return if (normalized.startsWith(root, ignoreCase = true)) {
+            normalized.removePrefix(root)
+        } else {
+            // Try common resource folder patterns
+            val marker = "/src/main/resources/"
+            val idx = normalized.indexOf(marker, ignoreCase = true)
+            if (idx >= 0) {
+                normalized.substring(idx + marker.length)
+            } else {
+                absolutePath // keep as-is if we can't relativize
+            }
+        }
+    }
+
+    /** Resolves a potentially relative model path to an absolute path. */
+    private fun toAbsoluteModelPath(path: String): String {
+        if (File(path).isAbsolute) return path
+        val resolved = File(resourceRoot(), path)
+        return if (resolved.exists()) resolved.canonicalPath else path
+    }
+
     fun loadWorld(
         path: String,
         worldLoader: (Int, Int, Int) -> World,
@@ -71,6 +102,23 @@ object WorldIO {
                 }
             }
 
+            data.props.forEach { propData ->
+                world.props.add(
+                    Prop(
+                        id = propData.id,
+                        modelPath = toAbsoluteModelPath(propData.modelPath),
+                        name = propData.name,
+                        x = propData.x,
+                        y = propData.y,
+                        z = propData.z,
+                        rotationY = propData.rotationY,
+                        scale = propData.scale,
+                        collisionHalfSizeX = propData.collisionHalfSizeX ?: propData.collisionHalfSize,
+                        collisionHalfSizeY = propData.collisionHalfSizeY ?: propData.collisionHalfSize
+                    )
+                )
+            }
+
             Gdx.app?.log("WorldIO", "World loaded from $path")
             world
         } catch (e: Exception) {
@@ -124,6 +172,24 @@ object WorldIO {
                         assoc.source.x, assoc.source.y, assoc.source.z,
                         assoc.target.x, assoc.target.y, assoc.target.z,
                         assoc.type, assoc.data
+                    )
+                )
+            }
+
+            world.props.forEach { prop ->
+                data.props.add(
+                    PropData(
+                        id = prop.id,
+                        modelPath = toRelativeModelPath(prop.modelPath),
+                        name = prop.name,
+                        x = prop.x,
+                        y = prop.y,
+                        z = prop.z,
+                        rotationY = prop.rotationY,
+                        scale = prop.scale,
+                        collisionHalfSize = prop.collisionHalfSize,
+                        collisionHalfSizeX = prop.collisionHalfSizeX,
+                        collisionHalfSizeY = prop.collisionHalfSizeY
                     )
                 )
             }

@@ -104,6 +104,15 @@ class WorldStamper(
                 }
             }
         }
+
+        // Copy props with offset
+        for (prop in source.props) {
+            target.props.add(prop.copy(
+                x = prop.x + origin.x,
+                y = prop.y + origin.y,
+                z = prop.z + origin.z
+            ))
+        }
     }
 
     /**

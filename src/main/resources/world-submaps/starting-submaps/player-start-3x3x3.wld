@@ -214,10 +214,6 @@ nodes: [
 		z: 2
 		tiles: [
 			{
-				type: FloorTile
-				slot: FLOOR
-			}
-			{
 				type: WallEastTile
 				slot: WALL_EAST
 				rotY: -90

@@ -16,7 +16,11 @@ class AssetLoader {
         val existing = models[name]
         if (existing != null) return existing
 
-        val file = Gdx.files.internal(path)
+        val file = if (java.io.File(path).isAbsolute) {
+            Gdx.files.absolute(path)
+        } else {
+            Gdx.files.internal(path)
+        }
         val model =
                 if (path.endsWith(".obj")) {
                     objLoader.loadModel(file, ObjLoader.ObjLoaderParameters(true))

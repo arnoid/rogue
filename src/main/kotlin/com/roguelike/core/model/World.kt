@@ -25,6 +25,7 @@ class World(width: Int, height: Int, depth: Int) {
 
     private val nodesByTag = mutableMapOf<String, MutableList<WorldNode>>()
     val associations = mutableListOf<Association>()
+    val props = mutableListOf<Prop>()
 
     data class Association(
         val source: WorldNode,

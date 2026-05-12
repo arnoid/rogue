@@ -44,6 +44,7 @@ class MapEditor(private val game: Game) : Screen {
     private lateinit var tileRenderer: TileRenderer
     private lateinit var worldRenderer: WorldRenderer
     private lateinit var itemRenderer: ItemRenderer
+    private lateinit var propRenderer: com.roguelike.rendering.PropRenderer
 
     private var showFrames = true
     private lateinit var frameModel: Model
@@ -96,6 +97,7 @@ class MapEditor(private val game: Game) : Screen {
         itemRenderer = ItemRenderer(assetLoader)
         tileRenderer = TileRenderer(modelLoader.renderRegistry)
         worldRenderer = WorldRenderer(tileRenderer, itemRenderer)
+        propRenderer = com.roguelike.rendering.PropRenderer(assetLoader)
         world = World(6, 6, 3)
         maxRenderZ = world.depth - 1
         cameraTarget.set(world.width / 2f, world.height / 2f, world.depth / 2f)
@@ -350,6 +352,8 @@ class MapEditor(private val game: Game) : Screen {
                 }
             }
         }
+        // Copy props
+        world.props.addAll(oldWorld.props)
         maxRenderZ = world.depth - 1
         statusBar.refresh(world)
         updateCamera()
@@ -423,6 +427,11 @@ class MapEditor(private val game: Game) : Screen {
                     for (item in srcNode.items) dstNode.items.add(item)
                 }
             }
+        }
+
+        // Copy and rotate props
+        for (prop in world.props) {
+            newWorld.props.add(prop.copy())
         }
 
         world = newWorld
@@ -529,6 +538,7 @@ class MapEditor(private val game: Game) : Screen {
             cameraTarget.set(world.width / 2f, world.height / 2f, world.depth / 2f)
             updateCamera()
             addRecentFile(filePath)
+            palette.syncDecorationsFromWorld(world)
         }
     }
 
@@ -601,6 +611,13 @@ class MapEditor(private val game: Game) : Screen {
             // ── World tiles ─────────────────────────────────────────────────
             modelBatch.begin(camera)
             worldRenderer.render(world, modelBatch, environment, maxRenderZ)
+
+            // ── Props (decorations) ────────────────────────────────────────
+            for (prop in world.props) {
+                if (prop.z.toInt() <= maxRenderZ) {
+                    propRenderer.render(prop, modelBatch, environment, selected = prop == inputHandler.selectedProp)
+                }
+            }
 
             // ── Grid frames ─────────────────────────────────────────────────
             if (showFrames) {

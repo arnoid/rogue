@@ -6,7 +6,8 @@ import com.roguelike.world.World
 
 class WorldRenderer(
     private val tileRenderer: TileRenderer,
-    private val itemRenderer: ItemRenderer? = null
+    private val itemRenderer: ItemRenderer? = null,
+    private val propRenderer: PropRenderer? = null
 ) {
 
     fun render(world: World, batch: ModelBatch, environment: Environment, maxZ: Int = world.depth - 1) {
@@ -24,6 +25,16 @@ class WorldRenderer(
                             renderer.render(item, batch, environment, x.toFloat(), y.toFloat(), z.toFloat())
                         }
                     }
+                }
+            }
+        }
+
+        // Render props (freely-placed decorations)
+        propRenderer?.let { renderer ->
+            val maxZClamped = maxZ.coerceAtMost(world.depth - 1)
+            for (prop in world.props) {
+                if (prop.z <= maxZClamped + 1) {
+                    renderer.render(prop, batch, environment)
                 }
             }
         }
