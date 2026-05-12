@@ -62,18 +62,11 @@ class InteractionSystem(
      *         on a valid node or doesn't own the item.
      */
     fun drop(actor: Actor, item: Item): Boolean {
-        if (item !in actor.inventory) {
-            println("[Drop] FAIL: item ${item.name} (${item.id}) not in actor inventory")
-            return false
-        }
+        if (item !in actor.inventory) return false
         val nx = round(actor.position.x).toInt()
         val ny = round(actor.position.y).toInt()
         val nz = round(actor.position.z).toInt()
-        val node = world.getNode(nx, ny, nz)
-        if (node == null) {
-            println("[Drop] FAIL: no node at ($nx,$ny,$nz) — actor.pos=(${actor.position.x},${actor.position.y},${actor.position.z}) worldDims=(${world.width},${world.height},${world.depth})")
-            return false
-        }
+        val node = world.getNode(nx, ny, nz) ?: return false
 
         // Capture facing direction (planar) so re-picked-up items keep
         // a sensible default when dropped again.
@@ -90,7 +83,6 @@ class InteractionSystem(
 
         actor.inventory.remove(item)
         node.items.add(item)
-        println("[Drop] OK: ${item.name} id=${item.id} at ($nx,$ny,$nz) facing=(${item.facingX},${item.facingY}) nodeItems=${node.items.size}")
         logger.log("Interaction", "Dropped: ${item.name} at ($nx,$ny,$nz) facing=(${item.facingX},${item.facingY})")
         return true
     }

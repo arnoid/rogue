@@ -1,9 +1,10 @@
 package com.roguelike.rendering
 
-import com.badlogic.gdx.graphics.Color
 import com.badlogic.gdx.graphics.g3d.Environment
 import com.badlogic.gdx.graphics.g3d.ModelBatch
-import com.roguelike.core.systems.LightMap3D
+import com.roguelike.core.model.TileSlot
+import com.roguelike.core.systems.DynamicLighting
+import com.roguelike.world.BaseTile
 import com.roguelike.world.World
 
 class WorldRenderer(
@@ -12,65 +13,46 @@ class WorldRenderer(
     private val propRenderer: PropRenderer? = null
 ) {
 
-    /** Minimum ambient floor brightness so completely-unlit cells aren't pure black. */
-    private val unlitAmbient = 0.0f
-
-    private val tmpTint = Color(1f, 1f, 1f, 1f)
-    private val tintBuf = FloatArray(3)
-
-    /** Throttle: only emit per-item render log a few times per second per item. */
-    private var lastItemLogNs: Long = 0L
-    private val itemLogIntervalNs: Long = 1_000_000_000L // 1 second
-
     /**
-     * @param lightMap optional multi-Z per-cell brightness map. If non-null,
-     *                 geometry is tinted by `lightMap.tint(x,y,z)`; cells with
-     *                 no light render very dark.
+     * @param dynamicLighting optional per-frame GPU-light driver. Each rendered
+     *                        surface gets an [Environment] that contains only
+     *                        the lights with grid LOS to that surface (sampled
+     *                        at multiple points so partially-occluded surfaces
+     *                        are still lit). The GPU then handles per-pixel
+     *                        attenuation and cone falloff.
      */
     fun render(
         world: World,
         batch: ModelBatch,
         environment: Environment,
         maxZ: Int = world.depth - 1,
-        lightMap: LightMap3D? = null
+        dynamicLighting: DynamicLighting? = null
     ) {
-        val now = System.nanoTime()
-        val shouldLog = (now - lastItemLogNs) > itemLogIntervalNs
-        var itemsRendered = 0
-        var itemCellsSeen = 0
-
         for (x in 0 until world.width) {
             for (y in 0 until world.height) {
                 for (z in 0..maxZ.coerceAtMost(world.depth - 1)) {
                     val node = world.getNode(x, y, z) ?: continue
-                    val tint = tintFor(lightMap, x, y, z)
 
-                    node.tiles.forEach {
-                        tileRenderer.render(it, batch, environment, x.toFloat(), y.toFloat(), z.toFloat(), tint = tint)
+                    node.tiles.forEach { tile ->
+                        val slot = (tile as? BaseTile)?.slot ?: TileSlot.FLOOR
+                        val env = if (dynamicLighting != null) envForTile(dynamicLighting, x, y, z, slot)
+                                  else environment
+                        tileRenderer.render(tile, batch, env, x.toFloat(), y.toFloat(), z.toFloat())
                     }
 
-                    if (node.items.isNotEmpty()) {
-                        itemCellsSeen++
-                        if (shouldLog) {
-                            println("[WorldRenderer] cell ($x,$y,$z) has ${node.items.size} item(s): ${node.items.joinToString { it.name + "#" + it.id.take(6) }} tint=${tint?.let { "(${it.r},${it.g},${it.b})" }}")
-                        }
-                    }
                     itemRenderer?.let { renderer ->
-                        node.items.forEach { item ->
-                            renderer.render(item, batch, environment, x.toFloat(), y.toFloat(), z.toFloat(), tint = tint, debug = shouldLog)
-                            itemsRendered++
+                        if (node.items.isNotEmpty()) {
+                            val env = dynamicLighting?.environmentForCell(x, y, z) ?: environment
+                            node.items.forEach { item ->
+                                renderer.render(item, batch, env, x.toFloat(), y.toFloat(), z.toFloat())
+                            }
                         }
                     }
                 }
             }
         }
 
-        if (shouldLog && (itemCellsSeen > 0 || itemsRendered > 0)) {
-            println("[WorldRenderer] frame summary: itemCellsSeen=$itemCellsSeen itemsRendered=$itemsRendered maxZ=$maxZ depth=${world.depth}")
-            lastItemLogNs = now
-        }
-
-        // Render props (freely-placed decorations)
+        // Render props (freely-placed decorations) — per-cell environment.
         propRenderer?.let { renderer ->
             val maxZClamped = maxZ.coerceAtMost(world.depth - 1)
             for (prop in world.props) {
@@ -78,20 +60,18 @@ class WorldRenderer(
                     val cx = Math.round(prop.x)
                     val cy = Math.round(prop.y)
                     val cz = Math.round(prop.z)
-                    val tint = tintFor(lightMap, cx, cy, cz)
-                    renderer.render(prop, batch, environment, tint = tint)
+                    val env = dynamicLighting?.environmentForCell(cx, cy, cz) ?: environment
+                    renderer.render(prop, batch, env)
                 }
             }
         }
     }
 
-    private fun tintFor(lightMap: LightMap3D?, x: Int, y: Int, z: Int): Color? {
-        if (lightMap == null) return null
-        lightMap.tint(x, y, z, tintBuf)
-        val r = tintBuf[0].coerceAtLeast(unlitAmbient)
-        val g = tintBuf[1].coerceAtLeast(unlitAmbient)
-        val b = tintBuf[2].coerceAtLeast(unlitAmbient)
-        tmpTint.set(r, g, b, 1f)
-        return tmpTint
-    }
+    private fun envForTile(dl: DynamicLighting, x: Int, y: Int, z: Int, slot: TileSlot): Environment =
+        when (slot) {
+            TileSlot.FLOOR -> dl.environmentForFloor(x, y, z)
+            TileSlot.WALL_NORTH, TileSlot.WALL_SOUTH,
+            TileSlot.WALL_EAST,  TileSlot.WALL_WEST -> dl.environmentForWall(x, y, z, slot)
+            else -> dl.environmentForCell(x, y, z)
+        }
 }

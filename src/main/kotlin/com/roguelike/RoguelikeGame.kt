@@ -17,7 +17,6 @@ import com.badlogic.gdx.utils.viewport.ScreenViewport
 import com.roguelike.core.model.GameLogger
 import com.roguelike.core.systems.InteractionSystem
 import com.roguelike.core.systems.LightingSystem
-import com.roguelike.core.systems.LightMap3D
 import com.roguelike.core.systems.MovementSystem
 import com.roguelike.rendering.InventoryUI
 import com.roguelike.rendering.ItemRenderer
@@ -110,11 +109,10 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         cameraManager = CameraManager(camera)
 
         environment = Environment()
-        // No ambient / directional world lights — gameplay is lit only by lit
-        // light-source items carried by actors. A very small ambient is kept so
-        // material colors don't render as absolute black where the diffuse tint
-        // is non-zero; the tint multiplier itself enforces darkness.
-        environment.set(ColorAttribute(ColorAttribute.AmbientLight, 1.0f, 1.0f, 1.0f, 1f))
+        // Gameplay is lit only by dynamic per-pixel item lights (PointLight /
+        // SpotLight). A near-zero ambient keeps surfaces totally black when no
+        // light reaches them and gives lights room to drive contrast.
+        environment.set(ColorAttribute(ColorAttribute.AmbientLight, 0.02f, 0.02f, 0.02f, 1f))
 
         // UI Setup
         stage = Stage(ScreenViewport())
@@ -140,9 +138,7 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         // facing the actor's current direction (so directional lights point
         // where the player was looking when dropped).
         inventoryUI.onItemRightClicked = { item ->
-            println("[RoguelikeGame] right-click drop request: ${item.name} (${item.id}) playerPos=(${player.position.x},${player.position.y},${player.position.z}) facing=(${player.facingDirection.x},${player.facingDirection.y},${player.facingDirection.z})")
-            val ok = interactionSystem.drop(player, item)
-            println("[RoguelikeGame] drop result: $ok inventorySize=${player.inventory.size}")
+            interactionSystem.drop(player, item)
         }
 
         // Generation debug UI (created early so it's available for procedural loading)
@@ -294,25 +290,19 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
 
         modelBatch.begin(camera)
         val playerZ = Math.ceil(player.position.z.toDouble()).toInt()
-        val lightMap: LightMap3D = LightingSystem.compute(world, player)
-        worldRenderer.render(world, modelBatch, environment, maxZ = playerZ, lightMap = lightMap)
+        val dynamicLighting = com.roguelike.core.systems.DynamicLighting.build(world, player)
+        worldRenderer.render(world, modelBatch, environment, maxZ = playerZ, dynamicLighting = dynamicLighting)
 
-        // Player visual is tinted by light at the player's cell (so the player is
-        // visible only when carrying a lit item — matches "no other light").
+        // Player visual gets the same per-cell environment so they're lit by
+        // whichever items reach their cell.
         val pcx = Math.round(player.position.x).coerceIn(0, world.width - 1)
         val pcy = Math.round(player.position.y).coerceIn(0, world.height - 1)
         val pcz = Math.round(player.position.z).coerceIn(0, world.depth - 1)
-        val pTintBuf = FloatArray(3)
-        lightMap.tint(pcx, pcy, pcz, pTintBuf)
+        val playerEnv = dynamicLighting.environmentFor(pcx, pcy, pcz)
         if (playerInstance.materials.size > 0) {
-            val base = Color.BLUE
-            playerInstance.materials.get(0).set(
-                ColorAttribute.createDiffuse(
-                    Color(base.r * pTintBuf[0], base.g * pTintBuf[1], base.b * pTintBuf[2], 1f)
-                )
-            )
+            playerInstance.materials.get(0).set(ColorAttribute.createDiffuse(Color.BLUE))
         }
-        modelBatch.render(playerInstance, environment)
+        modelBatch.render(playerInstance, playerEnv)
 
         if (debugMode) {
             axesInstance.transform.setTranslation(player.position.x, player.position.y, player.position.z)
