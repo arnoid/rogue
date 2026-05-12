@@ -18,6 +18,7 @@ import com.roguelike.core.model.GameLogger
 import com.roguelike.core.systems.InteractionSystem
 import com.roguelike.core.systems.LightingSystem
 import com.roguelike.core.systems.MovementSystem
+import com.roguelike.rendering.BvhOccluder
 import com.roguelike.rendering.InventoryUI
 import com.roguelike.rendering.ItemRenderer
 import com.roguelike.rendering.PropRenderer
@@ -44,6 +45,8 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
 
     // Systems & Renderers
     private lateinit var world: World
+    private lateinit var tileRenderer: TileRenderer
+    private val bvhOccluder = BvhOccluder()
     private lateinit var worldRenderer: WorldRenderer
     private lateinit var itemRenderer: ItemRenderer
     private lateinit var movementSystem: MovementSystem
@@ -92,7 +95,7 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         // Load the item catalog before any rendering that touches items.
         ItemCatalogLoader.loadFromInternal()
         itemRenderer = ItemRenderer(assetLoader)
-        val tileRenderer = TileRenderer(modelLoader.renderRegistry)
+        tileRenderer = TileRenderer(modelLoader.renderRegistry)
         val propRenderer = PropRenderer(assetLoader)
         worldRenderer = WorldRenderer(tileRenderer, itemRenderer, propRenderer)
 
@@ -103,7 +106,6 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
             world = World(9, 9, 3)
             WorldGenerator(world).generate()
         }
-
         println("[RoguelikeGame] World loaded: ${world.props.size} props")
         for (prop in world.props) {
             println("[RoguelikeGame]   prop '${prop.name}' id=${prop.id} pos=(${prop.x},${prop.y},${prop.z}) rot=${prop.rotationY} scale=${prop.scale} collisionHalfSize=(${prop.collisionHalfSizeX},${prop.collisionHalfSizeY}) rotatedHs=${prop.rotatedHalfSizes()} modelPath=${prop.modelPath}")
@@ -307,7 +309,8 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
 
         modelBatch.begin(camera)
         val playerZ = Math.ceil(player.position.z.toDouble()).toInt()
-        val dynamicLighting = com.roguelike.core.systems.DynamicLighting.build(world, player)
+        bvhOccluder.rebuild(tileRenderer.worldSpaceBoxes(world))
+        val dynamicLighting = com.roguelike.core.systems.DynamicLighting.build(world, player, occluder = bvhOccluder)
         worldRenderer.render(world, modelBatch, environment, maxZ = playerZ, dynamicLighting = dynamicLighting)
 
         // Player visual gets the same per-cell environment so they're lit by

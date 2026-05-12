@@ -4,8 +4,10 @@ import com.badlogic.gdx.graphics.Color
 import com.badlogic.gdx.graphics.g3d.*
 import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute
 import com.badlogic.gdx.math.Vector3
+import com.badlogic.gdx.math.collision.BoundingBox
 import com.roguelike.core.model.Tile
 import com.roguelike.core.model.TileSlot
+import com.roguelike.core.model.World
 import com.roguelike.world.*
 
 /**
@@ -150,6 +152,33 @@ class TileRenderer(
         if (rotZ != 0f)                       instance.transform.rotate(Vector3.Z, rotZ)
 
         instance.transform.translate(-renderData.center.x, -renderData.center.y, -renderData.center.z)
+    }
+
+    /**
+     * Computes world-space [BoundingBox] for every blocking tile in [world].
+     * Called once per world load (static geometry) or per frame (dynamic doors/props).
+     * Open doors are excluded because their [Tile.isBlocking] returns false.
+     */
+    fun worldSpaceBoxes(world: World): List<BoundingBox> {
+        val result = mutableListOf<BoundingBox>()
+        for (z in 0 until world.depth) {
+            for (y in 0 until world.height) {
+                for (x in 0 until world.width) {
+                    val node = world.getNode(x, y, z) ?: continue
+                    for (tile in node.tiles) {
+                        if (tile !is BaseTile || !tile.isBlocking()) continue
+                        val renderData = registry[tile] ?: continue
+                        val inst = getInstance(tile) ?: continue
+                        updateTransform(inst, tile, renderData, x.toFloat(), y.toFloat(), z.toFloat(), false)
+                        inst.calculateTransforms()
+                        val box = BoundingBox()
+                        inst.calculateBoundingBox(box)
+                        result.add(box)
+                    }
+                }
+            }
+        }
+        return result
     }
 
     private fun updateColor(instance: ModelInstance, tile: Tile, tint: Color? = null) {

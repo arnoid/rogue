@@ -37,7 +37,8 @@ import kotlin.math.sqrt
  */
 class SurfaceLighting(
     private val world: World,
-    private val lights: List<LightSource>
+    private val lights: List<LightSource>,
+    private val occluder: ModelOcclusionProvider? = null
 ) {
 
     /** A single light emitter located in the world. */
@@ -270,6 +271,8 @@ class SurfaceLighting(
                 leakWarned = true
             }
         }
+        if (occluder != null) return !occluder.isOccluded(oxIn, oyIn, ozIn, txIn, tyIn, tzIn)
+
         val dx = tx - ox; val dy = ty - oy; val dz = tz - oz
         val dist = sqrt((dx * dx + dy * dy + dz * dz).toDouble()).toFloat()
         if (dist < 1e-5f) return true
@@ -442,7 +445,7 @@ class SurfaceLighting(
          * Builds a [SurfaceLighting] for an actor frame: actor inventory lights +
          * world-placed lit items nearby.
          */
-        fun build(world: World, actor: Actor): SurfaceLighting {
+        fun build(world: World, actor: Actor, occluder: ModelOcclusionProvider? = null): SurfaceLighting {
             LightingDiagnostics.logFrame(world, actor)
             val lights = mutableListOf<LightSource>()
             val acx = round(actor.position.x).toInt().coerceIn(0, world.width - 1)
@@ -502,7 +505,7 @@ class SurfaceLighting(
                     }
                 }
             }
-            return SurfaceLighting(world, lights)
+            return SurfaceLighting(world, lights, occluder)
         }
     }
 }

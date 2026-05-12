@@ -64,6 +64,15 @@ object LightingDiagnostics {
     private var lastDumpNanos = 0L
     private const val MIN_INTERVAL_NS = 250_000_000L // 4 Hz max
 
+    // Occluder query counters — reset each logged frame.
+    @Volatile private var occluderHits = 0
+    @Volatile private var occluderMisses = 0
+
+    fun recordOccluderResult(occluded: Boolean) {
+        if (!enabled) return
+        if (occluded) occluderHits++ else occluderMisses++
+    }
+
     fun logFrame(world: World, actor: Actor) {
         if (!enabled) return
         // Throttle so we don't spam the console.
@@ -86,6 +95,8 @@ object LightingDiagnostics {
         @Suppress("UNUSED_VARIABLE") val _t = touchingWall
 
         lastDumpNanos = now
+        val hits = occluderHits; val misses = occluderMisses
+        occluderHits = 0; occluderMisses = 0
 
         println("[$TAG] ── frame dump ──────────────────────────────────────────────")
         println("[$TAG] player pos=(% .4f, % .4f, % .4f)".format(px, py, pz))
@@ -135,6 +146,9 @@ object LightingDiagnostics {
                     "  (info: DDA applies +0.5 shift, this is expected)"
                 else "")
             idx++
+        }
+        if (hits + misses > 0) {
+            println("[$TAG] occluder queries this frame: hits=$hits misses=$misses (${hits + misses} total)")
         }
         println("[$TAG] ────────────────────────────────────────────────────────────")
     }

@@ -35,7 +35,8 @@ class DynamicLighting private constructor(
     private val world: World,
     /** Visible lights this frame, in stable index order. */
     val lights: List<GpuLight>,
-    private val ambient: Color
+    private val ambient: Color,
+    private val occluder: ModelOcclusionProvider? = null
 ) {
 
     /** A built-up gpu light with its world-space position, direction, and grid cell. */
@@ -244,7 +245,7 @@ class DynamicLighting private constructor(
     private fun computeMaskMultiSample(points: FloatArray, scX: Int, scY: Int, scZ: Int): Int {
         var m = 0
         for ((i, l) in lights.withIndex()) {
-            if (i >= 30) break
+            if (i >= MAX_LIGHT_MASK_BITS) break
             // Same cell as the light → automatically visible.
             if (l.cx == scX && l.cy == scY && l.cz == scZ) { m = m or (1 shl i); continue }
             // Pre-compute cone half-angle cosine for CONE lights. Surfaces
@@ -361,11 +362,9 @@ class DynamicLighting private constructor(
         val ox = oxIn + 0.5f; val oy = oyIn + 0.5f; val oz = ozIn + 0.5f
         val tx = txIn + 0.5f; val ty = tyIn + 0.5f; val tz = tzIn + 0.5f
 
-        // ── Diagnostic: when enabled, warn once per build() if the light's
-        //    DDA start voxel differs from its declared source cell. With the
-        //    +0.5 shift these should now agree for inventory lights, but
-        //    we keep the check to catch future regressions.
-        if (LightingDiagnostics.enabled && !leakWarned) {
+        // ── Diagnostic: only relevant when grid DDA is active (occluder == null).
+        //    When an occluder is provided, this code is unreachable.
+        if (LightingDiagnostics.enabled && !leakWarned && occluder == null) {
             val voxX = kotlin.math.floor(ox).toInt()
             val voxY = kotlin.math.floor(oy).toInt()
             val voxZ = kotlin.math.floor(oz).toInt()
@@ -376,6 +375,12 @@ class DynamicLighting private constructor(
                 leakWarned = true
             }
         }
+        if (occluder != null) {
+            val occluded = occluder.isOccluded(oxIn, oyIn, ozIn, txIn, tyIn, tzIn)
+            LightingDiagnostics.recordOccluderResult(occluded)
+            return !occluded
+        }
+
         val dx = tx - ox; val dy = ty - oy; val dz = tz - oz
         val dist = sqrt((dx * dx + dy * dy + dz * dz).toDouble()).toFloat()
         if (dist < 1e-5f) return true
@@ -494,6 +499,12 @@ class DynamicLighting private constructor(
         /** Search radius (in cells) for world-placed lit items around the actor. */
         private const val WORLD_LIGHT_SEARCH_RADIUS = 16
 
+        /** Maximum concurrent light sources in the visibility bitmask. Must be ≥ MAX_SUPPORTED_LIGHTS. */
+        private const val MAX_LIGHT_MASK_BITS = 30
+
+        /** Maximum concurrent dynamic light sources supported by the lighting system. */
+        const val MAX_SUPPORTED_LIGHTS = 8
+
         /** Default ambient — keep very dark so lights actually drive the picture. */
         private val DEFAULT_AMBIENT = Color(0.02f, 0.02f, 0.02f, 1f)
 
@@ -502,7 +513,7 @@ class DynamicLighting private constructor(
          * - Inventory lights are placed at the actor's world position.
          * - World-placed lit items within a small radius are also included.
          */
-        fun build(world: World, actor: Actor, ambient: Color = DEFAULT_AMBIENT): DynamicLighting {
+        fun build(world: World, actor: Actor, ambient: Color = DEFAULT_AMBIENT, occluder: ModelOcclusionProvider? = null): DynamicLighting {
             // Diagnostic dump (no-op unless -Drogue.lightlog=1).
             LightingDiagnostics.logFrame(world, actor)
             val lights = mutableListOf<GpuLight>()
@@ -584,7 +595,7 @@ class DynamicLighting private constructor(
                 println("[LIGHTLOG] DynamicLighting.build complete: ${lights.size} lights ($cone cone / $sphere sphere) actor=(%.2f,%.2f,%.2f) cell=($acx,$acy,$acz)"
                     .format(actor.position.x, actor.position.y, actor.position.z))
             }
-            return DynamicLighting(world, lights, ambient)
+            return DynamicLighting(world, lights, ambient, occluder)
         }
 
         private fun parseColor(hex: String): Color {
