@@ -77,7 +77,18 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
     private val gdxLogger = GameLogger { tag, msg -> Gdx.app?.log(tag, msg) }
 
     override fun show() {
-        modelBatch = ModelBatch()
+        // Configure the default shader. The shipped default GLSL does NOT
+        // support spot lights (only directional + point), so cone-shaped
+        // lights (e.g. Candle) are emitted as PointLights by DynamicLighting
+        // with the cone *shape* enforced on the CPU via the visibility mask.
+        // numSpotLights is left at 0 to match what the shader actually uses;
+        // numPointLights is raised so multiple lit items can co-exist.
+        val shaderConfig = com.badlogic.gdx.graphics.g3d.shaders.DefaultShader.Config().apply {
+            numPointLights = 12
+            numSpotLights = 0
+            numDirectionalLights = 2
+        }
+        modelBatch = ModelBatch(com.badlogic.gdx.graphics.g3d.utils.DefaultShaderProvider(shaderConfig))
         // Load the item catalog before any rendering that touches items.
         ItemCatalogLoader.loadFromInternal()
         itemRenderer = ItemRenderer(assetLoader)
@@ -266,6 +277,12 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         cameraManager.update(player.position)
 
         if (inputHandler.isDebugToggleJustPressed()) debugMode = !debugMode
+
+        // L key: toggle lighting diagnostics. Useful when launching from an
+        // IDE runner that doesn't pass -Drogue.lightlog=1.
+        if (Gdx.input.isKeyJustPressed(Input.Keys.L)) {
+            com.roguelike.core.systems.LightingDiagnostics.toggle()
+        }
 
         if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
             game.screen = MainMenuScreen(game)

@@ -42,9 +42,23 @@ import kotlin.math.round
  */
 object LightingDiagnostics {
 
-    /** Enabled when the system property `rogue.lightlog` is set to anything non-empty. */
+    /**
+     * Enabled when the system property `rogue.lightlog` is set to anything
+     * non-empty at JVM start. Can ALSO be toggled at runtime via
+     * [setEnabled] (e.g. bound to a key press) so the user doesn't have to
+     * restart the game to capture diagnostics.
+     */
     @JvmStatic
-    val enabled: Boolean = System.getProperty("rogue.lightlog")?.isNotEmpty() == true
+    @Volatile
+    var enabled: Boolean = System.getProperty("rogue.lightlog")?.isNotEmpty() == true
+        private set
+
+    fun setEnabled(value: Boolean) {
+        enabled = value
+        println("[LIGHTLOG] diagnostics ${if (value) "ENABLED" else "disabled"}")
+    }
+
+    fun toggle() = setEnabled(!enabled)
 
     private const val TAG = "LIGHTLOG"
     private var lastDumpNanos = 0L
@@ -66,15 +80,26 @@ object LightingDiagnostics {
 
         val touchingWall = abs(offX) > 0.001f || abs(offY) > 0.001f
         val mismatch = (cellX != voxX) || (cellY != voxY) || (cellZ != voxZ)
-        if (!touchingWall && !mismatch) return // nothing interesting to report
+        // We now ALWAYS dump if a lit item is present, so issues like
+        // "candle is lit but no light renders" are visible regardless of
+        // whether the player is touching a wall.
+        @Suppress("UNUSED_VARIABLE") val _t = touchingWall
 
         lastDumpNanos = now
 
         println("[$TAG] ── frame dump ──────────────────────────────────────────────")
         println("[$TAG] player pos=(% .4f, % .4f, % .4f)".format(px, py, pz))
+        val f = actor.facingDirection
+        val fLen = kotlin.math.sqrt((f.x * f.x + f.y * f.y).toDouble()).toFloat()
+        println("[$TAG] player facingDirection=(% .4f, % .4f) len=%.4f".format(f.x, f.y, fLen) +
+            (if (fLen < 1e-4f) "  <<< ZERO LENGTH — spotlights will fall back to (0,1)" else ""))
         println("[$TAG]   game cell  (round) = ($cellX, $cellY, $cellZ)")
-        println("[$TAG]   DDA  voxel (floor) = ($voxX, $voxY, $voxZ)" +
-            if (mismatch) "  <<< MISMATCH: DDA will start in a different cell than the game" else "")
+        // NOTE: It is normal and expected that floor(pos) != round(pos) for any
+        // sub-cell position; the DDA in rayClear applies a +0.5 shift internally
+        // so the two views are reconciled. We display the raw floor() value for
+        // reference only.
+        println("[$TAG]   raw floor(pos)     = ($voxX, $voxY, $voxZ)" +
+            if (mismatch) "  (info: differs from round; DDA applies +0.5 shift, this is fine)" else "")
         println("[$TAG]   sub-cell offset    = (% .4f, % .4f)".format(offX, offY))
 
         // Walls of the current game cell — these are the ones the player is
@@ -105,9 +130,9 @@ object LightingDiagnostics {
                 "range=${def.range} intensity=${def.intensity} cone=${def.coneDegrees}")
             println("[$TAG]     origin world  = (% .4f, % .4f, % .4f)".format(px, py, pz))
             println("[$TAG]     stored cell   = ($lcellX, $lcellY, $lcellZ)  (used for LOS)")
-            println("[$TAG]     DDA start vox = ($lvoxX, $lvoxY, $lvoxZ)" +
+            println("[$TAG]     raw floor()   = ($lvoxX, $lvoxY, $lvoxZ)" +
                 if (lcellX != lvoxX || lcellY != lvoxY || lcellZ != lvoxZ)
-                    "  <<< OFFSET-BY-HALF-CELL — light can bypass adjacent walls"
+                    "  (info: DDA applies +0.5 shift, this is expected)"
                 else "")
             idx++
         }

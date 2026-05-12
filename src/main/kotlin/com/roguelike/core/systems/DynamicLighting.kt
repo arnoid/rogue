@@ -4,7 +4,6 @@ import com.badlogic.gdx.graphics.Color
 import com.badlogic.gdx.graphics.g3d.Environment
 import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute
 import com.badlogic.gdx.graphics.g3d.environment.PointLight
-import com.badlogic.gdx.graphics.g3d.environment.SpotLight
 import com.badlogic.gdx.math.Vector3
 import com.roguelike.core.model.Actor
 import com.roguelike.core.model.ItemCatalog
@@ -248,11 +247,31 @@ class DynamicLighting private constructor(
             if (i >= 30) break
             // Same cell as the light → automatically visible.
             if (l.cx == scX && l.cy == scY && l.cz == scZ) { m = m or (1 shl i); continue }
+            // Pre-compute cone half-angle cosine for CONE lights. Surfaces
+            // outside the cone are excluded BEFORE the LOS ray test, since the
+            // default libGDX shader does not support spot lights and we render
+            // cones as PointLights — we therefore must enforce the cone shape
+            // ourselves in the visibility mask.
+            val isCone = l.def.shape == LightShape.CONE
+            val coneCos = if (isCone) {
+                kotlin.math.cos(Math.toRadians((l.def.coneDegrees / 2.0))).toFloat()
+            } else -1f
             var visible = false
             var p = 0
             while (p < points.size) {
                 val px = points[p]; val py = points[p + 1]; val pz = points[p + 2]
                 p += 3
+                if (isCone) {
+                    // Vector from light to sample point.
+                    val vx = px - l.pos.x
+                    val vy = py - l.pos.y
+                    val vz = pz - l.pos.z
+                    val vlen = sqrt((vx * vx + vy * vy + vz * vz).toDouble()).toFloat()
+                    if (vlen > 1e-5f) {
+                        val dot = (vx * l.dirX + vy * l.dirY + vz * l.dirZ) / vlen
+                        if (dot < coneCos) continue // outside cone — skip this sample
+                    }
+                }
                 if (rayClear(l.pos.x, l.pos.y, l.pos.z, px, py, pz, l.cx, l.cy, l.cz, scX, scY, scZ)) {
                     visible = true
                     break
@@ -272,27 +291,53 @@ class DynamicLighting private constructor(
     private fun buildEnv(mask: Int): Environment {
         val env = Environment()
         env.set(ColorAttribute(ColorAttribute.AmbientLight, ambient.r, ambient.g, ambient.b, 1f))
+        var nPoint = 0
+        var nSpot = 0
         for ((i, l) in lights.withIndex()) {
             if ((mask and (1 shl i)) == 0) continue
             val intensity = gpuIntensity(l.def)
             when (l.def.shape) {
                 LightShape.CONE -> {
-                    val spot = SpotLight().set(
-                        l.color,
-                        l.pos,
-                        Vector3(l.dirX, l.dirY, l.dirZ),
-                        intensity,
-                        l.def.coneDegrees / 2f,
-                        // exponent for the cone falloff — moderate softness
-                        2f
-                    )
-                    env.add(spot)
+                    // *** Important ***
+                    // The libGDX *default* shader (`default.vertex.glsl`) has
+                    // NO spot-light loop — only directional + point lights —
+                    // so any SpotLight we add to the Environment is silently
+                    // ignored on the GPU. (See SpotLight.java header comment:
+                    // "the default shader doesn't support spot lights".)
+                    //
+                    // We therefore render cones as PointLights. The CONE
+                    // ANGLE is enforced on the CPU in computeMaskMultiSample:
+                    // surfaces outside the cone never receive this light in
+                    // their environment mask, so the visible effect is still
+                    // a directional cone — just with point-light falloff
+                    // inside it instead of spot-style angular falloff.
+                    val pl = PointLight().set(l.color, l.pos, intensity)
+                    env.add(pl)
+                    nPoint++
+                    if (LightingDiagnostics.enabled) {
+                        val halfAngleDeg = (l.def.coneDegrees / 2f).coerceIn(0f, 180f)
+                        println("[LIGHTLOG]   +PointLight(forCone) idx=$i color=(%.2f,%.2f,%.2f) pos=(%.2f,%.2f,%.2f) dir=(%.2f,%.2f,%.2f) intensity=%.2f halfAngle=%.1f° range=%.1f"
+                            .format(l.color.r, l.color.g, l.color.b,
+                                l.pos.x, l.pos.y, l.pos.z,
+                                l.dirX, l.dirY, l.dirZ,
+                                intensity, halfAngleDeg, l.def.range))
+                    }
                 }
                 LightShape.SPHERE -> {
                     val pl = PointLight().set(l.color, l.pos, intensity)
                     env.add(pl)
+                    nPoint++
+                    if (LightingDiagnostics.enabled) {
+                        println("[LIGHTLOG]   +PointLight idx=$i color=(%.2f,%.2f,%.2f) pos=(%.2f,%.2f,%.2f) intensity=%.2f range=%.1f"
+                            .format(l.color.r, l.color.g, l.color.b,
+                                l.pos.x, l.pos.y, l.pos.z,
+                                intensity, l.def.range))
+                    }
                 }
             }
+        }
+        if (LightingDiagnostics.enabled) {
+            println("[LIGHTLOG] buildEnv: mask=0x%x -> %d point + %d spot lights".format(mask, nPoint, nSpot))
         }
         return env
     }
@@ -473,15 +518,23 @@ class DynamicLighting private constructor(
             for (item in actor.inventory) {
                 if (!item.isLit()) continue
                 val def = item.definition?.light ?: continue
-                lights.add(
-                    GpuLight(
-                        def = def,
-                        color = parseColor(def.colorHex),
-                        pos = Vector3(actor.position.x, actor.position.y, actor.position.z),
-                        cx = acx, cy = acy, cz = acz,
-                        dirX = fx, dirY = fy, dirZ = 0f
-                    )
+                val gl = GpuLight(
+                    def = def,
+                    color = parseColor(def.colorHex),
+                    pos = Vector3(actor.position.x, actor.position.y, actor.position.z),
+                    cx = acx, cy = acy, cz = acz,
+                    dirX = fx, dirY = fy, dirZ = 0f
                 )
+                lights.add(gl)
+                if (LightingDiagnostics.enabled) {
+                    println("[LIGHTLOG] inv-light item=${item.type} shape=${def.shape} cone=${def.coneDegrees}° " +
+                        "range=${def.range} intensity=${def.intensity} colorHex='${def.colorHex}' " +
+                        ("-> parsedColor=(%.2f,%.2f,%.2f,%.2f) pos=(%.2f,%.2f,%.2f) cell=($acx,$acy,$acz) " +
+                            "dir=(%.2f,%.2f,%.2f) actorFacing=(%.3f,%.3f) fLen=%.3f").format(
+                            gl.color.r, gl.color.g, gl.color.b, gl.color.a,
+                            gl.pos.x, gl.pos.y, gl.pos.z, gl.dirX, gl.dirY, gl.dirZ,
+                            f.x, f.y, fLen))
+                }
             }
 
             // 2. World-placed lit items nearby.
@@ -502,21 +555,35 @@ class DynamicLighting private constructor(
                     val il = sqrt((ifx * ifx + ify * ify).toDouble()).toFloat()
                     val nfx = if (il > 0f) ifx / il else 0f
                     val nfy = if (il > 0f) ify / il else 1f
-                    lights.add(
-                        GpuLight(
-                            def = def,
-                            color = parseColor(def.colorHex),
-                            // Cell-centered world coords: cell (wx,wy,wz) is centered
-                            // at world (wx,wy,wz). Place item slightly above the floor
-                            // of the cell (floor sits at wz - 0.5).
-                            pos = Vector3(wx.toFloat(), wy.toFloat(), wz - 0.1f),
-                            cx = wx, cy = wy, cz = wz,
-                            dirX = nfx, dirY = nfy, dirZ = 0f
-                        )
+                    val gl = GpuLight(
+                        def = def,
+                        color = parseColor(def.colorHex),
+                        // Cell-centered world coords: cell (wx,wy,wz) is centered
+                        // at world (wx,wy,wz). Place item slightly above the floor
+                        // of the cell (floor sits at wz - 0.5).
+                        pos = Vector3(wx.toFloat(), wy.toFloat(), wz - 0.1f),
+                        cx = wx, cy = wy, cz = wz,
+                        dirX = nfx, dirY = nfy, dirZ = 0f
                     )
+                    lights.add(gl)
+                    if (LightingDiagnostics.enabled) {
+                        println("[LIGHTLOG] world-light item=${item.type} shape=${def.shape} cone=${def.coneDegrees}° " +
+                            "range=${def.range} intensity=${def.intensity} colorHex='${def.colorHex}' " +
+                            ("-> parsedColor=(%.2f,%.2f,%.2f,%.2f) pos=(%.2f,%.2f,%.2f) cell=($wx,$wy,$wz) " +
+                                "dir=(%.2f,%.2f,%.2f) itemFacing=(%.3f,%.3f)").format(
+                                gl.color.r, gl.color.g, gl.color.b, gl.color.a,
+                                gl.pos.x, gl.pos.y, gl.pos.z, gl.dirX, gl.dirY, gl.dirZ,
+                                ifx, ify))
+                    }
                 }
             }
 
+            if (LightingDiagnostics.enabled) {
+                val cone = lights.count { it.def.shape == LightShape.CONE }
+                val sphere = lights.count { it.def.shape == LightShape.SPHERE }
+                println("[LIGHTLOG] DynamicLighting.build complete: ${lights.size} lights ($cone cone / $sphere sphere) actor=(%.2f,%.2f,%.2f) cell=($acx,$acy,$acz)"
+                    .format(actor.position.x, actor.position.y, actor.position.z))
+            }
             return DynamicLighting(world, lights, ambient)
         }
 

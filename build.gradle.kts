@@ -35,4 +35,11 @@ tasks.withType<JavaExec> {
     // Required for macOS to run LibGDX apps properly
     jvmArgs("-XstartOnFirstThread")
     workingDir = file("src/main/resources")
+
+    // Forward selected -D system properties from the Gradle invocation to the
+    // launched JVM so e.g. `gradle run -Drogue.lightlog=1` actually enables
+    // lighting diagnostics inside the running game.
+    listOf("rogue.lightlog").forEach { key ->
+        System.getProperty(key)?.let { systemProperty(key, it) }
+    }
 }
