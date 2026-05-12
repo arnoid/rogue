@@ -80,7 +80,7 @@ nodes: [
 				slot: FLOOR
 			}
 		]
-		connectorSlots: [
+		socketSlots: [
 			WALL_WEST
 		]
 	}
@@ -144,7 +144,7 @@ nodes: [
 				rotY: 180
 			}
 		]
-		connectorSlots: [
+		socketSlots: [
 			WALL_WEST
 		]
 	}
@@ -500,7 +500,7 @@ nodes: [
 				slot: FLOOR
 			}
 		]
-		connectorSlots: [
+		socketSlots: [
 			WALL_EAST
 		]
 	}
@@ -564,7 +564,7 @@ nodes: [
 				slot: WALL_NORTH
 			}
 		]
-		connectorSlots: [
+		socketSlots: [
 			WALL_EAST
 		]
 	}

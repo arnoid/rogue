@@ -116,7 +116,7 @@ nodes: [
 				slot: WALL_NORTH
 			}
 		]
-		connectorSlots: [
+		socketSlots: [
 			WALL_SOUTH
 		]
 	}
@@ -178,7 +178,7 @@ nodes: [
 				slot: WALL_NORTH
 			}
 		]
-		connectorSlots: [
+		socketSlots: [
 			WALL_SOUTH
 		]
 	}

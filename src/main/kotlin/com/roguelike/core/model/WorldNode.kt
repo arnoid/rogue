@@ -17,7 +17,7 @@ class WorldNode(val x: Int, val y: Int, val z: Int) {
         const val ITEM_SPAWN   = "item_spawn"
         const val EXIT         = "exit"
         const val DOOR_MANUAL  = "door_manual"
-        const val NODE_CONNECTOR = "node_connector"
+        const val SOCKET = "socket"
         const val LADDER = "ladder"
     }
 
@@ -70,19 +70,19 @@ class WorldNode(val x: Int, val y: Int, val z: Int) {
 
     fun isManualDoor(slot: TileSlot): Boolean = slot in _manualDoorSlots
 
-    // ── Node connector tags (per-edge, outer walls only) ────────────────
+    // ── Socket tags (per-edge, outer walls only) ────────────────────────
 
-    private val _connectorSlots = mutableSetOf<TileSlot>()
-    val connectorSlots: Set<TileSlot> get() = _connectorSlots
+    private val _socketSlots = mutableSetOf<TileSlot>()
+    val socketSlots: Set<TileSlot> get() = _socketSlots
 
-    fun tagAsConnector(slot: TileSlot) {
-        require(slot != TileSlot.FLOOR) { "Only wall slots can be tagged as connectors" }
-        _connectorSlots.add(slot)
+    fun tagAsSocket(slot: TileSlot) {
+        require(slot != TileSlot.FLOOR) { "Only wall slots can be tagged as sockets" }
+        _socketSlots.add(slot)
     }
 
-    fun untagConnector(slot: TileSlot) { _connectorSlots.remove(slot) }
+    fun untagSocket(slot: TileSlot) { _socketSlots.remove(slot) }
 
-    fun isConnector(slot: TileSlot): Boolean = slot in _connectorSlots
+    fun isSocket(slot: TileSlot): Boolean = slot in _socketSlots
 
     // ── Ladder tags (per-edge) ──────────────────────────────────────────
 
@@ -125,7 +125,7 @@ class WorldNode(val x: Int, val y: Int, val z: Int) {
         tileSlots.clear()
         _doorSlots.clear()
         _manualDoorSlots.clear()
-        _connectorSlots.clear()
+        _socketSlots.clear()
         _ladderSlots.clear()
         items.clear()
         tags.clear()

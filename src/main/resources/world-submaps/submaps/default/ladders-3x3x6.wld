@@ -95,7 +95,7 @@ nodes: [
 				slot: FLOOR
 			}
 		]
-		connectorSlots: [
+		socketSlots: [
 			WALL_WEST
 		]
 	}
@@ -130,7 +130,7 @@ nodes: [
 				slot: FLOOR
 			}
 		]
-		connectorSlots: [
+		socketSlots: [
 			WALL_WEST
 		]
 	}
@@ -242,7 +242,7 @@ nodes: [
 				slot: FLOOR
 			}
 		]
-		connectorSlots: [
+		socketSlots: [
 			WALL_SOUTH
 		]
 	}
@@ -277,7 +277,7 @@ nodes: [
 				slot: FLOOR
 			}
 		]
-		connectorSlots: [
+		socketSlots: [
 			WALL_SOUTH
 		]
 	}
@@ -351,7 +351,7 @@ nodes: [
 				slot: FLOOR
 			}
 		]
-		connectorSlots: [
+		socketSlots: [
 			WALL_NORTH
 		]
 	}
@@ -387,7 +387,7 @@ nodes: [
 				slot: FLOOR
 			}
 		]
-		connectorSlots: [
+		socketSlots: [
 			WALL_NORTH
 		]
 	}
@@ -500,7 +500,7 @@ nodes: [
 				slot: FLOOR
 			}
 		]
-		connectorSlots: [
+		socketSlots: [
 			WALL_EAST
 		]
 	}
@@ -538,7 +538,7 @@ nodes: [
 				slot: FLOOR
 			}
 		]
-		connectorSlots: [
+		socketSlots: [
 			WALL_EAST
 		]
 	}

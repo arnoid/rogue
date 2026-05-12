@@ -377,7 +377,7 @@ class MapEditor(private val game: Game) : Screen {
                     oldNode.tags.forEach { world.addTag(newNode, it) }
                     oldNode.doorSlots.forEach { newNode.tagAsDoor(it) }
                     oldNode.manualDoorSlots.forEach { newNode.tagAsManualDoor(it) }
-                    oldNode.connectorSlots.forEach { newNode.tagAsConnector(it) }
+                    oldNode.socketSlots.forEach { newNode.tagAsSocket(it) }
                     oldNode.ladderSlots.forEach { newNode.tagAsLadder(it) }
                 }
             }
@@ -451,7 +451,7 @@ class MapEditor(private val game: Game) : Screen {
 
                     for (slot in srcNode.doorSlots) dstNode.tagAsDoor(slot)
                     for (slot in srcNode.manualDoorSlots) dstNode.tagAsManualDoor(slot)
-                    for (slot in srcNode.connectorSlots) dstNode.tagAsConnector(slot)
+                    for (slot in srcNode.socketSlots) dstNode.tagAsSocket(slot)
                     for (slot in srcNode.ladderSlots) dstNode.tagAsLadder(slot)
                     for (tag in srcNode.tags) newWorld.addTag(dstNode, tag)
                     for (item in srcNode.items) dstNode.items.add(item)
@@ -822,8 +822,8 @@ class MapEditor(private val game: Game) : Screen {
                             tagSphereInstance.transform.setToTranslation(x + offset.x, y + offset.y, z + offset.z)
                             modelBatch.render(tagSphereInstance, environment)
                         }
-                        // Render node_connector spheres at each connector edge
-                        for (slot in node.connectorSlots) {
+                        // Render socket spheres at each socket edge
+                        for (slot in node.socketSlots) {
                             val offset = edgeOffset(slot)
                             tagSphereInstance.transform.setToTranslation(x + offset.x, y + offset.y, z + offset.z)
                             modelBatch.render(tagSphereInstance, environment)
@@ -864,13 +864,13 @@ class MapEditor(private val game: Game) : Screen {
                                 tagFont.draw(tagSpriteBatch, WorldNode.Tags.DOOR_MANUAL, projPos.x - 30f, projPos.y + 4f)
                             }
                         }
-                        // Render node_connector labels at each connector edge
-                        for (slot in node.connectorSlots) {
+                        // Render socket labels at each socket edge
+                        for (slot in node.socketSlots) {
                             val offset = edgeOffset(slot)
                             projPos.set(x + offset.x, y + offset.y + 0.45f, z + offset.z)
                             camera.project(projPos, 0f, 0f, viewW.toFloat(), viewH.toFloat())
                             if (projPos.z in 0f..1f) {
-                                tagFont.draw(tagSpriteBatch, WorldNode.Tags.NODE_CONNECTOR, projPos.x - 30f, projPos.y + 4f)
+                                tagFont.draw(tagSpriteBatch, WorldNode.Tags.SOCKET, projPos.x - 30f, projPos.y + 4f)
                             }
                         }
                         // Render ladder labels at each ladder edge
@@ -1037,7 +1037,7 @@ class MapEditor(private val game: Game) : Screen {
                     if (tmax < tmin || tmax < 0) continue
 
                     val node = world.getNode(x, y, z)
-                    val hasContent = node != null && (node.tiles.isNotEmpty() || node.items.isNotEmpty() || node.tags.isNotEmpty() || node.manualDoorSlots.isNotEmpty() || node.connectorSlots.isNotEmpty())
+                    val hasContent = node != null && (node.tiles.isNotEmpty() || node.items.isNotEmpty() || node.tags.isNotEmpty() || node.manualDoorSlots.isNotEmpty() || node.socketSlots.isNotEmpty())
                     if (hasContent) {
                         if (tmin < bestT) {
                             bestT = tmin; hoveredX = x; hoveredY = y; hoveredZ = z

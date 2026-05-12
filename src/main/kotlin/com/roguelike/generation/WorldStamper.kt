@@ -82,9 +82,9 @@ class WorldStamper(
                         targetNode.tagAsManualDoor(slot)
                     }
 
-                    // Copy connector tags
-                    for (slot in sourceNode.connectorSlots) {
-                        targetNode.tagAsConnector(slot)
+                    // Copy socket tags
+                    for (slot in sourceNode.socketSlots) {
+                        targetNode.tagAsSocket(slot)
                     }
 
                     // Copy ladder tags
@@ -130,14 +130,14 @@ class WorldStamper(
         // Remove the wall on the socket's face
         val wallSlot = directionToSlot(socket.direction) ?: return
         node.removeTile(wallSlot)
-        node.untagConnector(wallSlot)
+        node.untagSocket(wallSlot)
 
         // Also remove the wall on the adjacent node's opposite face
         val neighborPos = absPos + socket.direction
         val neighborNode = target.getNode(neighborPos.x, neighborPos.y, neighborPos.z) ?: return
         val oppositeSlot = directionToSlot(socket.direction.negate()) ?: return
         neighborNode.removeTile(oppositeSlot)
-        neighborNode.untagConnector(oppositeSlot)
+        neighborNode.untagSocket(oppositeSlot)
     }
 
     /**
@@ -156,7 +156,7 @@ class WorldStamper(
         val wallTile = tileFactory(wallType)
         if (wallTile != null) {
             node.setTile(wallTile)
-            node.untagConnector(wallSlot)
+            node.untagSocket(wallSlot)
         }
     }
 

@@ -252,7 +252,7 @@ class EditorPalettePanel(
             NodeTags.PLAYER_SPAWN, NodeTags.ENEMY_SPAWN,
             NodeTags.ITEM_SPAWN, NodeTags.EXIT,
             NodeTags.DOOR_MANUAL,
-            NodeTags.NODE_CONNECTOR,
+            NodeTags.SOCKET,
             NodeTags.LADDER
         )
         nodeTags.forEach { tag ->
@@ -403,8 +403,8 @@ class EditorPalettePanel(
         tagButtons.forEach { (tag, btn) ->
             btn.isChecked = if (tag == NodeTags.DOOR_MANUAL) {
                 (sel is PaletteSelection.TagSel && sel.tag == tag) || node.manualDoorSlots.isNotEmpty()
-            } else if (tag == NodeTags.NODE_CONNECTOR) {
-                (sel is PaletteSelection.TagSel && sel.tag == tag) || node.connectorSlots.isNotEmpty()
+            } else if (tag == NodeTags.SOCKET) {
+                (sel is PaletteSelection.TagSel && sel.tag == tag) || node.socketSlots.isNotEmpty()
             } else if (tag == NodeTags.LADDER) {
                 (sel is PaletteSelection.TagSel && sel.tag == tag) || node.ladderSlots.isNotEmpty()
             } else {

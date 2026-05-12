@@ -163,9 +163,9 @@ class EditorInputHandler(
                             if (hoveredEdge != null && hoveredEdge != TileSlot.FLOOR) {
                                 n.untagManualDoor(hoveredEdge)
                             }
-                        } else if (sel.tag == com.roguelike.core.model.WorldNode.Tags.NODE_CONNECTOR) {
+                        } else if (sel.tag == com.roguelike.core.model.WorldNode.Tags.SOCKET) {
                             if (hoveredEdge != null && hoveredEdge != TileSlot.FLOOR) {
-                                n.untagConnector(hoveredEdge)
+                                n.untagSocket(hoveredEdge)
                             }
                         } else if (sel.tag == com.roguelike.core.model.WorldNode.Tags.LADDER) {
                             if (hoveredEdge != null && hoveredEdge != TileSlot.FLOOR) {
@@ -262,8 +262,8 @@ class EditorInputHandler(
                                     node.untagManualDoor(hoveredEdge)
                                 }
                             }
-                        } else if (sel.tag == com.roguelike.core.model.WorldNode.Tags.NODE_CONNECTOR) {
-                            // node_connector is per-edge: only allowed on outer world boundary walls
+                        } else if (sel.tag == com.roguelike.core.model.WorldNode.Tags.SOCKET) {
+                            // socket is per-edge: only allowed on outer world boundary walls
                             if (hoveredEdge != null && hoveredEdge != TileSlot.FLOOR) {
                                 val w = world
                                 val isOuterEdge = when (hoveredEdge) {
@@ -274,10 +274,10 @@ class EditorInputHandler(
                                     else -> false
                                 }
                                 if (isOuterEdge) {
-                                    if (!node.isConnector(hoveredEdge)) {
-                                        node.tagAsConnector(hoveredEdge)
+                                    if (!node.isSocket(hoveredEdge)) {
+                                        node.tagAsSocket(hoveredEdge)
                                     } else if (Gdx.input.justTouched()) {
-                                        node.untagConnector(hoveredEdge)
+                                        node.untagSocket(hoveredEdge)
                                     }
                                 }
                             }

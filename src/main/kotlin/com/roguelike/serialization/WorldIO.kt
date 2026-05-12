@@ -72,9 +72,9 @@ object WorldIO {
                         node.tagAsManualDoor(TileSlot.valueOf(slotName))
                     } catch (_: IllegalArgumentException) { }
                 }
-                nodeData.connectorSlots.forEach { slotName ->
+                nodeData.socketSlots.forEach { slotName ->
                     try {
-                        node.tagAsConnector(TileSlot.valueOf(slotName))
+                        node.tagAsSocket(TileSlot.valueOf(slotName))
                     } catch (_: IllegalArgumentException) { }
                 }
                 nodeData.ladderSlots.forEach { slotName ->
@@ -141,7 +141,7 @@ object WorldIO {
                 for (y in 0 until world.height) {
                     for (z in 0 until world.depth) {
                         val node = world.getNode(x, y, z) ?: continue
-                        if (node.tags.isEmpty() && node.tiles.isEmpty() && node.items.isEmpty() && node.doorSlots.isEmpty() && node.manualDoorSlots.isEmpty() && node.connectorSlots.isEmpty() && node.ladderSlots.isEmpty()) continue
+                        if (node.tags.isEmpty() && node.tiles.isEmpty() && node.items.isEmpty() && node.doorSlots.isEmpty() && node.manualDoorSlots.isEmpty() && node.socketSlots.isEmpty() && node.ladderSlots.isEmpty()) continue
 
                         val nodeData = NodeData(
                             x = x, y = y, z = z,
@@ -158,7 +158,7 @@ object WorldIO {
                             }),
                             doorSlots = ArrayList(node.doorSlots.map { it.name }),
                             manualDoorSlots = ArrayList(node.manualDoorSlots.map { it.name }),
-                            connectorSlots = ArrayList(node.connectorSlots.map { it.name }),
+                            socketSlots = ArrayList(node.socketSlots.map { it.name }),
                             ladderSlots = ArrayList(node.ladderSlots.map { it.name })
                         )
                         data.nodes.add(nodeData)

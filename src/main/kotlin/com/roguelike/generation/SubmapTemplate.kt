@@ -8,7 +8,7 @@ import com.roguelike.core.model.WorldNode
 /**
  * Represents a loaded submap template (prefab).
  * Dimensions must be divisible by 3.
- * Sockets are derived from `node_connector` wall tags on outer boundaries.
+ * Sockets are derived from `socket` wall tags on outer boundaries.
  */
 data class SubmapTemplate(
     val name: String,
@@ -24,7 +24,7 @@ data class SubmapTemplate(
     /**
      * Returns a new template rotated 90° clockwise around the Z axis.
      * This performs a **structural** rotation: nodes are rearranged in the grid
-     * and wall/door/connector edge slots are remapped to their new cardinal directions.
+     * and wall/door/socket edge slots are remapped to their new cardinal directions.
      * Tile models (stairs, floors) get their visual Z rotation adjusted.
      */
     fun rotatedCW90(): SubmapTemplate {
@@ -88,8 +88,8 @@ data class SubmapTemplate(
                     for (slot in srcNode.ladderSlots) {
                         dstNode.tagAsLadder(rotateSlot(slot))
                     }
-                    // Mark that this node had connectors (we'll recompute their slots after rotation)
-                    val hadConnectors = srcNode.connectorSlots.isNotEmpty()
+                    // Mark that this node had sockets (we'll recompute their slots after rotation)
+                    val hadSockets = srcNode.socketSlots.isNotEmpty()
 
                     // Copy general tags
                     for (tag in srcNode.tags) {
@@ -100,13 +100,13 @@ data class SubmapTemplate(
                         dstNode.items.add(item)
                     }
 
-                    // Recompute connector slots based on new boundary position
-                    if (hadConnectors) {
+                    // Recompute socket slots based on new boundary position
+                    if (hadSockets) {
                         // Check which edges of the destination node are on the outer boundary
-                        if (dx == 0) dstNode.tagAsConnector(TileSlot.WALL_WEST)
-                        if (dx == newW - 1) dstNode.tagAsConnector(TileSlot.WALL_EAST)
-                        if (dy == 0) dstNode.tagAsConnector(TileSlot.WALL_SOUTH)
-                        if (dy == newH - 1) dstNode.tagAsConnector(TileSlot.WALL_NORTH)
+                        if (dx == 0) dstNode.tagAsSocket(TileSlot.WALL_WEST)
+                        if (dx == newW - 1) dstNode.tagAsSocket(TileSlot.WALL_EAST)
+                        if (dy == 0) dstNode.tagAsSocket(TileSlot.WALL_SOUTH)
+                        if (dy == newH - 1) dstNode.tagAsSocket(TileSlot.WALL_NORTH)
                     }
                 }
             }
@@ -121,13 +121,13 @@ data class SubmapTemplate(
             ))
         }
 
-        // Re-derive sockets from the rotated world's connectors (which are correctly placed on outer boundaries)
+        // Re-derive sockets from the rotated world's socket slots (which are correctly placed on outer boundaries)
         val newSockets = mutableListOf<Socket>()
         for (x in 0 until newW) {
             for (y in 0 until newH) {
                 for (z in 0 until srcD) {
                     val node = rotatedWorld.getNode(x, y, z) ?: continue
-                    for (slot in node.connectorSlots) {
+                    for (slot in node.socketSlots) {
                         val direction = slotToDirection(slot)
                         val tag = deriveSocketTag(node)
                         newSockets.add(Socket(
@@ -162,7 +162,7 @@ data class SubmapTemplate(
                 for (y in 0 until world.height) {
                     for (z in 0 until world.depth) {
                         val node = world.getNode(x, y, z) ?: continue
-                        for (slot in node.connectorSlots) {
+                        for (slot in node.socketSlots) {
                             val direction = slotToDirection(slot)
                             val tag = deriveSocketTag(node)
                             sockets.add(Socket(

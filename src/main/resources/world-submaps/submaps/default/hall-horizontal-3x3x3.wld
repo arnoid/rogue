@@ -21,7 +21,7 @@ nodes: [
 				slot: FLOOR
 			}
 		]
-		connectorSlots: [
+		socketSlots: [
 			WALL_WEST
 		]
 	}
@@ -100,7 +100,7 @@ nodes: [
 				slot: FLOOR
 			}
 		]
-		connectorSlots: [
+		socketSlots: [
 			WALL_EAST
 		]
 	}
