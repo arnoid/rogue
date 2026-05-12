@@ -18,6 +18,14 @@ class BvhOccluder : ModelOcclusionProvider {
 
     private var boxes: List<BoundingBox> = emptyList()
 
+    /**
+     * Manhattan-distance culling radius (default 100 world nodes).
+     * Boxes where |ox−cx|+|oy−cy| > cullingRadius are skipped entirely.
+     * Effective per-light bound is min(light.range, cullingRadius) because
+     * rays never reach beyond light.range. Set to Float.MAX_VALUE to disable.
+     */
+    var cullingRadius: Float = 100f
+
     fun rebuild(newBoxes: List<BoundingBox>) {
         boxes = newBoxes
     }
@@ -27,7 +35,11 @@ class BvhOccluder : ModelOcclusionProvider {
         tx: Float, ty: Float, tz: Float
     ): Boolean {
         val dx = tx - ox; val dy = ty - oy; val dz = tz - oz
+        val r = cullingRadius
         for (box in boxes) {
+            val cx = (box.min.x + box.max.x) * 0.5f
+            val cy = (box.min.y + box.max.y) * 0.5f
+            if (abs(ox - cx) + abs(oy - cy) > r) continue
             if (segmentHitsBox(ox, oy, oz, dx, dy, dz, box)) return true
         }
         return false

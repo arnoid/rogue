@@ -108,6 +108,28 @@ No user-story work can begin until this phase is complete.
 
 ---
 
+## Phase 6: Spatial Culling for Large Maps (FR-011, Priority: P1)
+
+**Goal**: `BvhOccluder.isOccluded()` evaluates only boxes within Manhattan distance
+`min(light.range, cullingRadius)` of the light origin, keeping per-ray cost O(K) where
+K = blocking tiles within the culling radius — independent of total world tile count.
+
+**Independent Test**: `BvhOccluderCullingTest` — with `cullingRadius=5f`, a blocking box
+at Manhattan distance 10 from the ray origin is skipped (returns false); with
+`cullingRadius=15f` the same box is tested and blocks the ray (returns true).
+All 42 existing tests must still pass.
+
+**⚠️ CRITICAL**: T022 MUST be confirmed FAILING before T023 implements it.
+
+- [X] T022 Write failing test for `BvhOccluder` spatial culling in `src/test/kotlin/com/roguelike/rendering/BvhOccluderCullingTest.kt` — create occluder with a blocking box at (10,0); set `cullingRadius=5f` and assert `isOccluded(0,0,0, 20,0,0)` returns false (box culled); set `cullingRadius=15f` and assert it returns true (box in range, ray blocked)
+- [X] T023 [US4] Add `var cullingRadius: Float = 100f` property to `BvhOccluder` in `src/main/kotlin/com/roguelike/rendering/BvhOccluder.kt`; in `isOccluded()` before each slab test compute `val cx = (box.min.x+box.max.x)*0.5f; val cy = (box.min.y+box.max.y)*0.5f` and `continue` (skip box) if `kotlin.math.abs(ox-cx) + kotlin.math.abs(oy-cy) > cullingRadius`
+- [X] T024 [US4] Run `./gradlew test --tests "com.roguelike.rendering.BvhOccluderCullingTest"` and `./gradlew test` — culling test passes; all 42 pre-existing tests still pass (49 total, 1 pre-existing failure in `WorldTest.testDoorTagMakesWallPassable` unrelated); no regression in `SurfaceLightingModelOcclusionTest` or `WorldLightingIntegrationTest`
+- [ ] T025 Visual + performance validation: run `./gradlew run -Drogue.lightlog=1` on a large world with many tiles; confirm frame rate stays ≥ 30 fps with 8 light sources; `[LIGHTLOG]` occluder query count per frame is small (does not grow with total tile count)
+
+**Checkpoint**: FR-011 complete — light evaluation cost is bounded by culling radius, not world size. All tests green.
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies
@@ -118,6 +140,7 @@ No user-story work can begin until this phase is complete.
 - **US2 (Phase 4)**: Requires Phase 2 complete; may build on US1 `BvhOccluder` (T008–T009)
 - **US3 (Phase 5)**: Requires Phase 2 complete; no dependency on US1/US2 impl
 - **Polish (Final)**: Requires all desired user stories complete
+- **FR-011 (Phase 6)**: Requires `BvhOccluder` (T008) ✅ already complete; T022 (red) before T023–T024 (green)
 
 ### Within Each Phase
 
@@ -125,6 +148,7 @@ No user-story work can begin until this phase is complete.
 - T008 can be written in parallel with T009 (different files)
 - T010 depends on both T008 and T009
 - T012 depends on T010 (BvhOccluder + worldSpaceBoxes in place)
+- T022 MUST fail (red) before T023 implements it; T024 verifies green
 
 ### Parallel Opportunities
 
@@ -157,11 +181,12 @@ Task T009: TileRenderer.worldSpaceBoxes()
 
 ### Incremental Delivery
 
-1. T001–T007 (Foundation) → tests pass, backward compat confirmed
-2. T008–T011 (US1) → geometry shadows ✅ demo/validate
-3. T012–T014 (US2) → real-time door response ✅ demo/validate
-4. T015–T017 (US3) → 8-source blending ✅ demo/validate
-5. T018–T021 (Polish) → diagnostics + full suite green
+1. T001–T007 (Foundation) → tests pass, backward compat confirmed ✅
+2. T008–T011 (US1) → geometry shadows ✅
+3. T012–T014 (US2) → real-time door response ✅
+4. T015–T017 (US3) → 8-source blending ✅
+5. T018–T021 (Polish) → diagnostics + full suite green (T021 visual pending)
+6. T022–T025 (FR-011) → spatial culling → perf O(K) regardless of world size
 
 ---
 
@@ -173,4 +198,6 @@ Task T009: TileRenderer.worldSpaceBoxes()
   the `occluder = null` default preserves the grid-DDA path
 - The `FlatOccluder` in `WorldLightingIntegrationTest` is a headless stand-in that provides
   deterministic model-like occlusion without a LibGDX display; it lives only in test code
-- Commit after each checkpoint (T011, T014, T017, T021) with the checkpoint description
+- Commit after each checkpoint (T011, T014, T017, T021, T024) with the checkpoint description
+- `BvhOccluderCullingTest` uses LibGDX math classes (`BoundingBox`, `Vector3`) which are
+  headless-safe; no GL context required
