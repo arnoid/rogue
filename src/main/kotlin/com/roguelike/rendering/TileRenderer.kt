@@ -70,7 +70,8 @@ class TileRenderer(
         x: Float,
         y: Float,
         z: Float,
-        ignoreYRotation: Boolean = false
+        ignoreYRotation: Boolean = false,
+        tint: Color? = null
     ) {
         if (tile !is BaseTile) return
         val renderData = registry[tile] ?: return
@@ -83,7 +84,7 @@ class TileRenderer(
         }
 
         updateTransform(instance, tile, renderData, x, y, z, ignoreYRotation)
-        updateColor(instance, tile)
+        updateColor(instance, tile, tint)
 
         batch.render(instance, environment)
 
@@ -92,9 +93,12 @@ class TileRenderer(
             val frameInst = getFrameInstance(tile)
             if (frameInst != null) {
                 updateTransform(frameInst, tile, renderData, x, y, z, ignoreYRotation)
-                // Apply wall color to the frame
+                // Apply wall color to the frame (with optional tint)
                 if (frameInst.materials.size > 0) {
-                    frameInst.materials.get(0).set(ColorAttribute.createDiffuse(Color.GRAY))
+                    val c = if (tint != null) {
+                        Color(Color.GRAY.r * tint.r, Color.GRAY.g * tint.g, Color.GRAY.b * tint.b, 1f)
+                    } else Color.GRAY
+                    frameInst.materials.get(0).set(ColorAttribute.createDiffuse(c))
                 }
                 batch.render(frameInst, environment)
             }
@@ -148,15 +152,22 @@ class TileRenderer(
         instance.transform.translate(-renderData.center.x, -renderData.center.y, -renderData.center.z)
     }
 
-    private fun updateColor(instance: ModelInstance, tile: Tile) {
+    private fun updateColor(instance: ModelInstance, tile: Tile, tint: Color? = null) {
         if (instance.materials.isEmpty) return
-        val color: Color? = when (tile) {
+        // Every tile type gets a base diffuse color so the per-cell light tint
+        // can multiply against it. Unknown tile types fall back to white so they
+        // still go fully dark in unlit cells (white * 0 = black).
+        val baseColor: Color = when (tile) {
             is FloorTile -> Color(0.6f, 0.4f, 0.2f, 1f)
             is WallNorthTile, is WallSouthTile, is WallEastTile, is WallWestTile -> Color.GRAY
             is DoorNorthTile, is DoorSouthTile, is DoorEastTile, is DoorWestTile -> Color.BROWN
             is StairsTile -> Color(0.5f, 0.5f, 0.4f, 1f)
-            else -> null
+            is LadderTile -> Color(0.55f, 0.35f, 0.15f, 1f) // wood
+            else -> Color.WHITE
         }
-        color?.let { instance.materials.get(0).set(ColorAttribute.createDiffuse(it)) }
+        val finalColor = if (tint != null) {
+            Color(baseColor.r * tint.r, baseColor.g * tint.g, baseColor.b * tint.b, 1f)
+        } else baseColor
+        instance.materials.get(0).set(ColorAttribute.createDiffuse(finalColor))
     }
 }

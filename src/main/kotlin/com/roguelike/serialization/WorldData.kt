@@ -62,7 +62,9 @@ data class ItemData(
     val id: String = "",
     val type: String = "",
     val color: String = "FFFFFFFF", // RGBA8888 hex
-    val name: String = ""
+    val name: String = "",
+    /** Per-instance tags such as `light_source_lit`. */
+    val tags: ArrayList<String> = ArrayList()
 )
 
 data class PropData(

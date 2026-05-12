@@ -10,13 +10,14 @@ import com.badlogic.gdx.graphics.PerspectiveCamera
 import com.badlogic.gdx.graphics.VertexAttributes
 import com.badlogic.gdx.graphics.g3d.*
 import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute
-import com.badlogic.gdx.graphics.g3d.environment.DirectionalLight
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder
 import com.badlogic.gdx.scenes.scene2d.Stage
 import com.badlogic.gdx.scenes.scene2d.ui.Skin
 import com.badlogic.gdx.utils.viewport.ScreenViewport
 import com.roguelike.core.model.GameLogger
 import com.roguelike.core.systems.InteractionSystem
+import com.roguelike.core.systems.LightingSystem
+import com.roguelike.core.systems.LightMap3D
 import com.roguelike.core.systems.MovementSystem
 import com.roguelike.rendering.InventoryUI
 import com.roguelike.rendering.ItemRenderer
@@ -78,6 +79,8 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
 
     override fun show() {
         modelBatch = ModelBatch()
+        // Load the item catalog before any rendering that touches items.
+        ItemCatalogLoader.loadFromInternal()
         itemRenderer = ItemRenderer(assetLoader)
         val tileRenderer = TileRenderer(modelLoader.renderRegistry)
         val propRenderer = PropRenderer(assetLoader)
@@ -107,8 +110,11 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         cameraManager = CameraManager(camera)
 
         environment = Environment()
-        environment.set(ColorAttribute(ColorAttribute.AmbientLight, 0.6f, 0.6f, 0.6f, 1f))
-        environment.add(DirectionalLight().set(0.8f, 0.8f, 0.8f, -1f, -1f, -1f))
+        // No ambient / directional world lights — gameplay is lit only by lit
+        // light-source items carried by actors. A very small ambient is kept so
+        // material colors don't render as absolute black where the diffuse tint
+        // is non-zero; the tint multiplier itself enforces darkness.
+        environment.set(ColorAttribute(ColorAttribute.AmbientLight, 1.0f, 1.0f, 1.0f, 1f))
 
         // UI Setup
         stage = Stage(ScreenViewport())
@@ -126,12 +132,31 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         inventoryUI.setFillParent(true)
         stage.addActor(inventoryUI)
 
+        // Route input to the stage so inventory rows receive click events.
+        // InputHandler polls Gdx.input directly so keyboard movement is unaffected.
+        Gdx.input.inputProcessor = stage
+
+        // Right-click on an inventory row drops the item onto the actor's cell,
+        // facing the actor's current direction (so directional lights point
+        // where the player was looking when dropped).
+        inventoryUI.onItemRightClicked = { item ->
+            println("[RoguelikeGame] right-click drop request: ${item.name} (${item.id}) playerPos=(${player.position.x},${player.position.y},${player.position.z}) facing=(${player.facingDirection.x},${player.facingDirection.y},${player.facingDirection.z})")
+            val ok = interactionSystem.drop(player, item)
+            println("[RoguelikeGame] drop result: $ok inventorySize=${player.inventory.size}")
+        }
+
         // Generation debug UI (created early so it's available for procedural loading)
         generationDebugUI = GenerationDebugUI(stage, skin)
 
         // Player — pure logic object, no LibGDX
         player = Player()
         interactionSystem.actors.add(player)
+
+        // Starter inventory: a candle and a torch so the lighting system is
+        // immediately interactive. Click the rows in the inventory UI to toggle
+        // their lit state.
+        com.roguelike.core.model.ItemFactory.create("Candle")?.let { player.inventory.add(it) }
+        com.roguelike.core.model.ItemFactory.create("Torch")?.let { player.inventory.add(it) }
 
         // Player visual — sphere mesh owned here in the view layer
         val modelBuilder = ModelBuilder()
@@ -260,6 +285,8 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
 
         // ── Rendering ────────────────────────────────────────────────────────
         Gdx.gl.glViewport(0, 0, Gdx.graphics.backBufferWidth, Gdx.graphics.backBufferHeight)
+        // Solid black background so unlit cells are invisible.
+        Gdx.gl.glClearColor(0f, 0f, 0f, 1f)
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT or GL20.GL_DEPTH_BUFFER_BIT)
 
         // Sync player visual to logic position
@@ -267,7 +294,24 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
 
         modelBatch.begin(camera)
         val playerZ = Math.ceil(player.position.z.toDouble()).toInt()
-        worldRenderer.render(world, modelBatch, environment, maxZ = playerZ)
+        val lightMap: LightMap3D = LightingSystem.compute(world, player)
+        worldRenderer.render(world, modelBatch, environment, maxZ = playerZ, lightMap = lightMap)
+
+        // Player visual is tinted by light at the player's cell (so the player is
+        // visible only when carrying a lit item — matches "no other light").
+        val pcx = Math.round(player.position.x).coerceIn(0, world.width - 1)
+        val pcy = Math.round(player.position.y).coerceIn(0, world.height - 1)
+        val pcz = Math.round(player.position.z).coerceIn(0, world.depth - 1)
+        val pTintBuf = FloatArray(3)
+        lightMap.tint(pcx, pcy, pcz, pTintBuf)
+        if (playerInstance.materials.size > 0) {
+            val base = Color.BLUE
+            playerInstance.materials.get(0).set(
+                ColorAttribute.createDiffuse(
+                    Color(base.r * pTintBuf[0], base.g * pTintBuf[1], base.b * pTintBuf[2], 1f)
+                )
+            )
+        }
         modelBatch.render(playerInstance, environment)
 
         if (debugMode) {

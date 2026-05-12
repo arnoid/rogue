@@ -83,14 +83,16 @@ object WorldIO {
                     } catch (_: IllegalArgumentException) { }
                 }
                 nodeData.items.forEach { itemData ->
-                    node.items.add(
-                        KeyItem(
-                            id       = itemData.id,
-                            type     = itemData.type,
+                    val item = com.roguelike.core.model.ItemFactory.create(itemData.type, itemData.id)
+                        ?: KeyItem(
+                            id = itemData.id,
+                            type = itemData.type,
                             colorHex = itemData.color,
-                            name     = itemData.name
+                            name = itemData.name
                         )
-                    )
+                    // Restore per-instance tags (e.g. light_source_lit).
+                    itemData.tags.forEach { item.tags.add(it) }
+                    node.items.add(item)
                 }
             }
 
@@ -154,7 +156,13 @@ object WorldIO {
                                 }
                             }),
                             items = ArrayList(node.items.map { item ->
-                                ItemData(item.id, item.type, item.colorHex, item.name)
+                                ItemData(
+                                    item.id,
+                                    item.type,
+                                    item.colorHex,
+                                    item.name,
+                                    ArrayList(item.tags.toList())
+                                )
                             }),
                             doorSlots = ArrayList(node.doorSlots.map { it.name }),
                             manualDoorSlots = ArrayList(node.manualDoorSlots.map { it.name }),

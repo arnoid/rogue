@@ -35,7 +35,7 @@ class PropRenderer(private val assetLoader: AssetLoader) {
         }
     }
 
-    fun render(prop: Prop, batch: ModelBatch, environment: Environment, selected: Boolean = false) {
+    fun render(prop: Prop, batch: ModelBatch, environment: Environment, selected: Boolean = false, tint: Color? = null) {
         val instance = getOrCreateInstance(prop) ?: return
         val scale = prop.scale
         val center = modelCenters[prop.id] ?: Vector3.Zero
@@ -47,14 +47,18 @@ class PropRenderer(private val assetLoader: AssetLoader) {
         instance.transform.rotate(Vector3.Z, 180f)
         instance.transform.translate(-center.x, -center.y, -center.z)
 
-        if (selected && instance.materials.size > 0) {
-            instance.materials.get(0).set(ColorAttribute.createDiffuse(Color.CYAN))
+        if (instance.materials.size > 0) {
+            val base: Color = if (selected) Color.CYAN else Color.WHITE
+            val finalColor = if (tint != null) {
+                Color(base.r * tint.r, base.g * tint.g, base.b * tint.b, 1f)
+            } else base
+            instance.materials.get(0).set(ColorAttribute.createDiffuse(finalColor))
         }
 
         batch.render(instance, environment)
 
-        // Reset color
-        if (selected && instance.materials.size > 0) {
+        // Reset color (so selection highlight doesn't leak between frames)
+        if (instance.materials.size > 0) {
             instance.materials.get(0).set(ColorAttribute.createDiffuse(Color.WHITE))
         }
     }

@@ -1,0 +1,45 @@
+[
+  {
+    "type": "Key",
+    "name": "Key",
+    "colorHex": "ffd700ff",
+    "tags": [],
+    "model": "models/tiles/obj/key.obj",
+    "blocksLight": true
+  },
+  {
+    "type": "Candle",
+    "name": "Candle",
+    "colorHex": "ffd27aff",
+    "tags": ["light_source"],
+    "unlitModel": "models/vox/items/candle.obj",
+    "litModel": "models/vox/items/candle_lit.obj",
+    "blocksLight": true,
+    "light": {
+      "shape": "cone",
+      "attachTo": "owner",
+      "direction": "owner_facing",
+      "range": 8.0,
+      "coneDegrees": 90.0,
+      "color": "ffd27aff",
+      "intensity": 1.0
+    }
+  },
+  {
+    "type": "Torch",
+    "name": "Torch",
+    "colorHex": "ff9f45ff",
+    "tags": ["light_source"],
+    "unlitModel": "models/vox/items/torch.obj",
+    "litModel": "models/vox/items/torch_lit.obj",
+    "blocksLight": true,
+    "light": {
+      "shape": "sphere",
+      "attachTo": "owner",
+      "direction": "omnidirectional",
+      "range": 7.0,
+      "color": "ff9f45ff",
+      "intensity": 1.0
+    }
+  }
+]

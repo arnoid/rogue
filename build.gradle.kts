@@ -20,6 +20,7 @@ dependencies {
     implementation("io.github.libktx:ktx-scene2d:1.12.1-rc1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.1")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 tasks.test {

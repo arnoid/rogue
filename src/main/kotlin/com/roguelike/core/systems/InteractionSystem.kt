@@ -33,8 +33,66 @@ class InteractionSystem(
             return
         }
 
-        // 2. Check nearby edges for door_manual doors and toggle them
+        // 2. Check adjacent nodes (4-neighbour, same Z) — pick up the closest item
+        val adjacent = listOf(
+            nx - 1 to ny,
+            nx + 1 to ny,
+            nx to ny - 1,
+            nx to ny + 1
+        )
+        for ((ax, ay) in adjacent) {
+            val node = world.getNode(ax, ay, nz) ?: continue
+            if (node.items.isEmpty()) continue
+            val item = node.items.removeAt(0)
+            actor.inventory.add(item)
+            logger.log("Interaction", "Picked up (adjacent): ${item.name}")
+            return
+        }
+
+        // 3. Check nearby edges for door_manual doors and toggle them
         if (tryInteractDoor(actor, nx, ny, nz)) return
+    }
+
+    /**
+     * Drops [item] from the actor's inventory onto the actor's current grid cell.
+     * The item's facing direction is set to the actor's current facing so that
+     * directional light cones point where the actor was looking when dropped.
+     *
+     * @return true if the item was successfully placed; false if the actor isn't
+     *         on a valid node or doesn't own the item.
+     */
+    fun drop(actor: Actor, item: Item): Boolean {
+        if (item !in actor.inventory) {
+            println("[Drop] FAIL: item ${item.name} (${item.id}) not in actor inventory")
+            return false
+        }
+        val nx = round(actor.position.x).toInt()
+        val ny = round(actor.position.y).toInt()
+        val nz = round(actor.position.z).toInt()
+        val node = world.getNode(nx, ny, nz)
+        if (node == null) {
+            println("[Drop] FAIL: no node at ($nx,$ny,$nz) — actor.pos=(${actor.position.x},${actor.position.y},${actor.position.z}) worldDims=(${world.width},${world.height},${world.depth})")
+            return false
+        }
+
+        // Capture facing direction (planar) so re-picked-up items keep
+        // a sensible default when dropped again.
+        val f = actor.facingDirection
+        val fx = f.x; val fy = f.y
+        val len = kotlin.math.sqrt((fx * fx + fy * fy).toDouble()).toFloat()
+        if (len > 0f) {
+            item.facingX = fx / len
+            item.facingY = fy / len
+        } else {
+            item.facingX = 0f
+            item.facingY = 1f
+        }
+
+        actor.inventory.remove(item)
+        node.items.add(item)
+        println("[Drop] OK: ${item.name} id=${item.id} at ($nx,$ny,$nz) facing=(${item.facingX},${item.facingY}) nodeItems=${node.items.size}")
+        logger.log("Interaction", "Dropped: ${item.name} at ($nx,$ny,$nz) facing=(${item.facingX},${item.facingY})")
+        return true
     }
 
     /**
