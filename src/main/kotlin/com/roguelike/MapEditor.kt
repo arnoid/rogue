@@ -264,41 +264,71 @@ class MapEditor(private val game: Game) : Screen {
         toolbar.background = VisUI.getSkin().newDrawable("white", Color(0.15f, 0.15f, 0.15f, 1f))
 
         try {
-            val gridTex = com.badlogic.gdx.graphics.Texture(Gdx.files.internal("icons/view-grid-outline.png"))
-            val gridDrawable = com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable(
-                com.badlogic.gdx.graphics.g2d.TextureRegion(gridTex)
-            )
-            val gridBtn = VisImageButton(gridDrawable)
-            gridBtn.addListener(object : com.badlogic.gdx.scenes.scene2d.utils.ClickListener() {
-                override fun clicked(event: com.badlogic.gdx.scenes.scene2d.InputEvent, x: Float, y: Float) {
-                    showFrames = !showFrames
+            // Helper to create a toolbar button with icon inverted to white
+            fun makeToolbarButton(iconPath: String, onClick: () -> Unit): VisImageButton {
+                val originalPixmap = com.badlogic.gdx.graphics.Pixmap(Gdx.files.internal(iconPath))
+                // Invert RGB: black→white, keep alpha
+                val inverted = com.badlogic.gdx.graphics.Pixmap(originalPixmap.width, originalPixmap.height, originalPixmap.format)
+                for (px in 0 until originalPixmap.width) {
+                    for (py in 0 until originalPixmap.height) {
+                        val c = originalPixmap.getPixel(px, py)
+                        val r = (c ushr 24) and 0xFF
+                        val g = (c ushr 16) and 0xFF
+                        val b = (c ushr 8) and 0xFF
+                        val a = c and 0xFF
+                        val inv = ((255 - r) shl 24) or ((255 - g) shl 16) or ((255 - b) shl 8) or a
+                        inverted.drawPixel(px, py, inv)
+                    }
                 }
-            })
+                val tex = com.badlogic.gdx.graphics.Texture(inverted)
+                originalPixmap.dispose()
+                inverted.dispose()
+                val drawable = com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable(
+                    com.badlogic.gdx.graphics.g2d.TextureRegion(tex)
+                )
+                val btn = VisImageButton(drawable)
+                btn.addListener(object : com.badlogic.gdx.scenes.scene2d.utils.ClickListener() {
+                    override fun clicked(event: com.badlogic.gdx.scenes.scene2d.InputEvent, x: Float, y: Float) {
+                        onClick()
+                    }
+                })
+                return btn
+            }
+
+            // Normal mode (deselect tools) button
+            val cursorBtn = makeToolbarButton("icons/cursor-default-outline.png") {
+                inputHandler.toolMode = EditorToolMode.NONE
+            }
+            toolbar.add(cursorBtn).size(32f).pad(2f).row()
+
+            val gridBtn = makeToolbarButton("icons/view-grid-outline.png") {
+                showFrames = !showFrames
+            }
             toolbar.add(gridBtn).size(32f).pad(2f).row()
 
-            val ccwTex = com.badlogic.gdx.graphics.Texture(Gdx.files.internal("icons/rotate-counter-clockwise.png"))
-            val ccwDrawable = com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable(
-                com.badlogic.gdx.graphics.g2d.TextureRegion(ccwTex)
-            )
-            val ccwBtn = VisImageButton(ccwDrawable)
-            ccwBtn.addListener(object : com.badlogic.gdx.scenes.scene2d.utils.ClickListener() {
-                override fun clicked(event: com.badlogic.gdx.scenes.scene2d.InputEvent, x: Float, y: Float) {
-                    rotateWorld(clockwise = false)
-                }
-            })
+            val ccwBtn = makeToolbarButton("icons/rotate-counter-clockwise.png") {
+                rotateWorld(clockwise = false)
+            }
             toolbar.add(ccwBtn).size(32f).pad(2f).row()
 
-            val cwTex = com.badlogic.gdx.graphics.Texture(Gdx.files.internal("icons/rotate-clockwise.png"))
-            val cwDrawable = com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable(
-                com.badlogic.gdx.graphics.g2d.TextureRegion(cwTex)
-            )
-            val cwBtn = VisImageButton(cwDrawable)
-            cwBtn.addListener(object : com.badlogic.gdx.scenes.scene2d.utils.ClickListener() {
-                override fun clicked(event: com.badlogic.gdx.scenes.scene2d.InputEvent, x: Float, y: Float) {
-                    rotateWorld(clockwise = true)
-                }
-            })
+            val cwBtn = makeToolbarButton("icons/rotate-clockwise.png") {
+                rotateWorld(clockwise = true)
+            }
             toolbar.add(cwBtn).size(32f).pad(2f).row()
+
+            // Fill tool toggle
+            val fillBtn = makeToolbarButton("icons/format-color-fill.png") {
+                inputHandler.toolMode = if (inputHandler.toolMode == EditorToolMode.FILL)
+                    EditorToolMode.NONE else EditorToolMode.FILL
+            }
+            toolbar.add(fillBtn).size(32f).pad(2f).row()
+
+            // Room tool toggle
+            val roomBtn = makeToolbarButton("icons/vector-square.png") {
+                inputHandler.toolMode = if (inputHandler.toolMode == EditorToolMode.ROOM)
+                    EditorToolMode.NONE else EditorToolMode.ROOM
+            }
+            toolbar.add(roomBtn).size(32f).pad(2f).row()
         } catch (e: Exception) {
             toolbar.add(VisLabel("!")).row()
         }
@@ -668,6 +698,51 @@ class MapEditor(private val game: Game) : Screen {
                 shapeRenderer.begin(ShapeRenderer.ShapeType.Line)
                 shapeRenderer.color = Color.CYAN
                 drawEdge(inputHandler.selectedX.toFloat(), inputHandler.selectedY.toFloat(), inputHandler.selectedZ.toFloat(), inputHandler.selectedEdge!!)
+                shapeRenderer.end()
+                Gdx.gl.glLineWidth(1f)
+            }
+
+            // ── Room tool drag preview (magenta rectangle) ───────────────────
+            if (inputHandler.isRoomDragging && inputHandler.roomDragStartX != -1) {
+                val rMinX = minOf(inputHandler.roomDragStartX, inputHandler.roomDragEndX).toFloat()
+                val rMaxX = maxOf(inputHandler.roomDragStartX, inputHandler.roomDragEndX).toFloat()
+                val rMinY = minOf(inputHandler.roomDragStartY, inputHandler.roomDragEndY).toFloat()
+                val rMaxY = maxOf(inputHandler.roomDragStartY, inputHandler.roomDragEndY).toFloat()
+                val rz = hoveredZ.toFloat()
+                val s = 0.5f
+                Gdx.gl.glLineWidth(3f)
+                shapeRenderer.projectionMatrix = camera.combined
+                shapeRenderer.begin(ShapeRenderer.ShapeType.Line)
+                shapeRenderer.color = if (inputHandler.isRoomSubtract) Color.RED else Color.MAGENTA
+                // Bottom edge
+                shapeRenderer.line(rMinX - s, rMinY - s, rz, rMaxX + s, rMinY - s, rz)
+                // Top edge
+                shapeRenderer.line(rMinX - s, rMaxY + s, rz, rMaxX + s, rMaxY + s, rz)
+                // Left edge
+                shapeRenderer.line(rMinX - s, rMinY - s, rz, rMinX - s, rMaxY + s, rz)
+                // Right edge
+                shapeRenderer.line(rMaxX + s, rMinY - s, rz, rMaxX + s, rMaxY + s, rz)
+                shapeRenderer.end()
+                Gdx.gl.glLineWidth(1f)
+            }
+
+            // ── Active tool indicator ────────────────────────────────────────
+            if (inputHandler.toolMode != EditorToolMode.NONE && hoveredX != -1) {
+                val toolColor = when (inputHandler.toolMode) {
+                    EditorToolMode.FILL -> Color.YELLOW
+                    EditorToolMode.ROOM -> Color.MAGENTA
+                    else -> Color.WHITE
+                }
+                Gdx.gl.glLineWidth(2f)
+                shapeRenderer.projectionMatrix = camera.combined
+                shapeRenderer.begin(ShapeRenderer.ShapeType.Line)
+                shapeRenderer.color = toolColor
+                val ts = 0.55f
+                val tx = hoveredX.toFloat(); val ty = hoveredY.toFloat(); val tz = hoveredZ.toFloat()
+                shapeRenderer.line(tx - ts, ty - ts, tz, tx + ts, ty - ts, tz)
+                shapeRenderer.line(tx + ts, ty - ts, tz, tx + ts, ty + ts, tz)
+                shapeRenderer.line(tx + ts, ty + ts, tz, tx - ts, ty + ts, tz)
+                shapeRenderer.line(tx - ts, ty + ts, tz, tx - ts, ty - ts, tz)
                 shapeRenderer.end()
                 Gdx.gl.glLineWidth(1f)
             }
