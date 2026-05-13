@@ -8,7 +8,7 @@
       "enabled": true,
       "priority": 10,
       "registered_commands": {
-        "copilot": [
+        "claude": [
           "speckit.git.feature",
           "speckit.git.validate",
           "speckit.git.remote",
@@ -26,7 +26,7 @@
       "enabled": true,
       "priority": 10,
       "registered_commands": {
-        "copilot": [
+        "claude": [
           "speckit.scope.estimate",
           "speckit.scope.compare",
           "speckit.scope.creep",

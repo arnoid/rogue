@@ -21,6 +21,7 @@
       "direction": "owner_facing",
       "range": 8.0,
       "coneDegrees": 90.0,
+      "coneFeatherDegrees": 3.0,
       "color": "ffd27aff",
       "intensity": 1.0
     }

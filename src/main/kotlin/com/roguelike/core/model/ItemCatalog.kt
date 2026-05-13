@@ -40,6 +40,12 @@ data class LightDef(
     val range: Float,
     /** Full cone angle in degrees (only used for [LightShape.CONE]). */
     val coneDegrees: Float = 360f,
+    /**
+     * Soft penumbra width at the cone boundary in degrees (only for [LightShape.CONE]).
+     * 0 = hard cutoff (legacy). Positive values produce a smooth falloff over this angular
+     * range outside the hard edge. Serialised in items.json; missing field defaults to 3f.
+     */
+    val coneFeatherDegrees: Float = 3f,
     /** RGBA hex color (libGDX-style: rrggbbaa). */
     val colorHex: String = "ffffffff",
     /** Multiplier applied on top of distance falloff (0..1+). */

@@ -90,9 +90,6 @@ class MapEditor(private val game: Game) : Screen {
     private var scrolledThisFrame = false
 
     override fun show() {
-        // The shipped libGDX default shader has no spot-light support; cones
-        // (e.g. Candle) are emitted as PointLights by DynamicLighting with the
-        // cone shape enforced on the CPU via the visibility mask.
         val shaderConfig = com.badlogic.gdx.graphics.g3d.shaders.DefaultShader.Config().apply {
             numPointLights = 12
             numSpotLights = 0

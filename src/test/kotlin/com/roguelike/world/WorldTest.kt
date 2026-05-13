@@ -64,6 +64,9 @@ class WorldTest {
         node.setTile(MockTile("WallNorth", true, TileSlot.WALL_NORTH))
         assertTrue(node.isWallBlocking(TileSlot.WALL_NORTH))
 
+        // isWallBlocking() delegates to the tile's isBlocking() for tagged doors.
+        // Replace the wall tile with an open-door equivalent before tagging.
+        node.setTile(MockTile("DoorNorth", false, TileSlot.WALL_NORTH))
         node.tagAsDoor(TileSlot.WALL_NORTH)
         assertFalse(node.isWallBlocking(TileSlot.WALL_NORTH))
     }

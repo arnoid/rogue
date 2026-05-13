@@ -24,6 +24,8 @@ interface Tile {
     val fixedZ: Float?
         get() = null
     fun isBlocking(): Boolean = false
+    /** True if this tile should occlude light rays, independent of movement blocking. */
+    fun blocksLight(): Boolean = isBlocking()
     fun onInteract() {}
     val properties: Map<String, Any>
         get() = emptyMap()

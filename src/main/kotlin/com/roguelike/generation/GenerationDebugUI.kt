@@ -19,6 +19,21 @@ import com.badlogic.gdx.scenes.scene2d.utils.ClickListener
  */
 class GenerationDebugUI(private val stage: Stage, private val skin: Skin) : DebugUICallback {
 
+    companion object {
+        const val CONFIRM_LABEL = "I do agree!"
+        const val REJECT_LABEL = "I do not agree!"
+
+        // Soft pink: r=1.0, g=0.7, b=0.8
+        const val CONFIRM_COLOR_R = 1f
+        const val CONFIRM_COLOR_G = 0.7f
+        const val CONFIRM_COLOR_B = 0.8f
+
+        // Boring gray: r=0.5, g=0.5, b=0.5
+        const val REJECT_COLOR_R = 0.5f
+        const val REJECT_COLOR_G = 0.5f
+        const val REJECT_COLOR_B = 0.5f
+    }
+
     private val debugTable = Table()
     private var confirmButton: TextButton? = null
     private var rejectButton: TextButton? = null
@@ -37,7 +52,7 @@ class GenerationDebugUI(private val stage: Stage, private val skin: Skin) : Debu
         val pinkStyle = TextButton.TextButtonStyle()
         pinkStyle.font = skin.getFont("default")
         val pinkPixmap = Pixmap(1, 1, Pixmap.Format.RGBA8888)
-        pinkPixmap.setColor(Color(1f, 0.7f, 0.8f, 1f)) // soft pink
+        pinkPixmap.setColor(Color(CONFIRM_COLOR_R, CONFIRM_COLOR_G, CONFIRM_COLOR_B, 1f)) // soft pink
         pinkPixmap.fill()
         val pinkTex = Texture(pinkPixmap)
         pinkPixmap.dispose()
@@ -59,8 +74,8 @@ class GenerationDebugUI(private val stage: Stage, private val skin: Skin) : Debu
         grayStyle.over = skin.newDrawable("gray_bg", Color.LIGHT_GRAY)
         grayStyle.down = skin.newDrawable("gray_bg", Color.DARK_GRAY)
 
-        confirmButton = TextButton("I do agree!", pinkStyle)
-        rejectButton = TextButton("I do not agree!", grayStyle)
+        confirmButton = TextButton(CONFIRM_LABEL, pinkStyle)
+        rejectButton = TextButton(REJECT_LABEL, grayStyle)
     }
 
     override fun showCandidate(candidate: DebugCandidate, onConfirm: () -> Unit, onReject: () -> Unit) {

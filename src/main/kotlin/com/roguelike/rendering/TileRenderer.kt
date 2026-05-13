@@ -155,9 +155,9 @@ class TileRenderer(
     }
 
     /**
-     * Computes world-space [BoundingBox] for every blocking tile in [world].
+     * Computes world-space [BoundingBox] for every light-blocking tile in [world].
      * Called once per world load (static geometry) or per frame (dynamic doors/props).
-     * Open doors are excluded because their [Tile.isBlocking] returns false.
+     * Open doors and non-occluding tiles are excluded via [Tile.blocksLight].
      */
     fun worldSpaceBoxes(world: World): List<BoundingBox> {
         val result = mutableListOf<BoundingBox>()
@@ -166,7 +166,7 @@ class TileRenderer(
                 for (x in 0 until world.width) {
                     val node = world.getNode(x, y, z) ?: continue
                     for (tile in node.tiles) {
-                        if (tile !is BaseTile || !tile.isBlocking()) continue
+                        if (tile !is BaseTile || !tile.blocksLight()) continue
                         val renderData = registry[tile] ?: continue
                         val inst = getInstance(tile) ?: continue
                         updateTransform(inst, tile, renderData, x.toFloat(), y.toFloat(), z.toFloat(), false)

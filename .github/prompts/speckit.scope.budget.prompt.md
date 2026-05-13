@@ -1,3 +1,0 @@
----
-agent: speckit.scope.budget
----

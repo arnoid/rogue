@@ -22,6 +22,7 @@ class FloorTile : BaseTile() {
     companion object { const val TYPE = "FloorTile" }
     override val type: String get() = TYPE
     override val slot: TileSlot get() = TileSlot.FLOOR
+    override fun blocksLight(): Boolean = true
 
     init { zOffset = -0.45f }
 }

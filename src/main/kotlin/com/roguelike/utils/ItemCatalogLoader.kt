@@ -112,6 +112,7 @@ object ItemCatalogLoader {
             direction = direction,
             range = node.getFloat("range", 5f),
             coneDegrees = node.getFloat("coneDegrees", 360f),
+            coneFeatherDegrees = node.getFloat("coneFeatherDegrees", 3f),
             colorHex = node.getString("color", "ffffffff"),
             intensity = node.getFloat("intensity", 1f)
         )

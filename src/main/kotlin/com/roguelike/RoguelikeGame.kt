@@ -15,13 +15,13 @@ import com.badlogic.gdx.scenes.scene2d.Stage
 import com.badlogic.gdx.scenes.scene2d.ui.Skin
 import com.badlogic.gdx.utils.viewport.ScreenViewport
 import com.roguelike.core.model.GameLogger
+import com.roguelike.core.model.lighting.DirectionalLightData
 import com.roguelike.core.systems.InteractionSystem
-import com.roguelike.core.systems.LightingSystem
 import com.roguelike.core.systems.MovementSystem
-import com.roguelike.rendering.BvhOccluder
 import com.roguelike.rendering.InventoryUI
 import com.roguelike.rendering.ItemRenderer
 import com.roguelike.rendering.PropRenderer
+import com.roguelike.rendering.ShadowRenderer
 import com.roguelike.rendering.TileRenderer
 import com.roguelike.rendering.WorldRenderer
 import com.roguelike.serialization.WorldIO
@@ -35,8 +35,8 @@ import kotlinx.coroutines.*
 
 class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Screen {
     private lateinit var camera: PerspectiveCamera
-    private lateinit var modelBatch: ModelBatch
-    private lateinit var environment: Environment
+    private lateinit var shadowRenderer: ShadowRenderer
+    private lateinit var playerBatch: ModelBatch
 
     // Player logic (pure core) + its visual representation (view layer)
     private lateinit var player: Player
@@ -46,7 +46,6 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
     // Systems & Renderers
     private lateinit var world: World
     private lateinit var tileRenderer: TileRenderer
-    private val bvhOccluder = BvhOccluder()
     private lateinit var worldRenderer: WorldRenderer
     private lateinit var itemRenderer: ItemRenderer
     private lateinit var movementSystem: MovementSystem
@@ -80,18 +79,12 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
     private val gdxLogger = GameLogger { tag, msg -> Gdx.app?.log(tag, msg) }
 
     override fun show() {
-        // Configure the default shader. The shipped default GLSL does NOT
-        // support spot lights (only directional + point), so cone-shaped
-        // lights (e.g. Candle) are emitted as PointLights by DynamicLighting
-        // with the cone *shape* enforced on the CPU via the visibility mask.
-        // numSpotLights is left at 0 to match what the shader actually uses;
-        // numPointLights is raised so multiple lit items can co-exist.
-        val shaderConfig = com.badlogic.gdx.graphics.g3d.shaders.DefaultShader.Config().apply {
-            numPointLights = 12
-            numSpotLights = 0
-            numDirectionalLights = 2
-        }
-        modelBatch = ModelBatch(com.badlogic.gdx.graphics.g3d.utils.DefaultShaderProvider(shaderConfig))
+        shadowRenderer = ShadowRenderer()
+        shadowRenderer.initDirectionalLight(
+            DirectionalLightData(-0.5f, -1f, -0.3f, 0.8f, 0.8f, 0.8f, 1.0f)
+        )
+        playerBatch = ModelBatch()
+
         // Load the item catalog before any rendering that touches items.
         ItemCatalogLoader.loadFromInternal()
         itemRenderer = ItemRenderer(assetLoader)
@@ -120,12 +113,6 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         camera.update()
 
         cameraManager = CameraManager(camera)
-
-        environment = Environment()
-        // Gameplay is lit only by dynamic per-pixel item lights (PointLight /
-        // SpotLight). A near-zero ambient keeps surfaces totally black when no
-        // light reaches them and gives lights room to drive contrast.
-        environment.set(ColorAttribute(ColorAttribute.AmbientLight, 0.02f, 0.02f, 0.02f, 1f))
 
         // UI Setup
         stage = Stage(ScreenViewport())
@@ -280,12 +267,6 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
 
         if (inputHandler.isDebugToggleJustPressed()) debugMode = !debugMode
 
-        // L key: toggle lighting diagnostics. Useful when launching from an
-        // IDE runner that doesn't pass -Drogue.lightlog=1.
-        if (Gdx.input.isKeyJustPressed(Input.Keys.L)) {
-            com.roguelike.core.systems.LightingDiagnostics.toggle()
-        }
-
         if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
             game.screen = MainMenuScreen(game)
         }
@@ -307,28 +288,18 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         // Sync player visual to logic position
         playerInstance.transform.setTranslation(player.position.x, player.position.y, player.position.z)
 
-        modelBatch.begin(camera)
         val playerZ = Math.ceil(player.position.z.toDouble()).toInt()
-        bvhOccluder.rebuild(tileRenderer.worldSpaceBoxes(world))
-        val dynamicLighting = com.roguelike.core.systems.DynamicLighting.build(world, player, occluder = bvhOccluder)
-        worldRenderer.render(world, modelBatch, environment, maxZ = playerZ, dynamicLighting = dynamicLighting)
+        val gpuEnv = ShadowRenderer.fromActor(player)
+        shadowRenderer.setSceneCentre(player.position.x, player.position.y, player.position.z)
+        worldRenderer.render(world, camera, shadowRenderer, gpuEnv, maxZ = playerZ)
 
-        // Player visual gets the same per-cell environment so they're lit by
-        // whichever items reach their cell.
-        val pcx = Math.round(player.position.x).coerceIn(0, world.width - 1)
-        val pcy = Math.round(player.position.y).coerceIn(0, world.height - 1)
-        val pcz = Math.round(player.position.z).coerceIn(0, world.depth - 1)
-        val playerEnv = dynamicLighting.environmentFor(pcx, pcy, pcz)
-        if (playerInstance.materials.size > 0) {
-            playerInstance.materials.get(0).set(ColorAttribute.createDiffuse(Color.BLUE))
-        }
-        modelBatch.render(playerInstance, playerEnv)
-
+        playerBatch.begin(camera)
+        playerBatch.render(playerInstance)
         if (debugMode) {
             axesInstance.transform.setTranslation(player.position.x, player.position.y, player.position.z)
-            modelBatch.render(axesInstance)
+            playerBatch.render(axesInstance)
         }
-        modelBatch.end()
+        playerBatch.end()
 
         if (debugMode) {
             val playerNodeX = Math.round(player.position.x)
@@ -523,7 +494,8 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
     }
 
     override fun dispose() {
-        modelBatch.dispose()
+        shadowRenderer.dispose()
+        playerBatch.dispose()
         assetLoader.dispose()
         stage.dispose()
         skin.dispose()
