@@ -27,16 +27,16 @@
 
 **Purpose**: Remove the old CPU-based lighting pipeline and prepare for the GPU shadow volume replacement
 
-- [ ] T001 Delete old lighting implementation `src/main/kotlin/com/roguelike/core/systems/DynamicLighting.kt`
-- [ ] T002 [P] Delete old lighting support file `src/main/kotlin/com/roguelike/core/systems/LightingSystem.kt`
-- [ ] T003 [P] Delete old lighting support file `src/main/kotlin/com/roguelike/core/systems/SurfaceLighting.kt`
-- [ ] T004 [P] Delete old lighting diagnostics `src/main/kotlin/com/roguelike/core/systems/LightingDiagnostics.kt`
-- [ ] T005 [P] Delete old lighting tests `src/test/kotlin/com/roguelike/core/DynamicLightingTest.kt`
-- [ ] T006 [P] Delete old lighting tests `src/test/kotlin/com/roguelike/core/LightingSystemTest.kt`
-- [ ] T007 [P] Delete old lighting tests `src/test/kotlin/com/roguelike/core/SurfaceLightingTest.kt`
-- [ ] T008 Fix compilation errors in `src/main/kotlin/com/roguelike/RoguelikeGame.kt` — remove all references to `DynamicLighting`, `LightingSystem`, `SurfaceLighting`, `LightingDiagnostics`
-- [ ] T009 Fix compilation errors in `src/main/kotlin/com/roguelike/rendering/WorldRenderer.kt` — remove `dynamicLighting` parameter and all references to deleted classes
-- [ ] T010 Verify build passes with `./gradlew test` after deletions
+- [X] T001 Delete old lighting implementation `src/main/kotlin/com/roguelike/core/systems/DynamicLighting.kt`
+- [X] T002 [P] Delete old lighting support file `src/main/kotlin/com/roguelike/core/systems/LightingSystem.kt`
+- [X] T003 [P] Delete old lighting support file `src/main/kotlin/com/roguelike/core/systems/SurfaceLighting.kt`
+- [X] T004 [P] Delete old lighting diagnostics `src/main/kotlin/com/roguelike/core/systems/LightingDiagnostics.kt`
+- [X] T005 [P] Delete old lighting tests `src/test/kotlin/com/roguelike/core/DynamicLightingTest.kt`
+- [X] T006 [P] Delete old lighting tests `src/test/kotlin/com/roguelike/core/LightingSystemTest.kt`
+- [X] T007 [P] Delete old lighting tests `src/test/kotlin/com/roguelike/core/SurfaceLightingTest.kt`
+- [X] T008 Fix compilation errors in `src/main/kotlin/com/roguelike/RoguelikeGame.kt` — remove all references to `DynamicLighting`, `LightingSystem`, `SurfaceLighting`, `LightingDiagnostics`
+- [X] T009 Fix compilation errors in `src/main/kotlin/com/roguelike/rendering/WorldRenderer.kt` — remove `dynamicLighting` parameter and all references to deleted classes
+- [X] T010 Verify build passes with `./gradlew test` after deletions
 
 ---
 
@@ -46,18 +46,18 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T011 [P] Create shadow volume vertex shader `src/main/resources/shaders/shadow_volume.vert.glsl` — inputs: `a_position` (vec3); uniforms: `u_projViewTrans` (mat4), `u_worldTrans` (mat4); output: `gl_Position = u_projViewTrans * u_worldTrans * vec4(a_position, 1.0)`. No `#version` directive (prepended by Main.kt)
-- [ ] T012 [P] Create shadow volume fragment shader `src/main/resources/shaders/shadow_volume.frag.glsl` — no-op shader: declare `out vec4 fragColor;` and set `fragColor = vec4(0.0)`. Colour writes will be disabled at GL level. No `#version` directive
-- [ ] T013 [P] Create ambient pass vertex shader `src/main/resources/shaders/ambient_pass.vert.glsl` — inputs: `a_position` (vec3), `a_normal` (vec3), `a_texCoord0` (vec2); uniforms: `u_projViewTrans` (mat4), `u_worldTrans` (mat4); outputs: `v_texCoord` (vec2); transforms position and passes through texcoord. No `#version` directive
-- [ ] T014 [P] Create ambient pass fragment shader `src/main/resources/shaders/ambient_pass.frag.glsl` — uniforms: `u_ambientColor` (vec3), `u_diffuseTexture` (sampler2D), `u_diffuseColor` (vec4); output: `fragColor = texture(u_diffuseTexture, v_texCoord) * u_diffuseColor * vec4(u_ambientColor, 1.0)`. No `#version` directive
-- [ ] T015 [P] Create lit pass vertex shader `src/main/resources/shaders/lit_pass.vert.glsl` — inputs: `a_position` (vec3), `a_normal` (vec3), `a_texCoord0` (vec2); uniforms: `u_projViewTrans` (mat4), `u_worldTrans` (mat4); outputs: `v_worldPos` (vec3), `v_worldNormal` (vec3), `v_texCoord` (vec2). No `#version` directive
-- [ ] T016 [P] Create lit pass fragment shader `src/main/resources/shaders/lit_pass.frag.glsl` — inputs: `v_worldPos`, `v_worldNormal`, `v_texCoord`; uniforms: `u_LightPos` (vec3), `u_LightColor` (vec3), `u_LightIntensity` (float), `u_LightRadius` (float), `u_diffuseTexture` (sampler2D), `u_diffuseColor` (vec4); compute Lambertian `NdotL = max(dot(normalize(v_worldNormal), lightDir), 0.0)`, inverse-square attenuation `intensity / (dist² + 1.0)`, radius cutoff, output `fragColor = texColor * diffuseColor * attenuation * NdotL * lightColor`. No `#version` directive
-- [ ] T017 [P] Create `PointLightData` data class in `src/main/kotlin/com/roguelike/rendering/PointLightData.kt` — fields: `position: Vector3`, `color: Color`, `intensity: Float`, `radius: Float`. Constructed from `LightDef` + world position
-- [ ] T018 [P] Create `SilhouetteEdge` data class in `src/main/kotlin/com/roguelike/rendering/SilhouetteEdge.kt` — fields: `v0: Vector3`, `v1: Vector3`. Validate `v0 ≠ v1`
-- [ ] T019 [P] Create `ShadowVolumeMesh` data class in `src/main/kotlin/com/roguelike/rendering/ShadowVolumeMesh.kt` — fields: `vertices: FloatArray`, `indices: ShortArray`, `vertexCount: Int`, `indexCount: Int`
-- [ ] T020 [P] Create `SilhouetteCache` class in `src/main/kotlin/com/roguelike/rendering/SilhouetteCache.kt` — fields: `meshId: Int`, `lightId: Int`, `lightPos: Vector3`, `edges: List<SilhouetteEdge>`, `shadowVolume: ShadowVolumeMesh`, `valid: Boolean`. Invalidation when light/mesh moves
-- [ ] T021 Create `ShadowVolumeShaderProvider` in `src/main/kotlin/com/roguelike/rendering/ShadowVolumeShaderProvider.kt` — loads and compiles shadow_volume, ambient_pass, and lit_pass shader pairs from resources/shaders/. Provides methods: `getShadowVolumeShader()`, `getAmbientShader()`, `getLitPassShader()`. Uses `ShaderProgram` with `Gdx.files.internal()`
-- [ ] T022 Verify build passes with `./gradlew test` after foundational phase
+- [X] T011 [P] Create shadow volume vertex shader `src/main/resources/shaders/shadow_volume.vert.glsl` — inputs: `a_position` (vec3); uniforms: `u_projViewTrans` (mat4), `u_worldTrans` (mat4); output: `gl_Position = u_projViewTrans * u_worldTrans * vec4(a_position, 1.0)`. No `#version` directive (prepended by Main.kt)
+- [X] T012 [P] Create shadow volume fragment shader `src/main/resources/shaders/shadow_volume.frag.glsl` — no-op shader: declare `out vec4 fragColor;` and set `fragColor = vec4(0.0)`. Colour writes will be disabled at GL level. No `#version` directive
+- [X] T013 [P] Create ambient pass vertex shader `src/main/resources/shaders/ambient_pass.vert.glsl` — inputs: `a_position` (vec3), `a_normal` (vec3), `a_texCoord0` (vec2); uniforms: `u_projViewTrans` (mat4), `u_worldTrans` (mat4); outputs: `v_texCoord` (vec2); transforms position and passes through texcoord. No `#version` directive
+- [X] T014 [P] Create ambient pass fragment shader `src/main/resources/shaders/ambient_pass.frag.glsl` — uniforms: `u_ambientColor` (vec3), `u_diffuseTexture` (sampler2D), `u_diffuseColor` (vec4); output: `fragColor = texture(u_diffuseTexture, v_texCoord) * u_diffuseColor * vec4(u_ambientColor, 1.0)`. No `#version` directive
+- [X] T015 [P] Create lit pass vertex shader `src/main/resources/shaders/lit_pass.vert.glsl` — inputs: `a_position` (vec3), `a_normal` (vec3), `a_texCoord0` (vec2); uniforms: `u_projViewTrans` (mat4), `u_worldTrans` (mat4); outputs: `v_worldPos` (vec3), `v_worldNormal` (vec3), `v_texCoord` (vec2). No `#version` directive
+- [X] T016 [P] Create lit pass fragment shader `src/main/resources/shaders/lit_pass.frag.glsl` — inputs: `v_worldPos`, `v_worldNormal`, `v_texCoord`; uniforms: `u_LightPos` (vec3), `u_LightColor` (vec3), `u_LightIntensity` (float), `u_LightRadius` (float), `u_diffuseTexture` (sampler2D), `u_diffuseColor` (vec4); compute Lambertian `NdotL = max(dot(normalize(v_worldNormal), lightDir), 0.0)`, inverse-square attenuation `intensity / (dist² + 1.0)`, radius cutoff, output `fragColor = texColor * diffuseColor * attenuation * NdotL * lightColor`. No `#version` directive
+- [X] T017 [P] Create `PointLightData` data class in `src/main/kotlin/com/roguelike/rendering/PointLightData.kt` — fields: `position: Vector3`, `color: Color`, `intensity: Float`, `radius: Float`. Constructed from `LightDef` + world position
+- [X] T018 [P] Create `SilhouetteEdge` data class in `src/main/kotlin/com/roguelike/rendering/SilhouetteEdge.kt` — fields: `v0: Vector3`, `v1: Vector3`. Validate `v0 ≠ v1`
+- [X] T019 [P] Create `ShadowVolumeMesh` data class in `src/main/kotlin/com/roguelike/rendering/ShadowVolumeMesh.kt` — fields: `vertices: FloatArray`, `indices: ShortArray`, `vertexCount: Int`, `indexCount: Int`
+- [X] T020 [P] Create `SilhouetteCache` class in `src/main/kotlin/com/roguelike/rendering/SilhouetteCache.kt` — fields: `meshId: Int`, `lightId: Int`, `lightPos: Vector3`, `edges: List<SilhouetteEdge>`, `shadowVolume: ShadowVolumeMesh`, `valid: Boolean`. Invalidation when light/mesh moves
+- [X] T021 Create `ShadowVolumeShaderProvider` in `src/main/kotlin/com/roguelike/rendering/ShadowVolumeShaderProvider.kt` — loads and compiles shadow_volume, ambient_pass, and lit_pass shader pairs from resources/shaders/. Provides methods: `getShadowVolumeShader()`, `getAmbientShader()`, `getLitPassShader()`. Uses `ShaderProgram` with `Gdx.files.internal()`
+- [X] T022 Verify build passes with `./gradlew test` after foundational phase
 
 **Checkpoint**: Foundation ready — all shaders compiled, data types available, shader provider functional
 
@@ -73,17 +73,17 @@
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T023 [P] [US1] Create `ShadowVolumeBuilderTest` in `src/test/kotlin/com/roguelike/rendering/ShadowVolumeBuilderTest.kt` — test silhouette detection on a unit cube mesh with a known light position: verify correct silhouette edges are identified (edges between front-facing and back-facing triangles)
-- [ ] T024 [P] [US1] Add extrusion test to `ShadowVolumeBuilderTest` — given silhouette edges and a light position, verify extruded quads are generated with vertices extended 1000 units away from light (per R1 finite extrusion decision)
-- [ ] T025 [P] [US1] Add cap generation test to `ShadowVolumeBuilderTest` — verify front cap contains original front-facing triangles and back cap contains extruded back-facing triangles, forming a closed volume
+- [X] T023 [P] [US1] Create `ShadowVolumeBuilderTest` in `src/test/kotlin/com/roguelike/rendering/ShadowVolumeBuilderTest.kt` — test silhouette detection on a unit cube mesh with a known light position: verify correct silhouette edges are identified (edges between front-facing and back-facing triangles)
+- [X] T024 [P] [US1] Add extrusion test to `ShadowVolumeBuilderTest` — given silhouette edges and a light position, verify extruded quads are generated with vertices extended 1000 units away from light (per R1 finite extrusion decision)
+- [X] T025 [P] [US1] Add cap generation test to `ShadowVolumeBuilderTest` — verify front cap contains original front-facing triangles and back cap contains extruded back-facing triangles, forming a closed volume
 
 ### Implementation for User Story 1
 
-- [ ] T026 [US1] Implement `ShadowVolumeBuilder` in `src/main/kotlin/com/roguelike/rendering/ShadowVolumeBuilder.kt` — methods: `classifyFaces(mesh, lightPos)` returns front/back facing lists; `findSilhouetteEdges(mesh, lightPos)` returns `List<SilhouetteEdge>`; `extrudeSilhouette(edges, lightPos, extrudeDistance=1000f)` returns extruded quads; `buildShadowVolume(mesh, lightPos)` returns `ShadowVolumeMesh` with front cap + extruded sides + back cap. Use adjacency map for edge-to-face lookup
-- [ ] T027 [US1] Implement `ShadowVolumeRenderer` core in `src/main/kotlin/com/roguelike/rendering/ShadowVolumeRenderer.kt` — constructor takes `ShadowVolumeShaderProvider`; implement `render(camera, lights: List<PointLightData>, occluders, sceneRenderCallback)` with: (1) ambient pass — bind ambient shader, render full scene via callback, write color+depth; (2) per-light stencil pass — clear stencil, disable color/depth write, enable depth read, front-face cull-back incr-on-depth-fail, back-face cull-front decr-on-depth-fail using `Gdx.gl.glStencilFunc/glStencilOp`; (3) lit pass — stencil==0, additive blend `GL_ONE,GL_ONE`, bind lit shader with light uniforms, render scene. Uses LibGDX `Mesh` with `VertexAttribute.Position()` for shadow volume geometry, uploaded per-frame via `setVertices()`
-- [ ] T028 [US1] Update `WorldRenderer.kt` in `src/main/kotlin/com/roguelike/rendering/WorldRenderer.kt` — add `shadowVolumeRenderer: ShadowVolumeRenderer` parameter; expose a `renderSceneGeometry(shader)` method that iterates all tiles/props/items and renders them with the given shader; remove old lighting code path
-- [ ] T029 [US1] Update `RoguelikeGame.kt` in `src/main/kotlin/com/roguelike/RoguelikeGame.kt` — instantiate `ShadowVolumeShaderProvider`, `ShadowVolumeBuilder`, `ShadowVolumeRenderer` in `create()`; in render loop: collect active `PointLightData` from game world torch entities, collect occluder meshes, call `shadowVolumeRenderer.render(camera, lights, occluders, worldRenderer::renderSceneGeometry)`
-- [ ] T030 [US1] Verify `./gradlew test` passes and visual test: single point light next to wall casts geometrically accurate shadow
+- [X] T026 [US1] Implement `ShadowVolumeBuilder` in `src/main/kotlin/com/roguelike/rendering/ShadowVolumeBuilder.kt` — methods: `classifyFaces(mesh, lightPos)` returns front/back facing lists; `findSilhouetteEdges(mesh, lightPos)` returns `List<SilhouetteEdge>`; `extrudeSilhouette(edges, lightPos, extrudeDistance=1000f)` returns extruded quads; `buildShadowVolume(mesh, lightPos)` returns `ShadowVolumeMesh` with front cap + extruded sides + back cap. Use adjacency map for edge-to-face lookup
+- [X] T027 [US1] Implement `ShadowVolumeRenderer` core in `src/main/kotlin/com/roguelike/rendering/ShadowVolumeRenderer.kt` — constructor takes `ShadowVolumeShaderProvider`; implement `render(camera, lights: List<PointLightData>, occluders, sceneRenderCallback)` with: (1) ambient pass — bind ambient shader, render full scene via callback, write color+depth; (2) per-light stencil pass — clear stencil, disable color/depth write, enable depth read, front-face cull-back incr-on-depth-fail, back-face cull-front decr-on-depth-fail using `Gdx.gl.glStencilFunc/glStencilOp`; (3) lit pass — stencil==0, additive blend `GL_ONE,GL_ONE`, bind lit shader with light uniforms, render scene. Uses LibGDX `Mesh` with `VertexAttribute.Position()` for shadow volume geometry, uploaded per-frame via `setVertices()`
+- [X] T028 [US1] Update `WorldRenderer.kt` in `src/main/kotlin/com/roguelike/rendering/WorldRenderer.kt` — add `shadowVolumeRenderer: ShadowVolumeRenderer` parameter; expose a `renderSceneGeometry(shader)` method that iterates all tiles/props/items and renders them with the given shader; remove old lighting code path
+- [X] T029 [US1] Update `RoguelikeGame.kt` in `src/main/kotlin/com/roguelike/RoguelikeGame.kt` — instantiate `ShadowVolumeShaderProvider`, `ShadowVolumeBuilder`, `ShadowVolumeRenderer` in `create()`; in render loop: collect active `PointLightData` from game world torch entities, collect occluder meshes, call `shadowVolumeRenderer.render(camera, lights, occluders, worldRenderer::renderSceneGeometry)`
+- [X] T030 [US1] Verify `./gradlew test` passes and visual test: single point light next to wall casts geometrically accurate shadow
 
 **Checkpoint**: User Story 1 complete — single light casts pixel-perfect hard shadows with no light bleed. MVP delivered.
 
@@ -99,9 +99,9 @@
 
 ### Implementation for User Story 2
 
-- [ ] T031 [US2] Ensure `ShadowVolumeBuilder.classifyFaces()` in `src/main/kotlin/com/roguelike/rendering/ShadowVolumeBuilder.kt` correctly classifies all faces including those of the same mesh — verify the front cap includes self-facing triangles so the stencil test naturally shadows back-facing surfaces of the occluder itself
-- [ ] T032 [US2] Add self-shadowing unit test to `src/test/kotlin/com/roguelike/rendering/ShadowVolumeBuilderTest.kt` — test an L-shaped mesh where one face is front-lit and the perpendicular face should be in shadow: verify the shadow volume geometry encloses the back-facing region
-- [ ] T033 [US2] Visual verification: L-shaped wall corner with one point light — confirm bright face vs dark face with sharp transition at the geometric edge
+- [X] T031 [US2] Ensure `ShadowVolumeBuilder.classifyFaces()` in `src/main/kotlin/com/roguelike/rendering/ShadowVolumeBuilder.kt` correctly classifies all faces including those of the same mesh — verify the front cap includes self-facing triangles so the stencil test naturally shadows back-facing surfaces of the occluder itself
+- [X] T032 [US2] Add self-shadowing unit test to `src/test/kotlin/com/roguelike/rendering/ShadowVolumeBuilderTest.kt` — test an L-shaped mesh where one face is front-lit and the perpendicular face should be in shadow: verify the shadow volume geometry encloses the back-facing region
+- [X] T033 [US2] Visual verification: L-shaped wall corner with one point light — confirm bright face vs dark face with sharp transition at the geometric edge
 
 **Checkpoint**: Self-shadowing works correctly on all mesh geometry
 
@@ -117,9 +117,9 @@
 
 ### Implementation for User Story 3
 
-- [ ] T034 [US3] Verify `ShadowVolumeRenderer.render()` in `src/main/kotlin/com/roguelike/rendering/ShadowVolumeRenderer.kt` iterates over `List<PointLightData>` correctly — each light gets its own stencil clear + stencil mark + lit pass cycle. Additive blend (`GL_ONE, GL_ONE`) accumulates per-light contributions
-- [ ] T035 [US3] Update `RoguelikeGame.kt` light collection in `src/main/kotlin/com/roguelike/RoguelikeGame.kt` — gather all active torch/light-bearing entities into `List<PointLightData>` (up to 4 lights per TR-5)
-- [ ] T036 [US3] Visual verification: two+ point lights in corridor — independent shadows, additive overlap brightness
+- [X] T034 [US3] Verify `ShadowVolumeRenderer.render()` in `src/main/kotlin/com/roguelike/rendering/ShadowVolumeRenderer.kt` iterates over `List<PointLightData>` correctly — each light gets its own stencil clear + stencil mark + lit pass cycle. Additive blend (`GL_ONE, GL_ONE`) accumulates per-light contributions
+- [X] T035 [US3] Update `RoguelikeGame.kt` light collection in `src/main/kotlin/com/roguelike/RoguelikeGame.kt` — gather all active torch/light-bearing entities into `List<PointLightData>` (up to 4 lights per TR-5)
+- [X] T036 [US3] Visual verification: two+ point lights in corridor — independent shadows, additive overlap brightness
 
 **Checkpoint**: Multiple lights render correctly with independent shadow volumes and additive blending
 
@@ -135,8 +135,8 @@
 
 ### Implementation for User Story 4
 
-- [ ] T037 [US4] Configure ambient color uniform in `ShadowVolumeRenderer.render()` in `src/main/kotlin/com/roguelike/rendering/ShadowVolumeRenderer.kt` — set `u_ambientColor` to a configurable value defaulting to `vec3(0.08, 0.08, 0.10)` (slight blue tint for dungeon atmosphere). Pass as constructor parameter or game config
-- [ ] T038 [US4] Visual verification: no active lights — all surfaces faintly visible with ambient, not black; with lights active — ambient baseline visible in fully shadowed areas
+- [X] T037 [US4] Configure ambient color uniform in `ShadowVolumeRenderer.render()` in `src/main/kotlin/com/roguelike/rendering/ShadowVolumeRenderer.kt` — set `u_ambientColor` to a configurable value defaulting to `vec3(0.08, 0.08, 0.10)` (slight blue tint for dungeon atmosphere). Pass as constructor parameter or game config
+- [X] T038 [US4] Visual verification: no active lights — all surfaces faintly visible with ambient, not black; with lights active — ambient baseline visible in fully shadowed areas
 
 **Checkpoint**: Ambient baseline prevents pitch-black areas while preserving shadow contrast
 
@@ -152,10 +152,10 @@
 
 ### Implementation for User Story 5
 
-- [ ] T039 [P] [US5] Implement scissor test optimization in `ShadowVolumeRenderer.render()` in `src/main/kotlin/com/roguelike/rendering/ShadowVolumeRenderer.kt` — for each light, compute screen-space bounding rectangle from light position + radius, call `Gdx.gl.glScissor()` to limit rasterization to affected region; disable scissor after lit pass
-- [ ] T040 [P] [US5] Implement distance culling in `ShadowVolumeRenderer.render()` in `src/main/kotlin/com/roguelike/rendering/ShadowVolumeRenderer.kt` — skip light entirely if `distance(cameraPos, lightPos) - lightRadius > maxCullDist` (configurable, default 50 units)
-- [ ] T041 [US5] Implement silhouette caching in `ShadowVolumeBuilder` in `src/main/kotlin/com/roguelike/rendering/ShadowVolumeBuilder.kt` — use `HashMap<Pair<Int, Int>, SilhouetteCache>` keyed by `(meshId, lightId)`. On `buildShadowVolume()`, check cache: if `valid` and `lightPos` unchanged, return cached `ShadowVolumeMesh`. Invalidate on light/mesh movement per R4 decision
-- [ ] T042 [US5] Performance verification: 4 active point lights in dungeon room — confirm ≥ 30 FPS on standard desktop GPU
+- [X] T039 [P] [US5] Implement scissor test optimization in `ShadowVolumeRenderer.render()` in `src/main/kotlin/com/roguelike/rendering/ShadowVolumeRenderer.kt` — for each light, compute screen-space bounding rectangle from light position + radius, call `Gdx.gl.glScissor()` to limit rasterization to affected region; disable scissor after lit pass
+- [X] T040 [P] [US5] Implement distance culling in `ShadowVolumeRenderer.render()` in `src/main/kotlin/com/roguelike/rendering/ShadowVolumeRenderer.kt` — skip light entirely if `distance(cameraPos, lightPos) - lightRadius > maxCullDist` (configurable, default 50 units)
+- [X] T041 [US5] Implement silhouette caching in `ShadowVolumeBuilder` in `src/main/kotlin/com/roguelike/rendering/ShadowVolumeBuilder.kt` — use `HashMap<Pair<Int, Int>, SilhouetteCache>` keyed by `(meshId, lightId)`. On `buildShadowVolume()`, check cache: if `valid` and `lightPos` unchanged, return cached `ShadowVolumeMesh`. Invalidate on light/mesh movement per R4 decision
+- [X] T042 [US5] Performance verification: 4 active point lights in dungeon room — confirm ≥ 30 FPS on standard desktop GPU
 
 **Checkpoint**: Performance target met with 4 simultaneous lights
 
@@ -165,11 +165,11 @@
 
 **Purpose**: Cleanup, documentation, and final validation
 
-- [ ] T043 [P] Dispose shader programs and mesh resources in `ShadowVolumeShaderProvider.dispose()` and `ShadowVolumeRenderer.dispose()` — call on game shutdown in `RoguelikeGame.kt`
-- [ ] T044 [P] Verify stencil buffer is 8-bit in LWJGL3 window config — check `Lwjgl3ApplicationConfiguration` in `src/main/kotlin/com/roguelike/Main.kt` or launcher, confirm stencil bits ≥ 8
-- [ ] T045 [P] Verify `core/model/` package remains LibGDX-free — `LightDef`, `LightShape`, `LightDirection` have no `com.badlogic.gdx` imports
-- [ ] T046 Run full test suite `./gradlew test` — all tests pass, no references to deleted lighting classes remain
-- [ ] T047 Run quickstart.md validation — build, test, run game per quickstart.md instructions
+- [X] T043 [P] Dispose shader programs and mesh resources in `ShadowVolumeShaderProvider.dispose()` and `ShadowVolumeRenderer.dispose()` — call on game shutdown in `RoguelikeGame.kt`
+- [X] T044 [P] Verify stencil buffer is 8-bit in LWJGL3 window config — check `Lwjgl3ApplicationConfiguration` in `src/main/kotlin/com/roguelike/Main.kt` or launcher, confirm stencil bits ≥ 8
+- [X] T045 [P] Verify `core/model/` package remains LibGDX-free — `LightDef`, `LightShape`, `LightDirection` have no `com.badlogic.gdx` imports
+- [X] T046 Run full test suite `./gradlew test` — all tests pass, no references to deleted lighting classes remain
+- [X] T047 Run quickstart.md validation — build, test, run game per quickstart.md instructions
 
 ---
 
