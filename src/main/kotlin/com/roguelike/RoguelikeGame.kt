@@ -77,6 +77,7 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
     private lateinit var debugShapeRenderer: com.badlogic.gdx.graphics.glutils.ShapeRenderer
     private lateinit var debugSpriteBatch: com.badlogic.gdx.graphics.g2d.SpriteBatch
     private lateinit var debugFont: com.badlogic.gdx.graphics.g2d.BitmapFont
+    private lateinit var lightSphereInstance: ModelInstance
 
     /** Bridge GameLogger that delegates to LibGDX Gdx.app.log(). */
     private val gdxLogger = GameLogger { tag, msg -> Gdx.app?.log(tag, msg) }
@@ -225,6 +226,14 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         debugSpriteBatch = com.badlogic.gdx.graphics.g2d.SpriteBatch()
         debugFont = com.badlogic.gdx.graphics.g2d.BitmapFont()
 
+        // Light source debug sphere
+        val lsModel = modelBuilder.createSphere(
+            0.3f, 0.3f, 0.3f, 12, 12,
+            Material(ColorAttribute.createDiffuse(Color.YELLOW)),
+            (VertexAttributes.Usage.Position or VertexAttributes.Usage.Normal).toLong()
+        )
+        lightSphereInstance = ModelInstance(lsModel)
+
         // Spawn player at tagged node
         world.getNodesWithTag(NodeTags.PLAYER_SPAWN).firstOrNull()?.let { node ->
             player.position.set(node.x.toFloat(), node.y.toFloat(), node.z.toFloat())
@@ -334,6 +343,15 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         renderEnv.add(shadowLight)
         renderEnv.shadowMap = shadowLight
 
+        // Add point lights from world light sources
+        for (ls in world.lightSources) {
+            renderEnv.add(com.badlogic.gdx.graphics.g3d.environment.PointLight().set(
+                Color(ls.colorR(), ls.colorG(), ls.colorB(), 1f),
+                com.badlogic.gdx.math.Vector3(ls.x, ls.y, ls.z),
+                ls.intensity
+            ))
+        }
+
         modelBatch.begin(camera)
         worldRenderer.render(world, modelBatch, renderEnv, camera = camera, minZ = playerZ, maxZ = playerZ + 1)
 
@@ -345,6 +363,12 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         if (debugMode) {
             axesInstance.transform.setTranslation(player.position.x, player.position.y, player.position.z)
             modelBatch.render(axesInstance)
+
+            // Render light source positions as yellow spheres
+            for (ls in world.lightSources) {
+                lightSphereInstance.transform.setToTranslation(ls.x, ls.y, ls.z)
+                modelBatch.render(lightSphereInstance, renderEnv)
+            }
         }
         modelBatch.end()
 

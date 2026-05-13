@@ -121,6 +121,17 @@ object WorldIO {
                 )
             }
 
+            data.lightSources.forEach { lsd ->
+                world.lightSources.add(
+                    LightSource(
+                        id = lsd.id,
+                        x = lsd.x, y = lsd.y, z = lsd.z,
+                        intensity = lsd.intensity,
+                        colorHex = lsd.colorHex
+                    )
+                )
+            }
+
             Gdx.app?.log("WorldIO", "World loaded from $path")
             world
         } catch (e: Exception) {
@@ -198,6 +209,17 @@ object WorldIO {
                         collisionHalfSize = prop.collisionHalfSize,
                         collisionHalfSizeX = prop.collisionHalfSizeX,
                         collisionHalfSizeY = prop.collisionHalfSizeY
+                    )
+                )
+            }
+
+            world.lightSources.forEach { ls ->
+                data.lightSources.add(
+                    LightSourceData(
+                        id = ls.id,
+                        x = ls.x, y = ls.y, z = ls.z,
+                        intensity = ls.intensity,
+                        colorHex = ls.colorHex
                     )
                 )
             }

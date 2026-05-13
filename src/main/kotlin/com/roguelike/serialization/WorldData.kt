@@ -8,7 +8,8 @@ data class WorldData(
     val depth: Int = 0, 
     val nodes: ArrayList<NodeData> = ArrayList(),
     val associations: ArrayList<AssociationData> = ArrayList(),
-    val props: ArrayList<PropData> = ArrayList()
+    val props: ArrayList<PropData> = ArrayList(),
+    val lightSources: ArrayList<LightSourceData> = ArrayList()
 )
 
 data class NodeData(
@@ -84,6 +85,16 @@ data class PropData(
 data class AssociationData(
     val sourceX: Int = 0, val sourceY: Int = 0, val sourceZ: Int = 0,
     val targetX: Int = 0, val targetY: Int = 0, val targetZ: Int = 0,
-    val type: String = "", // e.g. "key" or "toggle"
+    val type: String = "",
     val data: String? = null
 )
+
+data class LightSourceData(
+    val id: String = "",
+    val x: Float = 0f,
+    val y: Float = 0f,
+    val z: Float = 0f,
+    val intensity: Float = 5f,
+    val colorHex: String = "ffcc88"
+)
+

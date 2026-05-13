@@ -53,6 +53,8 @@ class MapEditor(private val game: Game) : Screen {
     private lateinit var selectedFrameInstance: ModelInstance
     private lateinit var tagSphereModel: Model
     private lateinit var tagSphereInstance: ModelInstance
+    private lateinit var lightSphereModel: Model
+    private lateinit var lightSphereInstance: ModelInstance
     private lateinit var tagFont: BitmapFont
     private lateinit var tagSpriteBatch: com.badlogic.gdx.graphics.g2d.SpriteBatch
 
@@ -243,6 +245,14 @@ class MapEditor(private val game: Game) : Screen {
             (VertexAttributes.Usage.Position or VertexAttributes.Usage.Normal).toLong()
         )
         tagSphereInstance = ModelInstance(tagSphereModel)
+
+        val lightSphereSize = 0.3f
+        lightSphereModel = modelBuilder.createSphere(
+            lightSphereSize, lightSphereSize, lightSphereSize, 12, 12,
+            Material(ColorAttribute.createDiffuse(Color.YELLOW)),
+            (VertexAttributes.Usage.Position or VertexAttributes.Usage.Normal).toLong()
+        )
+        lightSphereInstance = ModelInstance(lightSphereModel)
 
         tagFont = BitmapFont()
         tagFont.color = Color.WHITE
@@ -654,6 +664,19 @@ class MapEditor(private val game: Game) : Screen {
             for (prop in world.props) {
                 if (prop.z.toInt() <= maxRenderZ) {
                     propRenderer.render(prop, modelBatch, environment, selected = prop == inputHandler.selectedProp)
+                }
+            }
+
+            // ── Light sources (yellow spheres) ────────────────────────────────
+            for (ls in world.lightSources) {
+                if (ls.z.toInt() <= maxRenderZ) {
+                    val selected = ls == inputHandler.selectedLightSource
+                    val color = if (selected) Color.CYAN else Color.YELLOW
+                    lightSphereInstance.transform.setToTranslation(ls.x, ls.y, ls.z)
+                    if (lightSphereInstance.materials.size > 0) {
+                        lightSphereInstance.materials.get(0).set(ColorAttribute.createDiffuse(color))
+                    }
+                    modelBatch.render(lightSphereInstance, environment)
                 }
             }
 

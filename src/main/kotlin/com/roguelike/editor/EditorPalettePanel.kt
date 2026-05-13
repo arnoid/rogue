@@ -42,6 +42,8 @@ sealed class PaletteSelection {
     data class TagSel(val tag: String) : PaletteSelection()
     /** Place a decoration prop. */
     data class DecorationSel(val modelPath: String, val name: String) : PaletteSelection()
+    /** Place a light source. */
+    object LightSourceSel : PaletteSelection()
 }
 
 /**
@@ -244,6 +246,18 @@ class EditorPalettePanel(
             content.add(ladderContainer).pad(5f).row()
             selectionButtons["ladder"] = ladderContainer
         }
+
+        // ── Light Source ────────────────────────────────────────────────────
+        val lightContainer = SelectionBorderGroup { paletteSelection is PaletteSelection.LightSourceSel }
+        lightContainer.add(VisLabel("💡")).size(64f).pad(5f).row()
+        lightContainer.add(VisLabel("Light Source")).expandX().center()
+        lightContainer.addListener(object : ClickListener() {
+            override fun clicked(event: InputEvent, x: Float, y: Float) {
+                toggleSelection(PaletteSelection.LightSourceSel)
+            }
+        })
+        content.add(lightContainer).pad(5f).row()
+        selectionButtons["lightsource"] = lightContainer
 
         // ── Tags ─────────────────────────────────────────────────────────────
         content.addSeparator().padTop(10f).padBottom(4f)

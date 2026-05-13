@@ -42,6 +42,9 @@ class EditorInputHandler(
     var selectedProp: Prop? = null
     private var isDraggingProp = false
 
+    /** Currently selected light source for movement/intensity editing. */
+    var selectedLightSource: com.roguelike.core.model.LightSource? = null
+
     /** Active building tool mode. */
     var toolMode: EditorToolMode = EditorToolMode.NONE
 
@@ -185,6 +188,13 @@ class EditorInputHandler(
                         if (selectedProp == prop) selectedProp = null
                     }
                 }
+                is PaletteSelection.LightSourceSel -> {
+                    val ls = findLightSourceAt(world, hoveredX.toFloat(), hoveredY.toFloat(), hoveredZ.toFloat())
+                    if (ls != null) {
+                        world.lightSources.remove(ls)
+                        if (selectedLightSource == ls) selectedLightSource = null
+                    }
+                }
             }
             return
         }
@@ -315,7 +325,6 @@ class EditorInputHandler(
                 }
                 is PaletteSelection.DecorationSel -> {
                     if (Gdx.input.justTouched() && hoveredX != -1) {
-                        // Place a new prop at the hovered position
                         val prop = Prop(
                             modelPath = sel.modelPath,
                             name = sel.name,
@@ -325,6 +334,23 @@ class EditorInputHandler(
                         )
                         world.props.add(prop)
                         selectedProp = prop
+                    }
+                }
+                is PaletteSelection.LightSourceSel -> {
+                    if (Gdx.input.justTouched() && hoveredX != -1) {
+                        // Check if clicking on existing light source to select it
+                        val existing = findLightSourceAt(world, hoveredX.toFloat(), hoveredY.toFloat(), hoveredZ.toFloat())
+                        if (existing != null) {
+                            selectedLightSource = existing
+                        } else {
+                            val ls = com.roguelike.core.model.LightSource(
+                                x = hoveredX.toFloat(),
+                                y = hoveredY.toFloat(),
+                                z = hoveredZ.toFloat()
+                            )
+                            world.lightSources.add(ls)
+                            selectedLightSource = ls
+                        }
                     }
                 }
             }
@@ -360,6 +386,20 @@ class EditorInputHandler(
             if (Gdx.input.isKeyJustPressed(Input.Keys.X)) prop.scale += 0.05f
             if (Gdx.input.isKeyJustPressed(Input.Keys.R)) prop.z += microStep
             if (Gdx.input.isKeyJustPressed(Input.Keys.F)) prop.z -= microStep
+        }
+
+        // ── WASD movement & Z/X intensity for selected light source ─────
+        val ls = selectedLightSource
+        if (ls != null) {
+            val microStep = 0.05f
+            if (Gdx.input.isKeyJustPressed(Input.Keys.W)) ls.y += microStep
+            if (Gdx.input.isKeyJustPressed(Input.Keys.S)) ls.y -= microStep
+            if (Gdx.input.isKeyJustPressed(Input.Keys.A)) ls.x -= microStep
+            if (Gdx.input.isKeyJustPressed(Input.Keys.D)) ls.x += microStep
+            if (Gdx.input.isKeyJustPressed(Input.Keys.R)) ls.z += microStep
+            if (Gdx.input.isKeyJustPressed(Input.Keys.F)) ls.z -= microStep
+            if (Gdx.input.isKeyJustPressed(Input.Keys.Z)) ls.intensity = (ls.intensity - 0.5f).coerceAtLeast(0.5f)
+            if (Gdx.input.isKeyJustPressed(Input.Keys.X)) ls.intensity += 0.5f
         }
     }
 
@@ -646,6 +686,14 @@ class EditorInputHandler(
                 kotlin.math.abs(dx) < hsX + 0.5f &&
                 kotlin.math.abs(dy) < hsY + 0.5f &&
                 kotlin.math.abs(dz) < 1f
+            }
+        }
+
+        fun findLightSourceAt(world: World, x: Float, y: Float, z: Float): com.roguelike.core.model.LightSource? {
+            return world.lightSources.find { ls ->
+                kotlin.math.abs(x - ls.x) < 0.6f &&
+                kotlin.math.abs(y - ls.y) < 0.6f &&
+                kotlin.math.abs(z - ls.z) < 1f
             }
         }
 
