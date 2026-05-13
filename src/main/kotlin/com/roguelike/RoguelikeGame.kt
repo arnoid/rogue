@@ -24,11 +24,6 @@ import com.roguelike.rendering.ItemRenderer
 import com.roguelike.rendering.PropRenderer
 import com.roguelike.rendering.TileRenderer
 import com.roguelike.rendering.WorldRenderer
-import com.roguelike.rendering.PointLightData
-import com.roguelike.rendering.ShadowVolumeBuilder
-import com.roguelike.rendering.ShadowVolumeRenderer
-import com.roguelike.rendering.ShadowVolumeShaderProvider
-import com.roguelike.core.model.isLit
 import com.roguelike.serialization.WorldIO
 import com.roguelike.systems.CameraManager
 import com.roguelike.systems.InputHandler
@@ -56,10 +51,6 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
     private lateinit var interactionSystem: InteractionSystem
     private val inputHandler = InputHandler()
     private lateinit var cameraManager: CameraManager
-
-    // Shadow volume pipeline
-    private lateinit var svShaderProvider: ShadowVolumeShaderProvider
-    private lateinit var svRenderer: ShadowVolumeRenderer
 
     // Shadow mapping
     private lateinit var shadowLight: DirectionalShadowLight
@@ -139,10 +130,6 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         // light reaches them and gives lights room to drive contrast.
         environment.set(ColorAttribute(ColorAttribute.AmbientLight, 0.02f, 0.02f, 0.02f, 1f))
 
-        // Shadow volume pipeline
-        svShaderProvider = ShadowVolumeShaderProvider()
-        svRenderer = ShadowVolumeRenderer(svShaderProvider)
-
         // Shadow mapping — depth batch for rendering shadow depth pass
         depthBatch = ModelBatch(DepthShaderProvider())
         shadowLight = DirectionalShadowLight(
@@ -186,12 +173,6 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         // Player — pure logic object, no LibGDX
         player = Player()
         interactionSystem.actors.add(player)
-
-        // Starter inventory: a candle and a torch so the lighting system is
-        // immediately interactive. Click the rows in the inventory UI to toggle
-        // their lit state.
-        com.roguelike.core.model.ItemFactory.create("Candle")?.let { player.inventory.add(it) }
-        com.roguelike.core.model.ItemFactory.create("Torch")?.let { player.inventory.add(it) }
 
         // Player visual — sphere mesh owned here in the view layer
         val modelBuilder = ModelBuilder()
@@ -327,28 +308,16 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         // Sync player visual to logic position
         playerInstance.transform.setTranslation(player.position.x, player.position.y, player.position.z)
 
-        // Collect active lights
-        val lights = collectActiveLights()
         val playerZ = Math.ceil(player.position.z.toDouble()).toInt()
 
         // ── Shadow depth pass ────────────────────────────────────────────────
-        // The player is the light source. The directional shadow light points
-        // from the player's position outward/downward so that walls between
-        // the player and far surfaces cast shadows on those far surfaces.
-        if (lights.isNotEmpty()) {
-            val primary = lights[0]
-            shadowLight.set(
-                primary.color.r * 0.7f, primary.color.g * 0.7f, primary.color.b * 0.7f,
-                player.facingDirection.x * 0.3f - 0.1f,   // slightly biased by facing
-                -0.8f,                                     // mostly downward
-                player.facingDirection.y * 0.3f - 0.1f
-            )
-        } else {
-            // No lights — still render shadows from a default overhead angle
-            shadowLight.set(0.1f, 0.1f, 0.1f, -0.2f, -1f, -0.2f)
-        }
+        // Fixed directional light angled downward — models block this light
+        // and cast shadows on surfaces behind them.
+        shadowLight.set(
+            0.8f, 0.75f, 0.6f,   // warm white
+            -0.4f, -1f, -0.3f    // angled downward
+        )
 
-        // Centre the shadow frustum on the player (the light source)
         val playerPos = com.badlogic.gdx.math.Vector3(
             player.position.x, player.position.y, player.position.z
         )
@@ -361,22 +330,9 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
 
         // ── Main lit pass ────────────────────────────────────────────────────
         val renderEnv = Environment()
-        renderEnv.set(ColorAttribute(ColorAttribute.AmbientLight, 0.03f, 0.03f, 0.04f, 1f))
-
-        // The directional shadow light provides the shadow map.
-        // Its color is kept low so the point lights dominate the illumination;
-        // the shadow map still darkens surfaces that are occluded from the
-        // player's light source direction.
+        renderEnv.set(ColorAttribute(ColorAttribute.AmbientLight, 0.15f, 0.15f, 0.18f, 1f))
         renderEnv.add(shadowLight)
         renderEnv.shadowMap = shadowLight
-
-        // Point lights at player position provide the actual illumination.
-        // These are the torch/candle lights the player carries.
-        for (light in lights) {
-            renderEnv.add(com.badlogic.gdx.graphics.g3d.environment.PointLight().set(
-                light.color, light.position, light.intensity
-            ))
-        }
 
         modelBatch.begin(camera)
         worldRenderer.render(world, modelBatch, renderEnv, maxZ = playerZ)
@@ -588,8 +544,6 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         modelBatch.dispose()
         depthBatch.dispose()
         shadowLight.dispose()
-        svRenderer.dispose()
-        svShaderProvider.dispose()
         assetLoader.dispose()
         stage.dispose()
         skin.dispose()
@@ -602,108 +556,6 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
     /**
      * Collect active point lights from the player's inventory and dropped world items.
      */
-    private fun collectActiveLights(): List<PointLightData> {
-        val lights = mutableListOf<PointLightData>()
-
-        // Player-carried lit items
-        for (item in player.inventory) {
-            if (!item.isLit()) continue
-            val def = item.definition?.light ?: continue
-            val hex = def.colorHex.trimStart('#')
-            val r = if (hex.length >= 2) hex.substring(0, 2).toIntOrNull(16)?.div(255f) ?: 1f else 1f
-            val g = if (hex.length >= 4) hex.substring(2, 4).toIntOrNull(16)?.div(255f) ?: 1f else 1f
-            val b = if (hex.length >= 6) hex.substring(4, 6).toIntOrNull(16)?.div(255f) ?: 1f else 1f
-            lights += PointLightData(
-                position = com.badlogic.gdx.math.Vector3(
-                    player.position.x, player.position.y, player.position.z + 0.5f
-                ),
-                color = Color(r, g, b, 1f),
-                intensity = def.intensity * def.range,
-                radius = def.range.coerceAtLeast(4f)
-            )
-        }
-
-        // World-dropped lit items
-        for (x in 0 until world.width) {
-            for (y in 0 until world.height) {
-                for (z in 0 until world.depth) {
-                    val node = world.getNode(x, y, z) ?: continue
-                    for (item in node.items) {
-                        if (!item.isLit()) continue
-                        val def = item.definition?.light ?: continue
-                        val hex = def.colorHex.trimStart('#')
-                        val r = if (hex.length >= 2) hex.substring(0, 2).toIntOrNull(16)?.div(255f) ?: 1f else 1f
-                        val g = if (hex.length >= 4) hex.substring(2, 4).toIntOrNull(16)?.div(255f) ?: 1f else 1f
-                        val b = if (hex.length >= 6) hex.substring(4, 6).toIntOrNull(16)?.div(255f) ?: 1f else 1f
-                        lights += PointLightData(
-                            position = com.badlogic.gdx.math.Vector3(x.toFloat(), y.toFloat(), z.toFloat() + 0.3f),
-                            color = Color(r, g, b, 1f),
-                            intensity = def.intensity * def.range,
-                            radius = def.range.coerceAtLeast(4f)
-                        )
-                    }
-                }
-            }
-        }
-
-        return lights.take(4) // Limit to 4 lights for performance
-    }
-
-    /**
-     * Build simplified box occluders for wall tiles visible on the current level.
-     * Each wall tile becomes a unit cube's worth of triangles.
-     */
-    private fun collectOccluders(maxZ: Int): List<List<ShadowVolumeBuilder.Triangle>> {
-        val occluders = mutableListOf<List<ShadowVolumeBuilder.Triangle>>()
-
-        for (x in 0 until world.width) {
-            for (y in 0 until world.height) {
-                for (z in 0..maxZ.coerceAtMost(world.depth - 1)) {
-                    val node = world.getNode(x, y, z) ?: continue
-                    // Check if this node has any wall tiles
-                    val hasWall = node.hasTile(com.roguelike.core.model.TileSlot.WALL_NORTH) ||
-                                  node.hasTile(com.roguelike.core.model.TileSlot.WALL_SOUTH) ||
-                                  node.hasTile(com.roguelike.core.model.TileSlot.WALL_EAST) ||
-                                  node.hasTile(com.roguelike.core.model.TileSlot.WALL_WEST)
-                    if (hasWall) {
-                        occluders.add(wallBoxTriangles(x.toFloat(), y.toFloat(), z.toFloat()))
-                    }
-                }
-            }
-        }
-        return occluders
-    }
-
-    /** Generate 12 triangles forming a unit cube centred at (cx, cy, cz). */
-    private fun wallBoxTriangles(cx: Float, cy: Float, cz: Float): List<ShadowVolumeBuilder.Triangle> {
-        val s = 0.5f
-        fun v(dx: Float, dy: Float, dz: Float) = com.badlogic.gdx.math.Vector3(cx + dx, cy + dy, cz + dz)
-        val v000 = v(-s, -s, -s); val v100 = v(s, -s, -s)
-        val v110 = v(s, s, -s);   val v010 = v(-s, s, -s)
-        val v001 = v(-s, -s, s);  val v101 = v(s, -s, s)
-        val v111 = v(s, s, s);    val v011 = v(-s, s, s)
-        return listOf(
-            // +Z
-            ShadowVolumeBuilder.Triangle(v001.cpy(), v101.cpy(), v111.cpy()),
-            ShadowVolumeBuilder.Triangle(v001.cpy(), v111.cpy(), v011.cpy()),
-            // -Z
-            ShadowVolumeBuilder.Triangle(v100.cpy(), v000.cpy(), v010.cpy()),
-            ShadowVolumeBuilder.Triangle(v100.cpy(), v010.cpy(), v110.cpy()),
-            // +X
-            ShadowVolumeBuilder.Triangle(v101.cpy(), v100.cpy(), v110.cpy()),
-            ShadowVolumeBuilder.Triangle(v101.cpy(), v110.cpy(), v111.cpy()),
-            // -X
-            ShadowVolumeBuilder.Triangle(v000.cpy(), v001.cpy(), v011.cpy()),
-            ShadowVolumeBuilder.Triangle(v000.cpy(), v011.cpy(), v010.cpy()),
-            // +Y
-            ShadowVolumeBuilder.Triangle(v010.cpy(), v011.cpy(), v111.cpy()),
-            ShadowVolumeBuilder.Triangle(v010.cpy(), v111.cpy(), v110.cpy()),
-            // -Y
-            ShadowVolumeBuilder.Triangle(v000.cpy(), v100.cpy(), v101.cpy()),
-            ShadowVolumeBuilder.Triangle(v000.cpy(), v101.cpy(), v001.cpy())
-        )
-    }
-
     private fun edgeOffsetFor(slot: com.roguelike.core.model.TileSlot): com.badlogic.gdx.math.Vector3 = when (slot) {
         com.roguelike.core.model.TileSlot.WALL_NORTH -> com.badlogic.gdx.math.Vector3(0f, 0.5f, 0f)
         com.roguelike.core.model.TileSlot.WALL_SOUTH -> com.badlogic.gdx.math.Vector3(0f, -0.5f, 0f)
