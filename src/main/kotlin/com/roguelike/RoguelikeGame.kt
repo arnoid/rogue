@@ -16,7 +16,6 @@ import com.badlogic.gdx.scenes.scene2d.ui.Skin
 import com.badlogic.gdx.utils.viewport.ScreenViewport
 import com.roguelike.core.model.GameLogger
 import com.roguelike.core.systems.InteractionSystem
-import com.roguelike.core.systems.LightingSystem
 import com.roguelike.core.systems.MovementSystem
 import com.roguelike.rendering.InventoryUI
 import com.roguelike.rendering.ItemRenderer
@@ -278,11 +277,6 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
 
         if (inputHandler.isDebugToggleJustPressed()) debugMode = !debugMode
 
-        // L key: toggle lighting diagnostics. Useful when launching from an
-        // IDE runner that doesn't pass -Drogue.lightlog=1.
-        if (Gdx.input.isKeyJustPressed(Input.Keys.L)) {
-            com.roguelike.core.systems.LightingDiagnostics.toggle()
-        }
 
         if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
             game.screen = MainMenuScreen(game)
@@ -307,19 +301,13 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
 
         modelBatch.begin(camera)
         val playerZ = Math.ceil(player.position.z.toDouble()).toInt()
-        val dynamicLighting = com.roguelike.core.systems.DynamicLighting.build(world, player)
-        worldRenderer.render(world, modelBatch, environment, maxZ = playerZ, dynamicLighting = dynamicLighting)
+        worldRenderer.render(world, modelBatch, environment, maxZ = playerZ)
 
-        // Player visual gets the same per-cell environment so they're lit by
-        // whichever items reach their cell.
-        val pcx = Math.round(player.position.x).coerceIn(0, world.width - 1)
-        val pcy = Math.round(player.position.y).coerceIn(0, world.height - 1)
-        val pcz = Math.round(player.position.z).coerceIn(0, world.depth - 1)
-        val playerEnv = dynamicLighting.environmentFor(pcx, pcy, pcz)
+        // Player visual
         if (playerInstance.materials.size > 0) {
             playerInstance.materials.get(0).set(ColorAttribute.createDiffuse(Color.BLUE))
         }
-        modelBatch.render(playerInstance, playerEnv)
+        modelBatch.render(playerInstance, environment)
 
         if (debugMode) {
             axesInstance.transform.setTranslation(player.position.x, player.position.y, player.position.z)
