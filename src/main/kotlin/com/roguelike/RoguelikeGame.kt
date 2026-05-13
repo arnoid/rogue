@@ -22,6 +22,11 @@ import com.roguelike.rendering.ItemRenderer
 import com.roguelike.rendering.PropRenderer
 import com.roguelike.rendering.TileRenderer
 import com.roguelike.rendering.WorldRenderer
+import com.roguelike.rendering.PointLightData
+import com.roguelike.rendering.ShadowVolumeBuilder
+import com.roguelike.rendering.ShadowVolumeRenderer
+import com.roguelike.rendering.ShadowVolumeShaderProvider
+import com.roguelike.core.model.isLit
 import com.roguelike.serialization.WorldIO
 import com.roguelike.systems.CameraManager
 import com.roguelike.systems.InputHandler
@@ -49,6 +54,10 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
     private lateinit var interactionSystem: InteractionSystem
     private val inputHandler = InputHandler()
     private lateinit var cameraManager: CameraManager
+
+    // Shadow volume pipeline
+    private lateinit var svShaderProvider: ShadowVolumeShaderProvider
+    private lateinit var svRenderer: ShadowVolumeRenderer
 
     // UI
     private lateinit var stage: Stage
@@ -123,6 +132,10 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         // SpotLight). A near-zero ambient keeps surfaces totally black when no
         // light reaches them and gives lights room to drive contrast.
         environment.set(ColorAttribute(ColorAttribute.AmbientLight, 0.02f, 0.02f, 0.02f, 1f))
+
+        // Shadow volume pipeline
+        svShaderProvider = ShadowVolumeShaderProvider()
+        svRenderer = ShadowVolumeRenderer(svShaderProvider)
 
         // UI Setup
         stage = Stage(ScreenViewport())
@@ -299,16 +312,24 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         // Sync player visual to logic position
         playerInstance.transform.setTranslation(player.position.x, player.position.y, player.position.z)
 
-        modelBatch.begin(camera)
+        // Collect active lights from player inventory and world items
+        val lights = collectActiveLights()
+
+        // Collect occluder geometry (wall tiles as boxes)
         val playerZ = Math.ceil(player.position.z.toDouble()).toInt()
-        worldRenderer.render(world, modelBatch, environment, maxZ = playerZ)
+        val occluders = collectOccluders(playerZ)
 
-        // Player visual
-        if (playerInstance.materials.size > 0) {
-            playerInstance.materials.get(0).set(ColorAttribute.createDiffuse(Color.BLUE))
+        // Shadow volume render pipeline
+        svRenderer.render(camera, lights, occluders) { batch, env ->
+            worldRenderer.render(world, batch, env, maxZ = playerZ)
+            if (playerInstance.materials.size > 0) {
+                playerInstance.materials.get(0).set(ColorAttribute.createDiffuse(Color.BLUE))
+            }
+            batch.render(playerInstance, env)
         }
-        modelBatch.render(playerInstance, environment)
 
+        // Fallback: also render via modelBatch for debug mode and non-shadow-volume elements
+        modelBatch.begin(camera)
         if (debugMode) {
             axesInstance.transform.setTranslation(player.position.x, player.position.y, player.position.z)
             modelBatch.render(axesInstance)
@@ -509,6 +530,8 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
 
     override fun dispose() {
         modelBatch.dispose()
+        svRenderer.dispose()
+        svShaderProvider.dispose()
         assetLoader.dispose()
         stage.dispose()
         skin.dispose()
@@ -516,6 +539,111 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         debugSpriteBatch.dispose()
         debugFont.dispose()
         mapManager?.dispose()
+    }
+
+    /**
+     * Collect active point lights from the player's inventory and dropped world items.
+     */
+    private fun collectActiveLights(): List<PointLightData> {
+        val lights = mutableListOf<PointLightData>()
+
+        // Player-carried lit items
+        for (item in player.inventory) {
+            if (!item.isLit()) continue
+            val def = item.definition?.light ?: continue
+            val hex = def.colorHex.trimStart('#')
+            val r = if (hex.length >= 2) hex.substring(0, 2).toIntOrNull(16)?.div(255f) ?: 1f else 1f
+            val g = if (hex.length >= 4) hex.substring(2, 4).toIntOrNull(16)?.div(255f) ?: 1f else 1f
+            val b = if (hex.length >= 6) hex.substring(4, 6).toIntOrNull(16)?.div(255f) ?: 1f else 1f
+            lights += PointLightData(
+                position = com.badlogic.gdx.math.Vector3(
+                    player.position.x, player.position.y, player.position.z + 0.5f
+                ),
+                color = Color(r, g, b, 1f),
+                intensity = def.intensity * def.range,
+                radius = def.range.coerceAtLeast(4f)
+            )
+        }
+
+        // World-dropped lit items
+        for (x in 0 until world.width) {
+            for (y in 0 until world.height) {
+                for (z in 0 until world.depth) {
+                    val node = world.getNode(x, y, z) ?: continue
+                    for (item in node.items) {
+                        if (!item.isLit()) continue
+                        val def = item.definition?.light ?: continue
+                        val hex = def.colorHex.trimStart('#')
+                        val r = if (hex.length >= 2) hex.substring(0, 2).toIntOrNull(16)?.div(255f) ?: 1f else 1f
+                        val g = if (hex.length >= 4) hex.substring(2, 4).toIntOrNull(16)?.div(255f) ?: 1f else 1f
+                        val b = if (hex.length >= 6) hex.substring(4, 6).toIntOrNull(16)?.div(255f) ?: 1f else 1f
+                        lights += PointLightData(
+                            position = com.badlogic.gdx.math.Vector3(x.toFloat(), y.toFloat(), z.toFloat() + 0.3f),
+                            color = Color(r, g, b, 1f),
+                            intensity = def.intensity * def.range,
+                            radius = def.range.coerceAtLeast(4f)
+                        )
+                    }
+                }
+            }
+        }
+
+        return lights.take(4) // Limit to 4 lights for performance
+    }
+
+    /**
+     * Build simplified box occluders for wall tiles visible on the current level.
+     * Each wall tile becomes a unit cube's worth of triangles.
+     */
+    private fun collectOccluders(maxZ: Int): List<List<ShadowVolumeBuilder.Triangle>> {
+        val occluders = mutableListOf<List<ShadowVolumeBuilder.Triangle>>()
+
+        for (x in 0 until world.width) {
+            for (y in 0 until world.height) {
+                for (z in 0..maxZ.coerceAtMost(world.depth - 1)) {
+                    val node = world.getNode(x, y, z) ?: continue
+                    // Check if this node has any wall tiles
+                    val hasWall = node.hasTile(com.roguelike.core.model.TileSlot.WALL_NORTH) ||
+                                  node.hasTile(com.roguelike.core.model.TileSlot.WALL_SOUTH) ||
+                                  node.hasTile(com.roguelike.core.model.TileSlot.WALL_EAST) ||
+                                  node.hasTile(com.roguelike.core.model.TileSlot.WALL_WEST)
+                    if (hasWall) {
+                        occluders.add(wallBoxTriangles(x.toFloat(), y.toFloat(), z.toFloat()))
+                    }
+                }
+            }
+        }
+        return occluders
+    }
+
+    /** Generate 12 triangles forming a unit cube centred at (cx, cy, cz). */
+    private fun wallBoxTriangles(cx: Float, cy: Float, cz: Float): List<ShadowVolumeBuilder.Triangle> {
+        val s = 0.5f
+        fun v(dx: Float, dy: Float, dz: Float) = com.badlogic.gdx.math.Vector3(cx + dx, cy + dy, cz + dz)
+        val v000 = v(-s, -s, -s); val v100 = v(s, -s, -s)
+        val v110 = v(s, s, -s);   val v010 = v(-s, s, -s)
+        val v001 = v(-s, -s, s);  val v101 = v(s, -s, s)
+        val v111 = v(s, s, s);    val v011 = v(-s, s, s)
+        return listOf(
+            // +Z
+            ShadowVolumeBuilder.Triangle(v001.cpy(), v101.cpy(), v111.cpy()),
+            ShadowVolumeBuilder.Triangle(v001.cpy(), v111.cpy(), v011.cpy()),
+            // -Z
+            ShadowVolumeBuilder.Triangle(v100.cpy(), v000.cpy(), v010.cpy()),
+            ShadowVolumeBuilder.Triangle(v100.cpy(), v010.cpy(), v110.cpy()),
+            // +X
+            ShadowVolumeBuilder.Triangle(v101.cpy(), v100.cpy(), v110.cpy()),
+            ShadowVolumeBuilder.Triangle(v101.cpy(), v110.cpy(), v111.cpy()),
+            // -X
+            ShadowVolumeBuilder.Triangle(v000.cpy(), v001.cpy(), v011.cpy()),
+            ShadowVolumeBuilder.Triangle(v000.cpy(), v011.cpy(), v010.cpy()),
+            // +Y
+            ShadowVolumeBuilder.Triangle(v010.cpy(), v011.cpy(), v111.cpy()),
+            ShadowVolumeBuilder.Triangle(v010.cpy(), v111.cpy(), v110.cpy()),
+            // -Y
+            ShadowVolumeBuilder.Triangle(v000.cpy(), v100.cpy(), v101.cpy()),
+            ShadowVolumeBuilder.Triangle(v000.cpy(), v101.cpy(), v001.cpy())
+        )
     }
 
     private fun edgeOffsetFor(slot: com.roguelike.core.model.TileSlot): com.badlogic.gdx.math.Vector3 = when (slot) {
