@@ -134,5 +134,41 @@ class ShadowVolumeBuilderTest {
         // At minimum, it shouldn't crash
         assertNotNull(volume)
     }
+
+    // T032: Self-shadowing — L-shaped mesh
+    @Test
+    fun `L-shaped mesh produces shadow volume that encloses back-facing region`() {
+        // Two squares at 90 degrees forming an L:
+        // Face 1: on XZ plane at y=0 (facing +Y)
+        // Face 2: on YZ plane at x=0 (facing +X)
+        val tris = listOf(
+            // Face on XZ plane (y=0, normal +Y)
+            ShadowVolumeBuilder.Triangle(
+                Vector3(0f, 0f, 0f), Vector3(1f, 0f, 0f), Vector3(1f, 0f, 1f)
+            ),
+            ShadowVolumeBuilder.Triangle(
+                Vector3(0f, 0f, 0f), Vector3(1f, 0f, 1f), Vector3(0f, 0f, 1f)
+            ),
+            // Face on YZ plane (x=0, normal +X)
+            ShadowVolumeBuilder.Triangle(
+                Vector3(0f, 0f, 0f), Vector3(0f, 0f, 1f), Vector3(0f, 1f, 1f)
+            ),
+            ShadowVolumeBuilder.Triangle(
+                Vector3(0f, 0f, 0f), Vector3(0f, 1f, 1f), Vector3(0f, 1f, 0f)
+            )
+        )
+        // Light on -X+Y side — face on XZ plane (normal +Y) is front-facing,
+        // face on YZ plane (normal +X) is back-facing since light is on -X side
+        val lightPos = Vector3(-2f, 2f, 0.5f)
+        val builder = ShadowVolumeBuilder()
+
+        val (front, back) = builder.classifyFaces(tris, lightPos)
+        // At least one front and one back face for self-shadowing to occur
+        assertTrue(front.isNotEmpty(), "L-shape should have front-facing faces")
+        assertTrue(back.isNotEmpty(), "L-shape should have back-facing faces (self-shadow region)")
+
+        val volume = builder.buildShadowVolume(tris, lightPos, 100f)
+        assertTrue(volume.indexCount > 0, "L-shape should produce shadow volume geometry")
+    }
 }
 

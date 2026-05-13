@@ -9,5 +9,7 @@ fun main() {
     config.setWindowedMode(1024, 768)
     config.useVsync(true)
     config.setForegroundFPS(60)
+    // Request 8-bit stencil buffer for shadow volume rendering (depth-fail method)
+    config.setBackBufferConfig(8, 8, 8, 8, 24, 8, 0)
     Lwjgl3Application(RoguelikeLauncher(), config)
 }
