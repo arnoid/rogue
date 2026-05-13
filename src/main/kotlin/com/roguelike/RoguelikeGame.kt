@@ -10,6 +10,8 @@ import com.badlogic.gdx.graphics.PerspectiveCamera
 import com.badlogic.gdx.graphics.VertexAttributes
 import com.badlogic.gdx.graphics.g3d.*
 import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute
+import com.badlogic.gdx.graphics.g3d.environment.DirectionalShadowLight
+import com.badlogic.gdx.graphics.g3d.utils.DepthShaderProvider
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder
 import com.badlogic.gdx.scenes.scene2d.Stage
 import com.badlogic.gdx.scenes.scene2d.ui.Skin
@@ -58,6 +60,10 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
     // Shadow volume pipeline
     private lateinit var svShaderProvider: ShadowVolumeShaderProvider
     private lateinit var svRenderer: ShadowVolumeRenderer
+
+    // Shadow mapping
+    private lateinit var shadowLight: DirectionalShadowLight
+    private lateinit var depthBatch: ModelBatch
 
     // UI
     private lateinit var stage: Stage
@@ -136,6 +142,16 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         // Shadow volume pipeline
         svShaderProvider = ShadowVolumeShaderProvider()
         svRenderer = ShadowVolumeRenderer(svShaderProvider)
+
+        // Shadow mapping — depth batch for rendering shadow depth pass
+        depthBatch = ModelBatch(DepthShaderProvider())
+        shadowLight = DirectionalShadowLight(
+            2048, 2048,      // shadow map resolution
+            30f, 30f,        // viewport width/height (world units covered)
+            0.5f, 50f        // near / far
+        ).apply {
+            set(0.6f, 0.6f, 0.5f, -0.4f, -1f, -0.3f) // warm white, angled down
+        }
 
         // UI Setup
         stage = Stage(ScreenViewport())
@@ -311,12 +327,42 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         // Sync player visual to logic position
         playerInstance.transform.setTranslation(player.position.x, player.position.y, player.position.z)
 
-        // Collect active lights and build a LibGDX Environment with PointLights
+        // Collect active lights
         val lights = collectActiveLights()
         val playerZ = Math.ceil(player.position.z.toDouble()).toInt()
 
+        // ── Shadow depth pass ────────────────────────────────────────────────
+        // Point the directional shadow light from the primary light source downward.
+        // This makes walls cast shadows on floors and objects behind them.
+        if (lights.isNotEmpty()) {
+            val primary = lights[0]
+            // Point light direction from light toward scene floor — angled downward
+            shadowLight.set(
+                0.6f, 0.6f, 0.5f,  // warm white directional color
+                -0.4f, -1f, -0.3f  // angled downward direction
+            )
+        }
+
+        // Render depth pass from the shadow light's perspective
+        val sceneCentre = com.badlogic.gdx.math.Vector3(
+            player.position.x, player.position.y, player.position.z
+        )
+        shadowLight.begin(sceneCentre, shadowLight.direction)
+        depthBatch.begin(shadowLight.camera)
+        worldRenderer.render(world, depthBatch, Environment(), maxZ = playerZ)
+        depthBatch.render(playerInstance)
+        depthBatch.end()
+        shadowLight.end()
+
+        // ── Main lit pass ────────────────────────────────────────────────────
         val renderEnv = Environment()
         renderEnv.set(ColorAttribute(ColorAttribute.AmbientLight, 0.05f, 0.05f, 0.07f, 1f))
+
+        // Add the shadow-casting directional light to the environment
+        renderEnv.add(shadowLight)
+        renderEnv.shadowMap = shadowLight
+
+        // Add point lights for local illumination
         for (light in lights) {
             renderEnv.add(com.badlogic.gdx.graphics.g3d.environment.PointLight().set(
                 light.color, light.position, light.intensity
@@ -531,6 +577,8 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
 
     override fun dispose() {
         modelBatch.dispose()
+        depthBatch.dispose()
+        shadowLight.dispose()
         svRenderer.dispose()
         svShaderProvider.dispose()
         assetLoader.dispose()
