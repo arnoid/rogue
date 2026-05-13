@@ -332,22 +332,27 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         val playerZ = Math.ceil(player.position.z.toDouble()).toInt()
 
         // ── Shadow depth pass ────────────────────────────────────────────────
-        // Point the directional shadow light from the primary light source downward.
-        // This makes walls cast shadows on floors and objects behind them.
+        // The player is the light source. The directional shadow light points
+        // from the player's position outward/downward so that walls between
+        // the player and far surfaces cast shadows on those far surfaces.
         if (lights.isNotEmpty()) {
             val primary = lights[0]
-            // Point light direction from light toward scene floor — angled downward
             shadowLight.set(
-                0.6f, 0.6f, 0.5f,  // warm white directional color
-                -0.4f, -1f, -0.3f  // angled downward direction
+                primary.color.r * 0.7f, primary.color.g * 0.7f, primary.color.b * 0.7f,
+                player.facingDirection.x * 0.3f - 0.1f,   // slightly biased by facing
+                -0.8f,                                     // mostly downward
+                player.facingDirection.y * 0.3f - 0.1f
             )
+        } else {
+            // No lights — still render shadows from a default overhead angle
+            shadowLight.set(0.1f, 0.1f, 0.1f, -0.2f, -1f, -0.2f)
         }
 
-        // Render depth pass from the shadow light's perspective
-        val sceneCentre = com.badlogic.gdx.math.Vector3(
+        // Centre the shadow frustum on the player (the light source)
+        val playerPos = com.badlogic.gdx.math.Vector3(
             player.position.x, player.position.y, player.position.z
         )
-        shadowLight.begin(sceneCentre, shadowLight.direction)
+        shadowLight.begin(playerPos, shadowLight.direction)
         depthBatch.begin(shadowLight.camera)
         worldRenderer.render(world, depthBatch, Environment(), maxZ = playerZ)
         depthBatch.render(playerInstance)
@@ -356,13 +361,17 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
 
         // ── Main lit pass ────────────────────────────────────────────────────
         val renderEnv = Environment()
-        renderEnv.set(ColorAttribute(ColorAttribute.AmbientLight, 0.05f, 0.05f, 0.07f, 1f))
+        renderEnv.set(ColorAttribute(ColorAttribute.AmbientLight, 0.03f, 0.03f, 0.04f, 1f))
 
-        // Add the shadow-casting directional light to the environment
+        // The directional shadow light provides the shadow map.
+        // Its color is kept low so the point lights dominate the illumination;
+        // the shadow map still darkens surfaces that are occluded from the
+        // player's light source direction.
         renderEnv.add(shadowLight)
         renderEnv.shadowMap = shadowLight
 
-        // Add point lights for local illumination
+        // Point lights at player position provide the actual illumination.
+        // These are the torch/candle lights the player carries.
         for (light in lights) {
             renderEnv.add(com.badlogic.gdx.graphics.g3d.environment.PointLight().set(
                 light.color, light.position, light.intensity
