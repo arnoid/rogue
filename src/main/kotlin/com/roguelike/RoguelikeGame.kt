@@ -305,31 +305,32 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
 
         // ── Rendering ────────────────────────────────────────────────────────
         Gdx.gl.glViewport(0, 0, Gdx.graphics.backBufferWidth, Gdx.graphics.backBufferHeight)
-        // Solid black background so unlit cells are invisible.
         Gdx.gl.glClearColor(0f, 0f, 0f, 1f)
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT or GL20.GL_DEPTH_BUFFER_BIT)
 
         // Sync player visual to logic position
         playerInstance.transform.setTranslation(player.position.x, player.position.y, player.position.z)
 
-        // Collect active lights from player inventory and world items
+        // Collect active lights and build a LibGDX Environment with PointLights
         val lights = collectActiveLights()
-
-        // Collect occluder geometry (wall tiles as boxes)
         val playerZ = Math.ceil(player.position.z.toDouble()).toInt()
-        val occluders = collectOccluders(playerZ)
 
-        // Shadow volume render pipeline
-        svRenderer.render(camera, lights, occluders) { batch, env ->
-            worldRenderer.render(world, batch, env, maxZ = playerZ)
-            if (playerInstance.materials.size > 0) {
-                playerInstance.materials.get(0).set(ColorAttribute.createDiffuse(Color.BLUE))
-            }
-            batch.render(playerInstance, env)
+        val renderEnv = Environment()
+        renderEnv.set(ColorAttribute(ColorAttribute.AmbientLight, 0.05f, 0.05f, 0.07f, 1f))
+        for (light in lights) {
+            renderEnv.add(com.badlogic.gdx.graphics.g3d.environment.PointLight().set(
+                light.color, light.position, light.intensity
+            ))
         }
 
-        // Fallback: also render via modelBatch for debug mode and non-shadow-volume elements
         modelBatch.begin(camera)
+        worldRenderer.render(world, modelBatch, renderEnv, maxZ = playerZ)
+
+        if (playerInstance.materials.size > 0) {
+            playerInstance.materials.get(0).set(ColorAttribute.createDiffuse(Color.BLUE))
+        }
+        modelBatch.render(playerInstance, renderEnv)
+
         if (debugMode) {
             axesInstance.transform.setTranslation(player.position.x, player.position.y, player.position.z)
             modelBatch.render(axesInstance)
