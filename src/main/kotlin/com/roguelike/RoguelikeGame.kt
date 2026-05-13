@@ -323,7 +323,7 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         )
         shadowLight.begin(playerPos, shadowLight.direction)
         depthBatch.begin(shadowLight.camera)
-        worldRenderer.render(world, depthBatch, Environment(), maxZ = playerZ)
+        worldRenderer.render(world, depthBatch, Environment(), camera = shadowLight.camera, minZ = playerZ, maxZ = playerZ + 1)
         depthBatch.render(playerInstance)
         depthBatch.end()
         shadowLight.end()
@@ -335,7 +335,7 @@ class RoguelikeGame(private val game: Game, val worldPath: String? = null) : Scr
         renderEnv.shadowMap = shadowLight
 
         modelBatch.begin(camera)
-        worldRenderer.render(world, modelBatch, renderEnv, maxZ = playerZ)
+        worldRenderer.render(world, modelBatch, renderEnv, camera = camera, minZ = playerZ, maxZ = playerZ + 1)
 
         if (playerInstance.materials.size > 0) {
             playerInstance.materials.get(0).set(ColorAttribute.createDiffuse(Color.BLUE))

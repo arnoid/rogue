@@ -648,7 +648,7 @@ class MapEditor(private val game: Game) : Screen {
 
             // ── World tiles ─────────────────────────────────────────────────
             modelBatch.begin(camera)
-            worldRenderer.render(world, modelBatch, environment, maxRenderZ)
+            worldRenderer.render(world, modelBatch, environment, maxZ = maxRenderZ)
 
             // ── Props (decorations) ────────────────────────────────────────
             for (prop in world.props) {
