@@ -1,6 +1,6 @@
 package com.roguelike.rendering
 
-import com.badlogic.gdx.math.Vector3
+import org.joml.Vector3f
 
 /**
  * CPU-side shadow volume geometry builder.
@@ -14,26 +14,26 @@ import com.badlogic.gdx.math.Vector3
  */
 class ShadowVolumeBuilder {
 
-    data class Triangle(val v0: Vector3, val v1: Vector3, val v2: Vector3) {
-        fun normal(): Vector3 {
-            val edge1 = Vector3(v1).sub(v0)
-            val edge2 = Vector3(v2).sub(v0)
-            return edge1.crs(edge2).nor()
+    data class Triangle(val v0: Vector3f, val v1: Vector3f, val v2: Vector3f) {
+        fun normal(): Vector3f {
+            val edge1 = Vector3f(v1).sub(v0)
+            val edge2 = Vector3f(v2).sub(v0)
+            return edge1.cross(edge2).normalize()
         }
 
-        fun centre(): Vector3 = Vector3(v0).add(v1).add(v2).scl(1f / 3f)
+        fun centre(): Vector3f = Vector3f(v0).add(v1).add(v2).mul(1f / 3f)
     }
 
     /** An edge key that is order-independent for adjacency lookup. */
     private data class EdgeKey(val a: Long, val b: Long) {
         companion object {
-            fun from(v0: Vector3, v1: Vector3): EdgeKey {
+            fun from(v0: Vector3f, v1: Vector3f): EdgeKey {
                 val a = hashVertex(v0)
                 val b = hashVertex(v1)
                 return if (a <= b) EdgeKey(a, b) else EdgeKey(b, a)
             }
 
-            private fun hashVertex(v: Vector3): Long {
+            private fun hashVertex(v: Vector3f): Long {
                 // Quantise to avoid floating-point mismatch
                 val x = (v.x * 10000).toLong()
                 val y = (v.y * 10000).toLong()
@@ -47,13 +47,13 @@ class ShadowVolumeBuilder {
      * Classify triangles as front-facing (toward light) or back-facing (away from light).
      * @return Pair of (frontFacing, backFacing) triangle lists.
      */
-    fun classifyFaces(triangles: List<Triangle>, lightPos: Vector3): Pair<List<Triangle>, List<Triangle>> {
+    fun classifyFaces(triangles: List<Triangle>, lightPos: Vector3f): Pair<List<Triangle>, List<Triangle>> {
         val front = mutableListOf<Triangle>()
         val back = mutableListOf<Triangle>()
 
         for (tri in triangles) {
             val normal = tri.normal()
-            val toLight = Vector3(lightPos).sub(tri.centre())
+            val toLight = Vector3f(lightPos).sub(tri.centre())
             if (normal.dot(toLight) > 0f) {
                 front.add(tri)
             } else {
@@ -67,7 +67,7 @@ class ShadowVolumeBuilder {
      * Find silhouette edges — edges shared by exactly one front-facing
      * and one back-facing triangle.
      */
-    fun findSilhouetteEdges(triangles: List<Triangle>, lightPos: Vector3): List<SilhouetteEdge> {
+    fun findSilhouetteEdges(triangles: List<Triangle>, lightPos: Vector3f): List<SilhouetteEdge> {
         val (front, back) = classifyFaces(triangles, lightPos)
         val frontEdges = mutableSetOf<EdgeKey>()
         val backEdges = mutableSetOf<EdgeKey>()
@@ -90,7 +90,7 @@ class ShadowVolumeBuilder {
         val silhouetteKeys = frontEdges.intersect(backEdges)
 
         // Map edge keys back to actual vertices using the triangles
-        val edgeVertexMap = mutableMapOf<EdgeKey, Pair<Vector3, Vector3>>()
+        val edgeVertexMap = mutableMapOf<EdgeKey, Pair<Vector3f, Vector3f>>()
         for (tri in triangles) {
             val edges = listOf(
                 Pair(tri.v0, tri.v1),
@@ -100,7 +100,7 @@ class ShadowVolumeBuilder {
             for ((a, b) in edges) {
                 val key = EdgeKey.from(a, b)
                 if (key in silhouetteKeys && key !in edgeVertexMap) {
-                    edgeVertexMap[key] = Pair(a.cpy(), b.cpy())
+                    edgeVertexMap[key] = Pair(Vector3f(a), Vector3f(b))
                 }
             }
         }
@@ -114,7 +114,7 @@ class ShadowVolumeBuilder {
      */
     fun extrudeSilhouette(
         edges: List<SilhouetteEdge>,
-        lightPos: Vector3,
+        lightPos: Vector3f,
         extrudeDistance: Float = 1000f
     ): ShadowVolumeMesh {
         if (edges.isEmpty()) return ShadowVolumeMesh(FloatArray(0), ShortArray(0), 0, 0)
@@ -125,13 +125,13 @@ class ShadowVolumeBuilder {
 
         for (edge in edges) {
             // Extrude v0 and v1 away from light
-            val dir0 = Vector3(edge.v0).sub(lightPos).nor().scl(extrudeDistance)
-            val dir1 = Vector3(edge.v1).sub(lightPos).nor().scl(extrudeDistance)
-            val v0ext = Vector3(edge.v0).add(dir0)
-            val v1ext = Vector3(edge.v1).add(dir1)
+            val dir0 = Vector3f(edge.v0).sub(lightPos).normalize().mul(extrudeDistance)
+            val dir1 = Vector3f(edge.v1).sub(lightPos).normalize().mul(extrudeDistance)
+            val v0ext = Vector3f(edge.v0).add(dir0)
+            val v1ext = Vector3f(edge.v1).add(dir1)
 
             // Add 4 vertices: v0, v1, v1_ext, v0_ext
-            fun addVert(v: Vector3) { verts.add(v.x); verts.add(v.y); verts.add(v.z) }
+            fun addVert(v: Vector3f) { verts.add(v.x); verts.add(v.y); verts.add(v.z) }
             addVert(edge.v0)   // vertIdx + 0
             addVert(edge.v1)   // vertIdx + 1
             addVert(v1ext)     // vertIdx + 2
@@ -164,7 +164,7 @@ class ShadowVolumeBuilder {
      */
     fun buildShadowVolume(
         triangles: List<Triangle>,
-        lightPos: Vector3,
+        lightPos: Vector3f,
         extrudeDistance: Float = 1000f
     ): ShadowVolumeMesh {
         val (front, back) = classifyFaces(triangles, lightPos)
@@ -176,7 +176,7 @@ class ShadowVolumeBuilder {
         val allInds = mutableListOf<Short>()
         var vertIdx: Short = 0
 
-        fun addVert(v: Vector3) { allVerts.add(v.x); allVerts.add(v.y); allVerts.add(v.z) }
+        fun addVert(v: Vector3f) { allVerts.add(v.x); allVerts.add(v.y); allVerts.add(v.z) }
 
         // 1. Front cap: original front-facing triangles
         for (tri in front) {
@@ -187,10 +187,10 @@ class ShadowVolumeBuilder {
 
         // 2. Sides: extruded silhouette quads
         for (edge in edges) {
-            val dir0 = Vector3(edge.v0).sub(lightPos).nor().scl(extrudeDistance)
-            val dir1 = Vector3(edge.v1).sub(lightPos).nor().scl(extrudeDistance)
-            val v0ext = Vector3(edge.v0).add(dir0)
-            val v1ext = Vector3(edge.v1).add(dir1)
+            val dir0 = Vector3f(edge.v0).sub(lightPos).normalize().mul(extrudeDistance)
+            val dir1 = Vector3f(edge.v1).sub(lightPos).normalize().mul(extrudeDistance)
+            val v0ext = Vector3f(edge.v0).add(dir0)
+            val v1ext = Vector3f(edge.v1).add(dir1)
 
             addVert(edge.v0); addVert(edge.v1); addVert(v1ext); addVert(v0ext)
             allInds.add(vertIdx); allInds.add((vertIdx + 1).toShort()); allInds.add((vertIdx + 2).toShort())
@@ -200,12 +200,12 @@ class ShadowVolumeBuilder {
 
         // 3. Back cap: back-facing triangles extruded to distance
         for (tri in back) {
-            val dir0 = Vector3(tri.v0).sub(lightPos).nor().scl(extrudeDistance)
-            val dir1 = Vector3(tri.v1).sub(lightPos).nor().scl(extrudeDistance)
-            val dir2 = Vector3(tri.v2).sub(lightPos).nor().scl(extrudeDistance)
-            val v0ext = Vector3(tri.v0).add(dir0)
-            val v1ext = Vector3(tri.v1).add(dir1)
-            val v2ext = Vector3(tri.v2).add(dir2)
+            val dir0 = Vector3f(tri.v0).sub(lightPos).normalize().mul(extrudeDistance)
+            val dir1 = Vector3f(tri.v1).sub(lightPos).normalize().mul(extrudeDistance)
+            val dir2 = Vector3f(tri.v2).sub(lightPos).normalize().mul(extrudeDistance)
+            val v0ext = Vector3f(tri.v0).add(dir0)
+            val v1ext = Vector3f(tri.v1).add(dir1)
+            val v2ext = Vector3f(tri.v2).add(dir2)
             // Reverse winding for back cap (faces inward)
             addVert(v2ext); addVert(v1ext); addVert(v0ext)
             allInds.add(vertIdx); allInds.add((vertIdx + 1).toShort()); allInds.add((vertIdx + 2).toShort())
@@ -220,4 +220,3 @@ class ShadowVolumeBuilder {
         )
     }
 }
-

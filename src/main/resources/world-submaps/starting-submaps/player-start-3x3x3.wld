@@ -257,4 +257,20 @@ nodes: [
 		]
 	}
 ]
+lightSources: [
+	{
+		id: 77b9e0a1-5fdf-4cb5-9f40-ac5c4e178faf
+		x: -0.35000002
+		y: 2.2999997
+		z: 1.8
+		intensity: 128
+	}
+	{
+		id: a873dcc6-b433-4898-b73d-c917cac84b1e
+		x: 2.1999998
+		y: -0.2
+		z: 1.8
+		intensity: 128
+	}
+]
 }

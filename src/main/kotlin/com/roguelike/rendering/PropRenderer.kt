@@ -1,71 +1,34 @@
 package com.roguelike.rendering
 
-import com.badlogic.gdx.graphics.Color
-import com.badlogic.gdx.graphics.g3d.*
-import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute
-import com.badlogic.gdx.math.Vector3
-import com.badlogic.gdx.math.collision.BoundingBox
 import com.roguelike.core.model.Prop
+import com.roguelike.rendering.vulkan.VulkanMesh
 import com.roguelike.utils.AssetLoader
+import org.joml.Matrix4f
+import org.joml.Vector4f
 
 /**
- * Renders freely-placed props (decorations/furniture) in the world.
- * Loads models on demand and caches ModelInstances per prop ID.
+ * Renders props using Vulkan mesh-based rendering.
+ * Collects VulkanMesh entries with model matrices for the shadow volume pipeline.
  */
 class PropRenderer(private val assetLoader: AssetLoader) {
-
-    private val instanceCache = mutableMapOf<String, ModelInstance>()
-    private val modelCenters = mutableMapOf<String, Vector3>()
-
-    private fun getOrCreateInstance(prop: Prop): ModelInstance? {
-        instanceCache[prop.id]?.let { return it }
-        return try {
-            val model = assetLoader.loadModel("prop_${prop.modelPath}", prop.modelPath)
-            val box = BoundingBox()
-            model.calculateBoundingBox(box)
-            val center = Vector3()
-            box.getCenter(center)
-            modelCenters[prop.id] = center
-            val inst = ModelInstance(model)
-            instanceCache[prop.id] = inst
-            inst
-        } catch (e: Exception) {
-            println("[PropRenderer] Failed to load model: ${prop.modelPath} - ${e.message}")
-            null
-        }
+    fun render(prop: Prop, selected: Boolean = false, tint: Vector4f? = null) {
+        // Rendering is now handled via collectMesh + ShadowVolumeRenderer
     }
 
-    fun render(prop: Prop, batch: ModelBatch, environment: Environment, selected: Boolean = false, tint: Color? = null) {
-        val instance = getOrCreateInstance(prop) ?: return
-        val scale = prop.scale
-        val center = modelCenters[prop.id] ?: Vector3.Zero
+    /**
+     * Collect a mesh entry for this prop into the provided list.
+     */
+    fun collectMesh(
+        prop: Prop,
+        entries: MutableList<SceneMeshEntry>
+    ) {
+        // Load or retrieve the mesh for this prop's model
+        val meshData = assetLoader.getModel(prop.modelPath) ?: return
 
-        instance.transform.setToTranslation(prop.x, prop.y, prop.z)
-        instance.transform.scale(scale, scale, scale)
-        instance.transform.rotate(Vector3.X, -90f)
-        if (prop.rotationY != 0f) instance.transform.rotate(Vector3.Y, prop.rotationY)
-        instance.transform.rotate(Vector3.Z, 180f)
-        instance.transform.translate(-center.x, -center.y, -center.z)
-
-        if (instance.materials.size > 0) {
-            val base: Color = if (selected) Color.CYAN else Color.WHITE
-            val finalColor = if (tint != null) {
-                Color(base.r * tint.r, base.g * tint.g, base.b * tint.b, 1f)
-            } else base
-            instance.materials.get(0).set(ColorAttribute.createDiffuse(finalColor))
-        }
-
-        batch.render(instance, environment)
-
-        // Reset color (so selection highlight doesn't leak between frames)
-        if (instance.materials.size > 0) {
-            instance.materials.get(0).set(ColorAttribute.createDiffuse(Color.WHITE))
-        }
+        // TODO: Convert MeshData to VulkanMesh via RenderingAssetLoader
+        // For now, props without a VulkanMesh are skipped
     }
 
-    fun removeFromCache(propId: String) {
-        instanceCache.remove(propId)
-        modelCenters.remove(propId)
-    }
+    fun removeFromCache(propId: String) {}
 }
 

@@ -1,6 +1,6 @@
 package com.roguelike.rendering
 
-import com.badlogic.gdx.math.Vector3
+import org.joml.Vector3f
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
@@ -14,34 +14,34 @@ class ShadowVolumeBuilderTest {
         val s = 0.5f
         // 8 vertices of a cube
         val v = arrayOf(
-            Vector3(-s, -s, -s), // 0: left-bottom-back
-            Vector3( s, -s, -s), // 1: right-bottom-back
-            Vector3( s,  s, -s), // 2: right-top-back
-            Vector3(-s,  s, -s), // 3: left-top-back
-            Vector3(-s, -s,  s), // 4: left-bottom-front
-            Vector3( s, -s,  s), // 5: right-bottom-front
-            Vector3( s,  s,  s), // 6: right-top-front
-            Vector3(-s,  s,  s)  // 7: left-top-front
+            Vector3f(-s, -s, -s), // 0: left-bottom-back
+            Vector3f( s, -s, -s), // 1: right-bottom-back
+            Vector3f( s,  s, -s), // 2: right-top-back
+            Vector3f(-s,  s, -s), // 3: left-top-back
+            Vector3f(-s, -s,  s), // 4: left-bottom-front
+            Vector3f( s, -s,  s), // 5: right-bottom-front
+            Vector3f( s,  s,  s), // 6: right-top-front
+            Vector3f(-s,  s,  s)  // 7: left-top-front
         )
         return listOf(
             // Front face (+Z)
-            ShadowVolumeBuilder.Triangle(v[4].cpy(), v[5].cpy(), v[6].cpy()),
-            ShadowVolumeBuilder.Triangle(v[4].cpy(), v[6].cpy(), v[7].cpy()),
+            ShadowVolumeBuilder.Triangle(v[4], v[5], v[6]),
+            ShadowVolumeBuilder.Triangle(v[4], v[6], v[7]),
             // Back face (-Z)
-            ShadowVolumeBuilder.Triangle(v[1].cpy(), v[0].cpy(), v[3].cpy()),
-            ShadowVolumeBuilder.Triangle(v[1].cpy(), v[3].cpy(), v[2].cpy()),
+            ShadowVolumeBuilder.Triangle(v[1], v[0], v[3]),
+            ShadowVolumeBuilder.Triangle(v[1], v[3], v[2]),
             // Right face (+X)
-            ShadowVolumeBuilder.Triangle(v[5].cpy(), v[1].cpy(), v[2].cpy()),
-            ShadowVolumeBuilder.Triangle(v[5].cpy(), v[2].cpy(), v[6].cpy()),
+            ShadowVolumeBuilder.Triangle(v[5], v[1], v[2]),
+            ShadowVolumeBuilder.Triangle(v[5], v[2], v[6]),
             // Left face (-X)
-            ShadowVolumeBuilder.Triangle(v[0].cpy(), v[4].cpy(), v[7].cpy()),
-            ShadowVolumeBuilder.Triangle(v[0].cpy(), v[7].cpy(), v[3].cpy()),
+            ShadowVolumeBuilder.Triangle(v[0], v[4], v[7]),
+            ShadowVolumeBuilder.Triangle(v[0], v[7], v[3]),
             // Top face (+Y)
-            ShadowVolumeBuilder.Triangle(v[3].cpy(), v[7].cpy(), v[6].cpy()),
-            ShadowVolumeBuilder.Triangle(v[3].cpy(), v[6].cpy(), v[2].cpy()),
+            ShadowVolumeBuilder.Triangle(v[3], v[7], v[6]),
+            ShadowVolumeBuilder.Triangle(v[3], v[6], v[2]),
             // Bottom face (-Y)
-            ShadowVolumeBuilder.Triangle(v[0].cpy(), v[1].cpy(), v[5].cpy()),
-            ShadowVolumeBuilder.Triangle(v[0].cpy(), v[5].cpy(), v[4].cpy())
+            ShadowVolumeBuilder.Triangle(v[0], v[1], v[5]),
+            ShadowVolumeBuilder.Triangle(v[0], v[5], v[4])
         )
     }
 
@@ -49,7 +49,7 @@ class ShadowVolumeBuilderTest {
     @Test
     fun `silhouette edges detected for cube with light on +X axis`() {
         val tris = unitCubeTriangles()
-        val lightPos = Vector3(3f, 0f, 0f) // light on +X axis
+        val lightPos = Vector3f(3f, 0f, 0f) // light on +X axis
         val builder = ShadowVolumeBuilder()
 
         val (front, back) = builder.classifyFaces(tris, lightPos)
@@ -65,13 +65,13 @@ class ShadowVolumeBuilderTest {
     @Test
     fun `silhouette edges all connect front to back faces`() {
         val tris = unitCubeTriangles()
-        val lightPos = Vector3(3f, 0f, 0f)
+        val lightPos = Vector3f(3f, 0f, 0f)
         val builder = ShadowVolumeBuilder()
         val edges = builder.findSilhouetteEdges(tris, lightPos)
 
         // Each silhouette edge must have distinct non-equal vertices
         for (edge in edges) {
-            assertTrue(edge.v0.dst(edge.v1) > 0.001f, "silhouette edge must not be degenerate")
+            assertTrue(edge.v0.distance(edge.v1) > 0.001f, "silhouette edge must not be degenerate")
         }
     }
 
@@ -79,8 +79,8 @@ class ShadowVolumeBuilderTest {
     @Test
     fun `extruded quads extend vertices away from light`() {
         val builder = ShadowVolumeBuilder()
-        val lightPos = Vector3(3f, 0f, 0f)
-        val edge = SilhouetteEdge(Vector3(0.5f, -0.5f, -0.5f), Vector3(0.5f, 0.5f, -0.5f))
+        val lightPos = Vector3f(3f, 0f, 0f)
+        val edge = SilhouetteEdge(Vector3f(0.5f, -0.5f, -0.5f), Vector3f(0.5f, 0.5f, -0.5f))
         val extrudeDistance = 100f
 
         val quads = builder.extrudeSilhouette(listOf(edge), lightPos, extrudeDistance)
@@ -95,9 +95,9 @@ class ShadowVolumeBuilderTest {
             val vx = quads.vertices[i * 3]
             val vy = quads.vertices[i * 3 + 1]
             val vz = quads.vertices[i * 3 + 2]
-            val v = Vector3(vx, vy, vz)
+            val v = Vector3f(vx, vy, vz)
             // Original or extruded — all should be on the side away from light or at original pos
-            assertTrue(v.x <= 0.5f + 0.01f || v.dst(lightPos) > 50f,
+            assertTrue(v.x <= 0.5f + 0.01f || v.distance(lightPos) > 50f,
                 "vertex should either be original or extruded far from light")
         }
     }
@@ -106,7 +106,7 @@ class ShadowVolumeBuilderTest {
     @Test
     fun `shadow volume is closed — has front cap, sides, and back cap`() {
         val tris = unitCubeTriangles()
-        val lightPos = Vector3(3f, 0f, 0f)
+        val lightPos = Vector3f(3f, 0f, 0f)
         val builder = ShadowVolumeBuilder()
 
         val volume = builder.buildShadowVolume(tris, lightPos, 100f)
@@ -124,7 +124,7 @@ class ShadowVolumeBuilderTest {
     @Test
     fun `shadow volume with no back-facing faces produces empty volume`() {
         // All faces face toward the light — no silhouette
-        val lightPos = Vector3(0f, 0f, 0f) // light at centre of cube
+        val lightPos = Vector3f(0f, 0f, 0f) // light at centre of cube
         val tris = unitCubeTriangles()
         val builder = ShadowVolumeBuilder()
 
@@ -144,22 +144,22 @@ class ShadowVolumeBuilderTest {
         val tris = listOf(
             // Face on XZ plane (y=0, normal +Y)
             ShadowVolumeBuilder.Triangle(
-                Vector3(0f, 0f, 0f), Vector3(1f, 0f, 0f), Vector3(1f, 0f, 1f)
+                Vector3f(0f, 0f, 0f), Vector3f(1f, 0f, 0f), Vector3f(1f, 0f, 1f)
             ),
             ShadowVolumeBuilder.Triangle(
-                Vector3(0f, 0f, 0f), Vector3(1f, 0f, 1f), Vector3(0f, 0f, 1f)
+                Vector3f(0f, 0f, 0f), Vector3f(1f, 0f, 1f), Vector3f(0f, 0f, 1f)
             ),
             // Face on YZ plane (x=0, normal +X)
             ShadowVolumeBuilder.Triangle(
-                Vector3(0f, 0f, 0f), Vector3(0f, 0f, 1f), Vector3(0f, 1f, 1f)
+                Vector3f(0f, 0f, 0f), Vector3f(0f, 0f, 1f), Vector3f(0f, 1f, 1f)
             ),
             ShadowVolumeBuilder.Triangle(
-                Vector3(0f, 0f, 0f), Vector3(0f, 1f, 1f), Vector3(0f, 1f, 0f)
+                Vector3f(0f, 0f, 0f), Vector3f(0f, 1f, 1f), Vector3f(0f, 1f, 0f)
             )
         )
         // Light on -X+Y side — face on XZ plane (normal +Y) is front-facing,
         // face on YZ plane (normal +X) is back-facing since light is on -X side
-        val lightPos = Vector3(-2f, 2f, 0.5f)
+        val lightPos = Vector3f(-2f, 2f, 0.5f)
         val builder = ShadowVolumeBuilder()
 
         val (front, back) = builder.classifyFaces(tris, lightPos)

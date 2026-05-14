@@ -1,6 +1,5 @@
 package com.roguelike.rendering
 
-import com.badlogic.gdx.graphics.g3d.Model
 import com.roguelike.core.math.Vec3
 
 /**
@@ -8,13 +7,13 @@ import com.roguelike.core.math.Vec3
  * Stored separately from the pure-data tile classes so the core layer stays LibGDX-free.
  */
 data class TileRenderData(
-    val model: Model,
+    val model: Any,
     val scale: Float,
     val center: Vec3,
     /** Optional alternate model (e.g. open-door model). */
-    val altModel: Model? = null,
+    val altModel: Any? = null,
     /** Optional frame model (e.g. wall_doorway rendered alongside the tile). */
-    val frameModel: Model? = null,
+    val frameModel: Any? = null,
     /** Optional per-axis scale override. When set, used instead of uniform scale. */
     val scaleX: Float? = null,
     val scaleY: Float? = null,
@@ -41,4 +40,3 @@ class TileRenderRegistry {
 
     fun clear() { dataByTile.clear() }
 }
-

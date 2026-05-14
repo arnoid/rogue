@@ -107,9 +107,9 @@ class MovementSystem(private val world: World) {
         }
 
         // Apply stairs ramp, ladder climb, or ladder edge climb (adjusts Z smoothly)
-        val ladderClimb = applyLadderClimb(actor, moveDir)
+        val ladderClimb = applyLadderClimb(actor, moveDir, delta)
         if (!ladderClimb) {
-            val ladderEdgeClimb = applyLadderEdgeClimb(actor, moveDir)
+            val ladderEdgeClimb = applyLadderEdgeClimb(actor, moveDir, delta)
             if (!ladderEdgeClimb) {
                 if (!applyStairsRamp(actor)) {
                     // Only apply gravity if not clinging to a ladder
@@ -173,7 +173,7 @@ class MovementSystem(private val world: World) {
      * move them straight up to the next Z level.
      * Returns true if the actor is on a ladder and climbing.
      */
-    private fun applyLadderClimb(actor: Actor, moveDir: Vec3): Boolean {
+    private fun applyLadderClimb(actor: Actor, moveDir: Vec3, delta: Float): Boolean {
         if (moveDir.isZero) return false
 
         val nx = round(actor.position.x).toInt()
@@ -220,7 +220,7 @@ class MovementSystem(private val world: World) {
             val diff = targetZ - actor.position.z
             if (diff > 0.01f) {
                 // Still climbing
-                actor.position.z = (actor.position.z + climbSpeed * com.badlogic.gdx.Gdx.graphics.deltaTime)
+                actor.position.z = (actor.position.z + climbSpeed * delta)
                     .coerceAtMost(targetZ)
             } else {
                 actor.position.z = targetZ
@@ -235,7 +235,7 @@ class MovementSystem(private val world: World) {
      * move them straight up along Z axis.
      * Returns true if the actor is climbing a ladder edge.
      */
-    private fun applyLadderEdgeClimb(actor: Actor, moveDir: Vec3): Boolean {
+    private fun applyLadderEdgeClimb(actor: Actor, moveDir: Vec3, delta: Float): Boolean {
         if (moveDir.isZero) return false
 
         val nx = round(actor.position.x).toInt()
@@ -264,7 +264,7 @@ class MovementSystem(private val world: World) {
         if (hasFloorAbove(nx, ny, z)) return false
 
         val climbSpeed = 2.0f
-        actor.position.z += climbSpeed * com.badlogic.gdx.Gdx.graphics.deltaTime
+        actor.position.z += climbSpeed * delta
         return true
     }
 

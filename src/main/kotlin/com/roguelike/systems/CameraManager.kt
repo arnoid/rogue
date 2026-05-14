@@ -1,10 +1,10 @@
 package com.roguelike.systems
 
-import com.badlogic.gdx.graphics.PerspectiveCamera
 import com.roguelike.core.math.Vec3
+import com.roguelike.rendering.Camera
 
 class CameraManager(
-    val camera: PerspectiveCamera,
+    val camera: Camera,
     var cameraPitch: Float = 0f,
     var cameraYaw: Float = 0f,
     var cameraDistance: Float = 20f,
@@ -15,7 +15,7 @@ class CameraManager(
     fun update(target: Vec3) {
         camera.position.set(target.x, target.y, target.z + cameraDistance)
         camera.up.set(0f, 1f, 0f)
-        camera.lookAt(target.x, target.y, target.z)
+        camera.direction.set(target.x - camera.position.x, target.y - camera.position.y, target.z - camera.position.z).normalize()
         camera.update()
     }
 

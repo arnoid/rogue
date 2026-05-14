@@ -1,9 +1,6 @@
-// Shadow volume fragment shader — no-op (colour writes disabled at GL level).
-// No #version directive (prepended by Main.kt).
+#version 450
 
-out vec4 fragColor;
-
+// Shadow volume fragment shader — no output (color write disabled via pipeline state).
 void main() {
-    fragColor = vec4(0.0);
+    // Intentionally empty — stencil-only pass
 }
-

@@ -1,12 +1,17 @@
-// Shadow volume vertex shader — position-only geometry.
-// No #version directive (prepended by Main.kt).
+#version 450
 
-in vec3 a_position;
+layout(location = 0) in vec3 a_position;
 
-uniform mat4 u_projViewTrans;
-uniform mat4 u_worldTrans;
+layout(set = 0, binding = 0) uniform SceneUBO {
+    mat4 viewProjection;
+    vec3 cameraPosition;
+    float _pad0;
+} scene;
+
+layout(push_constant) uniform PushConstants {
+    mat4 modelMatrix;
+} push;
 
 void main() {
-    gl_Position = u_projViewTrans * u_worldTrans * vec4(a_position, 1.0);
+    gl_Position = scene.viewProjection * push.modelMatrix * vec4(a_position, 1.0);
 }
-

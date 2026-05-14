@@ -1,22 +1,24 @@
-// Lit pass vertex shader — outputs world position and normal for lighting.
-// No #version directive (prepended by Main.kt).
+#version 450
 
-in vec3 a_position;
-in vec3 a_normal;
-in vec2 a_texCoord0;
+layout(location = 0) in vec3 a_position;
+layout(location = 1) in vec3 a_normal;
 
-uniform mat4 u_projViewTrans;
-uniform mat4 u_worldTrans;
+layout(set = 0, binding = 0) uniform SceneUBO {
+    mat4 viewProjection;
+    vec3 cameraPosition;
+    float _pad0;
+} scene;
 
-out vec3 v_worldPos;
-out vec3 v_worldNormal;
-out vec2 v_texCoord;
+layout(push_constant) uniform PushConstants {
+    mat4 modelMatrix;
+} push;
+
+layout(location = 0) out vec3 v_normal;
+layout(location = 1) out vec3 v_worldPos;
 
 void main() {
-    vec4 worldPos = u_worldTrans * vec4(a_position, 1.0);
+    vec4 worldPos = push.modelMatrix * vec4(a_position, 1.0);
     v_worldPos = worldPos.xyz;
-    v_worldNormal = mat3(u_worldTrans) * a_normal;
-    v_texCoord = a_texCoord0;
-    gl_Position = u_projViewTrans * worldPos;
+    v_normal = mat3(push.modelMatrix) * a_normal;
+    gl_Position = scene.viewProjection * worldPos;
 }
-

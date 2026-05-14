@@ -35,27 +35,7 @@ data class TileData(
     var rotX: Float = 0f,
     var rotY: Float = 0f,
     var rotZ: Float = 0f
-) : com.badlogic.gdx.utils.Json.Serializable {
-    override fun write(json: com.badlogic.gdx.utils.Json) {
-        json.writeValue("type", type)
-        json.writeValue("slot", slot)
-        if (rotX != 0f) json.writeValue("rotX", rotX)
-        if (rotY != 0f) json.writeValue("rotY", rotY)
-        if (rotZ != 0f) json.writeValue("rotZ", rotZ)
-    }
-
-    override fun read(json: com.badlogic.gdx.utils.Json, jsonData: com.badlogic.gdx.utils.JsonValue) {
-        if (jsonData.isString) {
-            type = jsonData.asString()
-        } else {
-            type = jsonData.getString("type", "")
-            slot = jsonData.getString("slot", "")
-            rotX = jsonData.getFloat("rotX", 0f)
-            rotY = jsonData.getFloat("rotY", 0f)
-            rotZ = jsonData.getFloat("rotZ", 0f)
-        }
-    }
-}
+)
 
 
 
@@ -95,6 +75,7 @@ data class LightSourceData(
     val y: Float = 0f,
     val z: Float = 0f,
     val intensity: Float = 5f,
+    val radius: Float = 5f,
     val colorHex: String = "ffcc88"
 )
 

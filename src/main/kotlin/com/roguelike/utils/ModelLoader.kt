@@ -1,7 +1,5 @@
 package com.roguelike.utils
 
-import com.badlogic.gdx.graphics.g3d.Model
-import com.badlogic.gdx.math.collision.BoundingBox
 import com.roguelike.core.math.Vec3
 import com.roguelike.core.model.Tile
 import com.roguelike.rendering.TileRenderData
@@ -28,122 +26,113 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
         register(LadderTile.TYPE)        { createLadderTile() }
     }
 
-    fun register(typeName: String, factory: () -> Tile) {
-        factories[typeName] = factory
-    }
+    fun register(typeName: String, factory: () -> Tile) { factories[typeName] = factory }
 
-    /** Computes normalised scale and geometric centre from a model's bounding box. */
-    private fun getModelData(model: Model): Pair<Float, Vec3> {
-        val box = BoundingBox()
-        model.calculateBoundingBox(box)
-        val maxDim = maxOf(box.width, maxOf(box.height, box.depth))
-        val scale  = if (maxDim > 0f) 1.0f / maxDim else 1.0f
-        val gdxCenter = com.badlogic.gdx.math.Vector3()
-        box.getCenter(gdxCenter)
-        return scale to Vec3(gdxCenter.x, gdxCenter.y, gdxCenter.z)
+    private fun getModelData(meshData: MeshData): Pair<Float, Vec3> {
+        return meshData.scale to Vec3(meshData.center.x, meshData.center.y, meshData.center.z)
     }
 
     fun createFloorTile(): FloorTile {
-        val model = assetLoader.loadModel("floor", "models/vox/floor/floor.obj")
-        val (scale, center) = getModelData(model)
+        val data = assetLoader.loadModel("floor", "models/vox/floor/floor.obj")
+        val (scale, center) = getModelData(data)
         val tile = FloorTile().also { it.zOffset = -0.5f }
-        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        renderRegistry.register(tile, TileRenderData(data, scale, center))
         return tile
     }
 
     // ── Wall tiles (one per cardinal direction) ──────────────────────────
 
     fun createWallNorthTile(): WallNorthTile {
-        val model = assetLoader.loadModel("wall_n", "models/vox/wall/wall_n.obj")
-        val (scale, center) = getModelData(model)
+        val data = assetLoader.loadModel("wall_n", "models/vox/wall/wall_n.obj")
+        val (scale, center) = getModelData(data)
         val tile = WallNorthTile().also { it.yOffset = 0.5f }
-        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        renderRegistry.register(tile, TileRenderData(data, scale, center))
         return tile
     }
 
     fun createWallSouthTile(): WallSouthTile {
-        val model = assetLoader.loadModel("wall_n", "models/vox/wall/wall_n.obj")
-        val (scale, center) = getModelData(model)
+        val data = assetLoader.loadModel("wall_n", "models/vox/wall/wall_n.obj")
+        val (scale, center) = getModelData(data)
         val tile = WallSouthTile().also { it.rotationY = 180f; it.yOffset = -0.5f }
-        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        renderRegistry.register(tile, TileRenderData(data, scale, center))
         return tile
     }
 
     fun createWallEastTile(): WallEastTile {
-        val model = assetLoader.loadModel("wall_n", "models/vox/wall/wall_n.obj")
-        val (scale, center) = getModelData(model)
+        val data = assetLoader.loadModel("wall_n", "models/vox/wall/wall_n.obj")
+        val (scale, center) = getModelData(data)
         val tile = WallEastTile().also { it.rotationY = -90f; it.xOffset = 0.5f }
-        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        renderRegistry.register(tile, TileRenderData(data, scale, center))
         return tile
     }
 
     fun createWallWestTile(): WallWestTile {
-        val model = assetLoader.loadModel("wall_n", "models/vox/wall/wall_n.obj")
-        val (scale, center) = getModelData(model)
+        val data = assetLoader.loadModel("wall_n", "models/vox/wall/wall_n.obj")
+        val (scale, center) = getModelData(data)
         val tile = WallWestTile().also { it.rotationY = 90f; it.xOffset = -0.5f }
-        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        renderRegistry.register(tile, TileRenderData(data, scale, center))
         return tile
     }
 
     // ── Door tiles (closed = door closed model, open = door open model) ───
 
     fun createDoorNorthTile(): DoorNorthTile {
-        val closedModel = assetLoader.loadModel("door_n_closed", "models/vox/door/door_n_closed.obj")
-        val openModel = assetLoader.loadModel("door_n_open", "models/vox/door/door_n_open.obj")
-        val frameModel = assetLoader.loadModel("wall_doorway_n", "models/vox/wall/wall_doorway_n.obj")
-        val (scale, center) = getModelData(closedModel)
+        val closedData = assetLoader.loadModel("door_n_closed", "models/vox/door/door_n_closed.obj")
+        val openData = assetLoader.loadModel("door_n_open", "models/vox/door/door_n_open.obj")
+        val frameData = assetLoader.loadModel("wall_doorway_n", "models/vox/wall/wall_doorway_n.obj")
+        val (scale, center) = getModelData(closedData)
         val tile = DoorNorthTile().also { it.yOffset = 0.5f }
-        renderRegistry.register(tile, TileRenderData(closedModel, scale, center, altModel = openModel, frameModel = frameModel))
+        renderRegistry.register(tile, TileRenderData(closedData, scale, center, altModel = openData, frameModel = frameData))
         return tile
     }
 
     fun createDoorSouthTile(): DoorSouthTile {
-        val closedModel = assetLoader.loadModel("door_n_closed", "models/vox/door/door_n_closed.obj")
-        val openModel = assetLoader.loadModel("door_n_open", "models/vox/door/door_n_open.obj")
-        val frameModel = assetLoader.loadModel("wall_doorway_n", "models/vox/wall/wall_doorway_n.obj")
-        val (scale, center) = getModelData(closedModel)
+        val closedData = assetLoader.loadModel("door_n_closed", "models/vox/door/door_n_closed.obj")
+        val openData = assetLoader.loadModel("door_n_open", "models/vox/door/door_n_open.obj")
+        val frameData = assetLoader.loadModel("wall_doorway_n", "models/vox/wall/wall_doorway_n.obj")
+        val (scale, center) = getModelData(closedData)
         val tile = DoorSouthTile().also { it.rotationY = 180f; it.yOffset = -0.5f }
-        renderRegistry.register(tile, TileRenderData(closedModel, scale, center, altModel = openModel, frameModel = frameModel))
+        renderRegistry.register(tile, TileRenderData(closedData, scale, center, altModel = openData, frameModel = frameData))
         return tile
     }
 
     fun createDoorEastTile(): DoorEastTile {
-        val closedModel = assetLoader.loadModel("door_n_closed", "models/vox/door/door_n_closed.obj")
-        val openModel = assetLoader.loadModel("door_n_open", "models/vox/door/door_n_open.obj")
-        val frameModel = assetLoader.loadModel("wall_doorway_n", "models/vox/wall/wall_doorway_n.obj")
-        val (scale, center) = getModelData(closedModel)
+        val closedData = assetLoader.loadModel("door_n_closed", "models/vox/door/door_n_closed.obj")
+        val openData = assetLoader.loadModel("door_n_open", "models/vox/door/door_n_open.obj")
+        val frameData = assetLoader.loadModel("wall_doorway_n", "models/vox/wall/wall_doorway_n.obj")
+        val (scale, center) = getModelData(closedData)
         val tile = DoorEastTile().also { it.rotationY = -90f; it.xOffset = 0.5f }
-        renderRegistry.register(tile, TileRenderData(closedModel, scale, center, altModel = openModel, frameModel = frameModel))
+        renderRegistry.register(tile, TileRenderData(closedData, scale, center, altModel = openData, frameModel = frameData))
         return tile
     }
 
     fun createDoorWestTile(): DoorWestTile {
-        val closedModel = assetLoader.loadModel("door_n_closed", "models/vox/door/door_n_closed.obj")
-        val openModel = assetLoader.loadModel("door_n_open", "models/vox/door/door_n_open.obj")
-        val frameModel = assetLoader.loadModel("wall_doorway_n", "models/vox/wall/wall_doorway_n.obj")
-        val (scale, center) = getModelData(closedModel)
+        val closedData = assetLoader.loadModel("door_n_closed", "models/vox/door/door_n_closed.obj")
+        val openData = assetLoader.loadModel("door_n_open", "models/vox/door/door_n_open.obj")
+        val frameData = assetLoader.loadModel("wall_doorway_n", "models/vox/wall/wall_doorway_n.obj")
+        val (scale, center) = getModelData(closedData)
         val tile = DoorWestTile().also { it.rotationY = 90f; it.xOffset = -0.5f }
-        renderRegistry.register(tile, TileRenderData(closedModel, scale, center, altModel = openModel, frameModel = frameModel))
+        renderRegistry.register(tile, TileRenderData(closedData, scale, center, altModel = openData, frameModel = frameData))
         return tile
     }
 
     // ── Stairs tile ────────────────────────────────────────────────────────
 
     fun createStairsTile(): StairsTile {
-        val model = assetLoader.loadModel("stairs_n", "models/vox/stairs/stairs_n.obj")
-        val (scale, center) = getModelData(model)
+        val data = assetLoader.loadModel("stairs_n", "models/vox/stairs/stairs_n.obj")
+        val (scale, center) = getModelData(data)
         val tile = StairsTile()
-        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        renderRegistry.register(tile, TileRenderData(data, scale, center))
         return tile
     }
 
     // ── Ladder tile ──────────────────────────────────────────────────────────
 
     fun createLadderTile(): LadderTile {
-        val model = assetLoader.loadModel("ladder_vertical_n", "models/vox/stairs/ladder_vertical_n.obj")
-        val (scale, center) = getModelData(model)
+        val data = assetLoader.loadModel("ladder_vertical_n", "models/vox/stairs/ladder_vertical_n.obj")
+        val (scale, center) = getModelData(data)
         val tile = LadderTile()
-        renderRegistry.register(tile, TileRenderData(model, scale, center))
+        renderRegistry.register(tile, TileRenderData(data, scale, center))
         return tile
     }
 

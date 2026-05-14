@@ -113,6 +113,15 @@ class WorldStamper(
                 z = prop.z + origin.z
             ))
         }
+
+        // Copy light sources with offset
+        for (ls in source.lightSources) {
+            target.lightSources.add(ls.copy(
+                x = ls.x + origin.x,
+                y = ls.y + origin.y,
+                z = ls.z + origin.z
+            ))
+        }
     }
 
     /**

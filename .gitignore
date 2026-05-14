@@ -32,3 +32,10 @@ build/**
 local.properties
 
 .vscode/
+
+# Compiled SPIR-V shaders (generated from .glsl sources)
+*.spv
+
+# Environment files
+.env*
+!.env.example

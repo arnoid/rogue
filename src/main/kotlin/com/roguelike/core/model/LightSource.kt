@@ -14,6 +14,8 @@ data class LightSource(
     var z: Float = 0f,
     /** Light intensity (brightness multiplier). */
     var intensity: Float = 5f,
+    /** Light radius (how far the light reaches). */
+    var radius: Float = 5f,
     /** Light color as RGB hex (e.g. "ffcc88"). */
     var colorHex: String = "ffcc88"
 ) {
@@ -26,4 +28,3 @@ data class LightSource(
         if (length >= offset + 2) substring(offset, offset + 2).toIntOrNull(16)?.toFloat() ?: 255f
         else 255f
 }
-

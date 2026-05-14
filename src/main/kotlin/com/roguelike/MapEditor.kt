@@ -1,1162 +1,1333 @@
 package com.roguelike
 
-import com.badlogic.gdx.Game
-import com.badlogic.gdx.Gdx
-import com.badlogic.gdx.Input
-import com.badlogic.gdx.Screen
-import com.badlogic.gdx.graphics.*
-import com.badlogic.gdx.graphics.g2d.BitmapFont
-import com.badlogic.gdx.graphics.g3d.*
-import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute
-import com.badlogic.gdx.graphics.g3d.environment.DirectionalLight
-import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder
-import com.badlogic.gdx.graphics.glutils.ShapeRenderer
-import com.badlogic.gdx.math.Vector2
-import com.badlogic.gdx.math.Vector3
-import com.badlogic.gdx.scenes.scene2d.Stage
-import com.badlogic.gdx.scenes.scene2d.ui.Skin
-import com.badlogic.gdx.scenes.scene2d.utils.ChangeListener
-import com.badlogic.gdx.utils.viewport.ScreenViewport
-import com.kotcrab.vis.ui.VisUI
-import com.kotcrab.vis.ui.widget.*
 import com.roguelike.core.model.TileSlot
-import com.roguelike.core.model.WorldNode
-import com.roguelike.editor.*
-import com.roguelike.rendering.*
+import com.roguelike.core.model.World
+import com.roguelike.input.InputSystem
+import com.roguelike.rendering.Camera
+import com.roguelike.rendering.DebugRenderer
 import com.roguelike.serialization.WorldIO
-import com.roguelike.utils.*
+import com.roguelike.ui.*
+import com.roguelike.ui.SimpleUI
 import com.roguelike.world.*
-import com.roguelike.generation.SubmapTemplate
-import com.roguelike.generation.RotatedTileRef
+import org.lwjgl.glfw.GLFW.*
+import java.io.File
+import kotlin.math.*
 
-class MapEditor(private val game: Game) : Screen {
-    private lateinit var camera: PerspectiveCamera
-    private lateinit var modelBatch: ModelBatch
-    private lateinit var environment: Environment
-    private lateinit var shapeRenderer: ShapeRenderer
+private fun defaultTileFactory(type: String): com.roguelike.core.model.Tile? = when (type) {
+    FloorTile.TYPE -> FloorTile()
+    WallNorthTile.TYPE -> WallNorthTile()
+    WallSouthTile.TYPE -> WallSouthTile()
+    WallEastTile.TYPE -> WallEastTile()
+    WallWestTile.TYPE -> WallWestTile()
+    else -> null
+}
 
-    private lateinit var assetLoader: AssetLoader
-    private lateinit var modelLoader: ModelLoader
-    private lateinit var world: World
+/**
+ * World map editor with orbital camera and File menu bar.
+ *
+ * Controls:
+ *  A/D – rotate map around Z axis (azimuth) around world centre
+ *  Shift+A/D – strafe orbit centre left/right
+ *  W/S – move camera closer / further from map (dolly)
+ *  Q/E – rotate around camera-local X axis (elevation / pitch)
+ *  1-6 – select tool   Ctrl+S – save   ESC – menu
+ *
+ * A gimbal orientation cube is drawn in the top-right corner to
+ * indicate the current projection.
+ */
+class MapEditor(
+    private val inputSystem: InputSystem,
+    private val camera: Camera,
+    private val ui: SimpleUI
+) {
+    private var world: World? = null
 
-    private lateinit var stage: Stage
+    // Debug rendering for wireframe overlays on empty cubes, models, etc.
+    private val debugRenderer = DebugRenderer(ui)
 
-    private lateinit var tileRenderer: TileRenderer
-    private lateinit var worldRenderer: WorldRenderer
-    private lateinit var itemRenderer: ItemRenderer
-    private lateinit var propRenderer: com.roguelike.rendering.PropRenderer
+    // Menu bar & file management
+    private val menuBar = MenuBar(ui)
+    private val fileDialog = FileDialog(ui, inputSystem)
+    private val recentFiles = RecentFiles()
+    private var currentFilePath: String? = null  // path of loaded/saved file
+    var exitRequested = false
+        private set
 
-    private var showFrames = true
-    private lateinit var frameModel: Model
-    private lateinit var frameInstance: ModelInstance
-    private lateinit var hoverFrameInstance: ModelInstance
-    private lateinit var selectedFrameInstance: ModelInstance
-    private lateinit var tagSphereModel: Model
-    private lateinit var tagSphereInstance: ModelInstance
-    private lateinit var lightSphereModel: Model
-    private lateinit var lightSphereInstance: ModelInstance
-    private lateinit var tagFont: BitmapFont
-    private lateinit var tagSpriteBatch: com.badlogic.gdx.graphics.g2d.SpriteBatch
+    // --- Layout ---
+    private val editorModesWidth = 40f       // left editor modes column width
+    private var toolsPaletteWidth = 200f     // right tools palette pane width (draggable)
+    private val toolsPaletteMinWidth = 120f
+    private val toolsPaletteMaxWidth = 500f
+    private val toolsPaletteHandleWidth = 6f // draggable splitter handle
+    private var draggingPaletteHandle = false
 
-    private var isDialogActive = false
-    private var currentFilePath: String? = null
+    // --- Tool toggles ---
+    private var showWireframes = true        // grid wireframe visibility
 
-    private val recentFiles = mutableListOf<String>()
-    private lateinit var fileMenu: Menu
-    private val maxRecentFiles = 5
-
-    private var maxRenderZ = 0
-    private var hoveredX = -1
-    private var hoveredY = -1
-    private var hoveredZ = -1
-    private var hoveredEdge: TileSlot? = null
-
-    // Camera control
-    private var cameraDistance = 20f
-    private val cameraTarget = Vector3(0f, 0f, 0f)
-    private var cameraPitch = 60f
-    private var cameraYaw = 180f
-
-    private lateinit var palette: EditorPalettePanel
-    private lateinit var statusBar: EditorStatusBar
-    private lateinit var inputHandler: EditorInputHandler
-    private lateinit var orientationGizmo: OrientationGizmo
-
-    private lateinit var rootTable: VisTable
-    private lateinit var viewportArea: VisTable
-    private lateinit var paletteScroll: VisScrollPane
-    private var lastViewX = 0
-    private var lastViewY = 0
-    private var lastViewW = 0
-    private var lastViewH = 0
-    private var scrolledThisFrame = false
-
-    override fun show() {
-        // The shipped libGDX default shader has no spot-light support; cones
-        // (e.g. Candle) are emitted as PointLights by DynamicLighting with the
-        // cone shape enforced on the CPU via the visibility mask.
-        val shaderConfig = com.badlogic.gdx.graphics.g3d.shaders.DefaultShader.Config().apply {
-            numPointLights = 12
-            numSpotLights = 0
-            numDirectionalLights = 2
-        }
-        modelBatch = ModelBatch(com.badlogic.gdx.graphics.g3d.utils.DefaultShaderProvider(shaderConfig))
-        shapeRenderer = ShapeRenderer()
-        assetLoader = AssetLoader()
-        modelLoader = ModelLoader(assetLoader)
-        itemRenderer = ItemRenderer(assetLoader)
-        tileRenderer = TileRenderer(modelLoader.renderRegistry)
-        worldRenderer = WorldRenderer(tileRenderer, itemRenderer)
-        propRenderer = com.roguelike.rendering.PropRenderer(assetLoader)
-        world = World(6, 6, 3)
-        maxRenderZ = world.depth - 1
-        cameraTarget.set(world.width / 2f, world.height / 2f, world.depth / 2f)
-
-        if (!VisUI.isLoaded()) VisUI.load()
-
-        camera = PerspectiveCamera(67f, 1f, 1f)
-        camera.near = 0.1f
-        camera.far = 1000f
-        updateCamera()
-
-        environment = Environment()
-        environment.set(ColorAttribute(ColorAttribute.AmbientLight, 0.6f, 0.6f, 0.6f, 1f))
-        environment.add(DirectionalLight().set(1.0f, 1.0f, 1.0f, -1f, -0.8f, -0.2f))
-
-        stage = Stage(ScreenViewport())
-
-        // Scroll wheel handler — zoom or delegate to UI scroll panes
-        val scrollHandler = object : com.badlogic.gdx.InputAdapter() {
-            override fun scrolled(amountX: Float, amountY: Float): Boolean {
-                val stageX = Gdx.input.x.toFloat()
-                val stageY = (Gdx.graphics.height - Gdx.input.y).toFloat()
-                val hitActor = stage.hit(stageX, stageY, true)
-                if (hitActor != null) {
-                    var actor: com.badlogic.gdx.scenes.scene2d.Actor? = hitActor
-                    while (actor != null) {
-                        if (actor is com.badlogic.gdx.scenes.scene2d.ui.ScrollPane) {
-                            stage.scrolled(amountX, amountY)
-                            return true
-                        }
-                        actor = actor.parent
-                    }
-                }
-                val moveAmount = amountY * 1.5f
-                val forward = camera.direction.cpy().nor().scl(-moveAmount)
-                cameraTarget.add(forward)
-                updateCamera()
-                scrolledThisFrame = true
-                return true
-            }
-        }
-        Gdx.input.inputProcessor = com.badlogic.gdx.InputMultiplexer(scrollHandler, stage)
-
-        palette = EditorPalettePanel(modelLoader, tileRenderer, modelBatch, stage)
-        statusBar = EditorStatusBar({ world }, ::resizeWorld)
-        statusBar.maxRenderZ = maxRenderZ
-        inputHandler = EditorInputHandler(
-            { world }, modelLoader, palette,
-            onCameraOrbit = { dx, dy ->
-                val oldYaw = cameraYaw
-                val oldPitch = cameraPitch
-                cameraYaw = wrapAngle(cameraYaw - dx * 0.5f)
-                cameraPitch = (cameraPitch + dy * 0.5f).coerceIn(-89f, 90f)
-
-                // Rotate cameraTarget around the world center so the orbit
-                // pivots on the world, not on the (possibly panned) target.
-                val worldCenter = com.badlogic.gdx.math.Vector3(
-                    world.width / 2f, world.height / 2f, world.depth / 2f
-                )
-                val deltaYaw = cameraYaw - oldYaw
-                val deltaPitch = cameraPitch - oldPitch
-                val offset = cameraTarget.cpy().sub(worldCenter)
-                val rotMatrix = com.badlogic.gdx.math.Matrix4()
-                rotMatrix.rotate(com.badlogic.gdx.math.Vector3.Z, -deltaYaw)
-                // Compute the horizontal axis for pitch rotation
-                val yawRad = Math.toRadians(cameraYaw.toDouble())
-                val pitchAxis = com.badlogic.gdx.math.Vector3(
-                    Math.cos(yawRad).toFloat(), -Math.sin(yawRad).toFloat(), 0f
-                )
-                rotMatrix.rotate(pitchAxis, deltaPitch)
-                offset.mul(rotMatrix)
-                cameraTarget.set(worldCenter).add(offset)
-
-                updateCamera()
-            },
-            onCameraPan = { dx, dy ->
-                val sensitivity = cameraDistance / 800f
-                val camRight = camera.direction.cpy().crs(camera.up).nor()
-                val camUp = camRight.cpy().crs(camera.direction).nor()
-                cameraTarget.add(camRight.scl(-dx * sensitivity))
-                cameraTarget.add(camUp.scl(dy * sensitivity))
-                updateCamera()
-            },
-            onCameraZoom = { amount ->
-                val forward = camera.direction.cpy().nor().scl(-amount * 1.5f)
-                cameraTarget.add(forward)
-                updateCamera()
-            },
-            onUpdatePaletteHighlights = {
-                val node = world.getNode(inputHandler.selectedX, inputHandler.selectedY, inputHandler.selectedZ)
-                palette.updateHighlightsForNode(node)
-            }
-        )
-
-        createUI()
-        createFrameModel()
-
-        orientationGizmo = OrientationGizmo(camera, modelBatch, shapeRenderer) {
-            cameraTarget.set(world.width / 2f, world.height / 2f, world.depth / 2f)
-            cameraPitch = 60f; cameraYaw = 180f
-            updateCamera()
-        }
-        viewportArea.add(orientationGizmo).size(100f).top().left().pad(10f).expand().top().left()
-    }
-
-    private fun createFrameModel() {
-        val modelBuilder = ModelBuilder()
-        modelBuilder.begin()
-        val part = modelBuilder.part(
-            "frame", GL20.GL_LINES,
-            (VertexAttributes.Usage.Position or VertexAttributes.Usage.ColorPacked).toLong(),
-            Material()
-        )
-        val s = 0.5f
-        part.setColor(Color.WHITE)
-        part.line(-s, -s, -s, s, -s, -s); part.line(s, -s, -s, s, -s, s)
-        part.line(s, -s, s, -s, -s, s); part.line(-s, -s, s, -s, -s, -s)
-        part.line(-s, s, -s, s, s, -s); part.line(s, s, -s, s, s, s)
-        part.line(s, s, s, -s, s, s); part.line(-s, s, s, -s, s, -s)
-        part.line(-s, -s, -s, -s, s, -s); part.line(s, -s, -s, s, s, -s)
-        part.line(s, -s, s, s, s, s); part.line(-s, -s, s, -s, s, s)
-        frameModel = modelBuilder.end()
-        frameInstance = ModelInstance(frameModel)
-
-        hoverFrameInstance = ModelInstance(frameModel)
-        hoverFrameInstance.materials.get(0).set(ColorAttribute.createDiffuse(Color.YELLOW))
-
-        selectedFrameInstance = ModelInstance(frameModel)
-        selectedFrameInstance.materials.get(0).set(ColorAttribute.createDiffuse(Color.CYAN))
-
-        val tagSphereSize = 0.22f
-        tagSphereModel = modelBuilder.createSphere(
-            tagSphereSize, tagSphereSize, tagSphereSize, 12, 12,
-            Material(ColorAttribute.createDiffuse(Color.WHITE)),
-            (VertexAttributes.Usage.Position or VertexAttributes.Usage.Normal).toLong()
-        )
-        tagSphereInstance = ModelInstance(tagSphereModel)
-
-        val lightSphereSize = 0.3f
-        lightSphereModel = modelBuilder.createSphere(
-            lightSphereSize, lightSphereSize, lightSphereSize, 12, 12,
-            Material(ColorAttribute.createDiffuse(Color.YELLOW)),
-            (VertexAttributes.Usage.Position or VertexAttributes.Usage.Normal).toLong()
-        )
-        lightSphereInstance = ModelInstance(lightSphereModel)
-
-        tagFont = BitmapFont()
-        tagFont.color = Color.WHITE
-        tagSpriteBatch = com.badlogic.gdx.graphics.g2d.SpriteBatch()
-    }
-
-    private fun createUI() {
-        rootTable = VisTable()
-        rootTable.setFillParent(true)
-        stage.addActor(rootTable)
-
-        // ── Menu Bar ──────────────────────────────────────────────────────
-        val menuBar = MenuBar()
-        rootTable.add(menuBar.table).fillX().expandX().top().row()
-        fileMenu = Menu("File")
-        menuBar.addMenu(fileMenu)
-        loadRecentFiles()
-        rebuildFileMenu()
-
-        // ── Main Area: toolbar | viewport | palette ─────────────────────────
-        val mainRow = VisTable()
-        rootTable.add(mainRow).fill().expand().row()
-
-        // ── Left toolbar column ─────────────────────────────────────────
-        val toolbar = VisTable()
-        toolbar.top().pad(4f)
-        toolbar.background = VisUI.getSkin().newDrawable("white", Color(0.15f, 0.15f, 0.15f, 1f))
-
-        try {
-            // Helper to create a toolbar button with icon inverted to white
-            fun makeToolbarButton(iconPath: String, onClick: () -> Unit): VisImageButton {
-                val originalPixmap = com.badlogic.gdx.graphics.Pixmap(Gdx.files.internal(iconPath))
-                // Invert RGB: black→white, keep alpha
-                val inverted = com.badlogic.gdx.graphics.Pixmap(originalPixmap.width, originalPixmap.height, originalPixmap.format)
-                for (px in 0 until originalPixmap.width) {
-                    for (py in 0 until originalPixmap.height) {
-                        val c = originalPixmap.getPixel(px, py)
-                        val r = (c ushr 24) and 0xFF
-                        val g = (c ushr 16) and 0xFF
-                        val b = (c ushr 8) and 0xFF
-                        val a = c and 0xFF
-                        val inv = ((255 - r) shl 24) or ((255 - g) shl 16) or ((255 - b) shl 8) or a
-                        inverted.drawPixel(px, py, inv)
-                    }
-                }
-                val tex = com.badlogic.gdx.graphics.Texture(inverted)
-                originalPixmap.dispose()
-                inverted.dispose()
-                val drawable = com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable(
-                    com.badlogic.gdx.graphics.g2d.TextureRegion(tex)
-                )
-                val btn = VisImageButton(drawable)
-                btn.addListener(object : com.badlogic.gdx.scenes.scene2d.utils.ClickListener() {
-                    override fun clicked(event: com.badlogic.gdx.scenes.scene2d.InputEvent, x: Float, y: Float) {
-                        onClick()
-                    }
-                })
-                return btn
-            }
-
-            // Normal mode (deselect tools) button
-            val cursorBtn = makeToolbarButton("icons/cursor-default-outline.png") {
-                inputHandler.toolMode = EditorToolMode.NONE
-            }
-            toolbar.add(cursorBtn).size(32f).pad(2f).row()
-
-            val gridBtn = makeToolbarButton("icons/view-grid-outline.png") {
-                showFrames = !showFrames
-            }
-            toolbar.add(gridBtn).size(32f).pad(2f).row()
-
-            val ccwBtn = makeToolbarButton("icons/rotate-counter-clockwise.png") {
-                rotateWorld(clockwise = false)
-            }
-            toolbar.add(ccwBtn).size(32f).pad(2f).row()
-
-            val cwBtn = makeToolbarButton("icons/rotate-clockwise.png") {
-                rotateWorld(clockwise = true)
-            }
-            toolbar.add(cwBtn).size(32f).pad(2f).row()
-
-            // Fill tool toggle
-            val fillBtn = makeToolbarButton("icons/format-color-fill.png") {
-                inputHandler.toolMode = if (inputHandler.toolMode == EditorToolMode.FILL)
-                    EditorToolMode.NONE else EditorToolMode.FILL
-            }
-            toolbar.add(fillBtn).size(32f).pad(2f).row()
-
-            // Room tool toggle
-            val roomBtn = makeToolbarButton("icons/vector-square.png") {
-                inputHandler.toolMode = if (inputHandler.toolMode == EditorToolMode.ROOM)
-                    EditorToolMode.NONE else EditorToolMode.ROOM
-            }
-            toolbar.add(roomBtn).size(32f).pad(2f).row()
-        } catch (e: Exception) {
-            toolbar.add(VisLabel("!")).row()
-        }
-
-        mainRow.add(toolbar).fillY().expandY().width(40f)
-
-        viewportArea = VisTable()
-
-        // Gizmo will be added after orientationGizmo is created (in show())
-
-        val paletteContent = palette.buildContent()
-        paletteContent.pad(0f, 8f, 0f, 8f)
-        paletteContent.background = VisUI.getSkin().newDrawable("white", Color(0.2f, 0.2f, 0.2f, 1f))
-        paletteScroll = VisScrollPane(paletteContent)
-        paletteScroll.setFadeScrollBars(false)
-        paletteScroll.setScrollingDisabled(true, false)
-        paletteScroll.setCancelTouchFocus(false)
-
-        val splitPane = VisSplitPane(viewportArea, paletteScroll, false)
-        splitPane.setSplitAmount(0.8f)
-        splitPane.setMinSplitAmount(0.5f)
-        splitPane.setMaxSplitAmount(0.92f)
-        mainRow.add(splitPane).fill().expand()
-
-        // ── Status Bar ────────────────────────────────────────────────────
-        rootTable.add(statusBar.build()).fillX().height(40f).row()
-    }
-
-    private fun resizeWorld(nx: Int, ny: Int, nz: Int) {
-        val w = nx.coerceAtLeast(3)
-        val h = ny.coerceAtLeast(3)
-        val d = nz.coerceAtLeast(3)
-        // Round up to nearest multiple of 3
-        val aw = ((w + 2) / 3) * 3
-        val ah = ((h + 2) / 3) * 3
-        val ad = ((d + 2) / 3) * 3
-
-        val oldWorld = world
-        world = World(aw, ah, ad)
-        for (x in 0 until minOf(oldWorld.width, world.width)) {
-            for (y in 0 until minOf(oldWorld.height, world.height)) {
-                for (z in 0 until minOf(oldWorld.depth, world.depth)) {
-                    val oldNode = oldWorld.getNode(x, y, z)!!
-                    val newNode = world.getNode(x, y, z)!!
-                    oldNode.tiles.forEach { newNode.setTile(it) }
-                    oldNode.tags.forEach { world.addTag(newNode, it) }
-                    oldNode.doorSlots.forEach { newNode.tagAsDoor(it) }
-                    oldNode.manualDoorSlots.forEach { newNode.tagAsManualDoor(it) }
-                    oldNode.socketSlots.forEach { newNode.tagAsSocket(it) }
-                    oldNode.ladderSlots.forEach { newNode.tagAsLadder(it) }
-                }
-            }
-        }
-        // Copy props
-        world.props.addAll(oldWorld.props)
-        maxRenderZ = world.depth - 1
-        statusBar.refresh(world)
-        updateCamera()
-    }
+    /** Editor modes selection group — only one can be active at a time. */
+    private enum class EditorMode { NORMAL, GRID_TOGGLE, LIGHTS, GPU_RENDER }
+    private var selectedEditorMode = EditorMode.NORMAL
 
     /**
-     * Rotates the entire world 90° around the Z axis.
-     * Uses the procedural generation rotation to structurally rearrange nodes,
-     * then recreates proper tiles via the tile factory.
+     * When true, light sources project dynamic light with shadow volumes.
+     * This depends ONLY on whether the LIGHTS editor mode is active,
+     * not on the tools palette selection.
      */
-    private fun rotateWorld(clockwise: Boolean) {
-        val template = SubmapTemplate.fromWorld("editor", world)
-        // CW = one CW rotation, CCW = three CW rotations
-        val steps = if (clockwise) 1 else 3
-        var rotated = template
-        repeat(steps) { rotated = rotated.rotatedCW90() }
+    private var lightPreviewEnabled = false
 
-        val rotatedWorldData = rotated.worldData
-        // Create a new world and stamp with proper tiles from factory
-        val newWorld = World(rotatedWorldData.width, rotatedWorldData.height, rotatedWorldData.depth)
-        for (x in 0 until rotatedWorldData.width) {
-            for (y in 0 until rotatedWorldData.height) {
-                for (z in 0 until rotatedWorldData.depth) {
-                    val srcNode = rotatedWorldData.getNode(x, y, z) ?: continue
-                    val dstNode = newWorld.getNode(x, y, z) ?: continue
+    /** When true, uses GPU depth-buffered rasterization instead of CPU painter's algorithm. */
+    private var gpuRenderingEnabled = false
 
-                    for (tile in srcNode.tiles) {
-                        if (tile is RotatedTileRef) {
-                            val newTile = modelLoader.createTile(tile.rotatedType)
-                            if (newTile != null) {
-                                if (newTile is BaseTile) {
-                                    if (tile.useFactoryDefaults) {
-                                        // Wall/door: factory already set correct rotation/offset
-                                        if (tile.originalTile is BaseTile) {
-                                            newTile.zOffset = tile.originalTile.zOffset
-                                        }
-                                    } else if (tile.originalTile is BaseTile) {
-                                        // Non-directional tile (floor, stairs): copy + add rotation
-                                        val orig = tile.originalTile
-                                        newTile.rotationX = orig.rotationX
-                                        newTile.rotationY = orig.rotationY + tile.additionalRotY
-                                        newTile.rotationZ = orig.rotationZ
-                                        newTile.xOffset = orig.xOffset
-                                        newTile.yOffset = orig.yOffset
-                                        newTile.zOffset = orig.zOffset
-                                    }
-                                }
-                                dstNode.setTile(newTile)
-                            }
-                        } else {
-                            val newTile = modelLoader.createTile(tile.type)
-                            if (newTile != null) {
-                                if (tile is BaseTile && newTile is BaseTile) {
-                                    newTile.rotationX = tile.rotationX
-                                    newTile.rotationY = tile.rotationY
-                                    newTile.rotationZ = tile.rotationZ
-                                    newTile.xOffset = tile.xOffset
-                                    newTile.yOffset = tile.yOffset
-                                    newTile.zOffset = tile.zOffset
-                                }
-                                dstNode.setTile(newTile)
-                            }
-                        }
-                    }
+    // Orbital camera parameters
+    private var azimuth = 0f
+    private var elevation = 60f
+    private var distance = 20f
+    private var orbitCenterX = 6f
+    private var orbitCenterY = 6f
+    private var orbitCenterZ = 0f
+    private var currentZ = 0
 
-                    for (slot in srcNode.doorSlots) dstNode.tagAsDoor(slot)
-                    for (slot in srcNode.manualDoorSlots) dstNode.tagAsManualDoor(slot)
-                    for (slot in srcNode.socketSlots) dstNode.tagAsSocket(slot)
-                    for (slot in srcNode.ladderSlots) dstNode.tagAsLadder(slot)
-                    for (tag in srcNode.tags) newWorld.addTag(dstNode, tag)
-                    for (item in srcNode.items) dstNode.items.add(item)
-                }
-            }
+    // Editor cursor (tile coordinates)
+    private var cursorX = 0
+    private var cursorY = 0
+
+    // Current tool (selected from the tools palette)
+    private var currentTool = EditorTool.FLOOR
+    private var lastFrameTime: Long = System.nanoTime()
+
+    enum class EditorTool { FLOOR, WALL_N, WALL_S, WALL_E, WALL_W, ERASE, LIGHT }
+
+    /** Tools palette tab selection. */
+    private enum class PaletteTab { STRUCTURES, LIGHTS }
+    private var selectedPaletteTab = PaletteTab.STRUCTURES
+
+    /** Index of the currently selected light source in the world (for editing radius/intensity). */
+    private var selectedLightIndex: Int = -1
+
+    /** Whether we are currently dragging a light source. */
+    private var draggingLight = false
+
+    /** Default radius for newly placed lights. */
+    private var defaultLightRadius = 5f
+    /** Default intensity for newly placed lights. */
+    private var defaultLightIntensity = 5f
+
+    fun show() {
+        // Create or load a world
+        val saveFile = File("saved-worlds/world.wld")
+        if (saveFile.exists()) {
+            loadWorldFromFile(saveFile)
+        } else {
+            newWorld()
         }
-
-        // Copy and rotate props
-        for (prop in world.props) {
-            newWorld.props.add(prop.copy())
-        }
-
-        world = newWorld
-        maxRenderZ = world.depth - 1
-        statusBar.refresh(world)
-        // Only re-center the camera target, keep perspective/zoom/pitch/yaw unchanged
-        cameraTarget.set(world.width / 2f, world.height / 2f, world.depth / 2f)
-        updateCamera()
+        setupMenuBar()
+        lastFrameTime = System.nanoTime()
     }
-
-    private fun wrapAngle(angle: Float): Float {
-        var a = angle % 360f
-        if (a < 0f) a += 360f
-        return a
-    }
-
-    private fun updateCamera() {
-        val pitchRad = Math.toRadians(cameraPitch.toDouble())
-        val yawRad = Math.toRadians(cameraYaw.toDouble())
-
-        val cosPitch = Math.cos(pitchRad).toFloat()
-        val sinPitch = Math.sin(pitchRad).toFloat()
-        val sinYaw = Math.sin(yawRad).toFloat()
-        val cosYaw = Math.cos(yawRad).toFloat()
-
-        camera.position.set(
-            cameraTarget.x + cameraDistance * cosPitch * sinYaw,
-            cameraTarget.y + cameraDistance * cosPitch * cosYaw,
-            cameraTarget.z + cameraDistance * sinPitch
-        )
-        val upX = -sinPitch * sinYaw
-        val upY = -sinPitch * cosYaw
-        val upZ = cosPitch
-        camera.up.set(upX, upY, upZ).nor()
-        camera.lookAt(cameraTarget)
-        camera.update()
-    }
-
-    // ── File operations ──────────────────────────────────────────────────
 
     private fun newWorld() {
-        world = World(6, 6, 3)
-        maxRenderZ = world.depth - 1
+        world = World(12, 12, 3)
         currentFilePath = null
-        inputHandler.selectedX = -1; inputHandler.selectedY = -1; inputHandler.selectedZ = -1
-        cameraPitch = 60f; cameraYaw = 180f
-        cameraTarget.set(world.width / 2f, world.height / 2f, world.depth / 2f)
-        statusBar.refresh(world)
-        updateCamera()
+        resetCamera()
+    }
+
+    private fun loadWorldFromFile(file: File) {
+        try {
+            val loaded = WorldIO.loadWorld(
+                file.path,
+                { w, h, d -> World(w, h, d) },
+                ::defaultTileFactory
+            )
+            if (loaded != null) {
+                world = loaded
+                currentFilePath = file.canonicalPath
+                recentFiles.touch(file.canonicalPath)
+                rebuildFileMenu()
+                resetCamera()
+                println("[MapEditor] Loaded: ${file.path}")
+            } else {
+                println("[MapEditor] loadWorld returned null")
+                newWorld()
+            }
+        } catch (e: Exception) {
+            println("[MapEditor] Failed to load: ${e.message}")
+            newWorld()
+        }
+    }
+
+    private fun saveWorldToFile(file: File) {
+        val w = world ?: return
+        try {
+            file.parentFile?.mkdirs()
+            WorldIO.saveWorld(file.path, w)
+            currentFilePath = file.canonicalPath
+            recentFiles.touch(file.canonicalPath)
+            rebuildFileMenu()
+            println("[MapEditor] Saved: ${file.path}")
+        } catch (e: Exception) {
+            println("[MapEditor] Save failed: ${e.message}")
+        }
+    }
+
+    private fun resetCamera() {
+        val w = world ?: return
+        orbitCenterX = w.width / 2f
+        orbitCenterY = w.height / 2f
+        orbitCenterZ = 0f
+        distance = max(w.width, w.height).toFloat() * 1.2f
+        currentZ = 0
+    }
+
+    // ---- Menu Bar Setup ----
+
+    private fun setupMenuBar() {
+        rebuildFileMenu()
     }
 
     private fun rebuildFileMenu() {
-        fileMenu.clear()
-        fileMenu.addItem(MenuItem("New").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { newWorld() } }) })
-        fileMenu.addItem(MenuItem("Open").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { openWorld() } }) })
-        if (recentFiles.isNotEmpty()) {
-            fileMenu.addSeparator()
-            recentFiles.forEach { path ->
-                val displayName = java.io.File(path).name
-                fileMenu.addItem(MenuItem(displayName).apply {
-                    addListener(object : ChangeListener() {
-                        override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { loadWorldFromPath(path) }
-                    })
-                })
+        val items = mutableListOf<MenuBar.MenuItem>()
+        items.add(MenuBar.MenuItem("New", "file.new"))
+        items.add(MenuBar.MenuItem("Load...", "file.load"))
+        items.add(MenuBar.MenuItem("Save", "file.save"))
+        items.add(MenuBar.MenuItem("Save As...", "file.saveas"))
+        items.add(MenuBar.MenuItem("", isDivider = true))
+
+        val recent = recentFiles.list()
+        if (recent.isNotEmpty()) {
+            for ((idx, path) in recent.withIndex()) {
+                val shortName = File(path).name
+                items.add(MenuBar.MenuItem("${idx + 1}. $shortName", "file.recent.$idx"))
             }
-            fileMenu.addSeparator()
-        }
-        fileMenu.addItem(MenuItem("Save").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { saveWorld() } }) })
-        fileMenu.addItem(MenuItem("Save As...").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { saveWorldAs() } }) })
-        fileMenu.addItem(MenuItem("Exit").apply { addListener(object : ChangeListener() { override fun changed(e: ChangeEvent, a: com.badlogic.gdx.scenes.scene2d.Actor) { game.screen = MainMenuScreen(game) } }) })
-    }
-
-    private fun addRecentFile(path: String) {
-        recentFiles.remove(path)
-        recentFiles.add(0, path)
-        if (recentFiles.size > maxRecentFiles) recentFiles.removeAt(recentFiles.lastIndex)
-        saveRecentFiles()
-        rebuildFileMenu()
-    }
-
-    private fun loadRecentFiles() {
-        recentFiles.clear()
-        val prefs = Gdx.app.getPreferences("MapEditorPrefs")
-        for (i in 0 until maxRecentFiles) {
-            val path = prefs.getString("recent_$i", "")
-            if (path.isNotEmpty()) recentFiles.add(path)
-        }
-    }
-
-    private fun saveRecentFiles() {
-        val prefs = Gdx.app.getPreferences("MapEditorPrefs")
-        for (i in 0 until maxRecentFiles) prefs.putString("recent_$i", if (i < recentFiles.size) recentFiles[i] else "")
-        prefs.flush()
-    }
-
-    private fun loadWorldFromPath(filePath: String) {
-        val loadedWorld = WorldIO.loadWorld(filePath, { w, h, d -> World(w, h, d) }, { type -> modelLoader.createTile(type) })
-        if (loadedWorld != null) {
-            world = loadedWorld
-            currentFilePath = filePath
-            maxRenderZ = world.depth - 1
-            statusBar.refresh(world)
-            cameraPitch = 60f; cameraYaw = 180f
-            cameraTarget.set(world.width / 2f, world.height / 2f, world.depth / 2f)
-            updateCamera()
-            addRecentFile(filePath)
-            palette.syncDecorationsFromWorld(world)
-        }
-    }
-
-    private fun openWorld() {
-        if (isDialogActive) return
-        isDialogActive = true
-        Thread {
-            try {
-                val path = PlatformUtils.chooseFile("wld")
-                path?.let { Gdx.app.postRunnable { loadWorldFromPath(it) } }
-            } finally { isDialogActive = false }
-        }.start()
-    }
-
-    private fun saveWorld() {
-        val path = currentFilePath
-        if (path == null) saveWorldAs() else WorldIO.saveWorld(path, world)
-    }
-
-    private fun saveWorldAs() {
-        if (isDialogActive) return
-        isDialogActive = true
-        Thread {
-            try {
-                val path = PlatformUtils.chooseFileName("world.wld")
-                path?.let {
-                    var finalPath = it
-                    if (!finalPath.endsWith(".wld")) finalPath += ".wld"
-                    WorldIO.saveWorld(finalPath, world)
-                    Gdx.app.postRunnable { currentFilePath = finalPath }
-                }
-            } finally { isDialogActive = false }
-        }.start()
-    }
-
-    // ── Render ────────────────────────────────────────────────────────────
-
-    override fun render(delta: Float) {
-        updateHover()
-        inputHandler.handleInput(delta, hoveredX, hoveredY, hoveredZ, hoveredEdge)
-        maxRenderZ = statusBar.maxRenderZ
-
-        val bw = Gdx.graphics.backBufferWidth.toFloat()
-        val bh = Gdx.graphics.backBufferHeight.toFloat()
-        val ratioX = bw / stage.width
-        val ratioY = bh / stage.height
-
-        val screenPos = viewportArea.localToStageCoordinates(Vector2(0f, 0f))
-        val viewX = (screenPos.x * ratioX).toInt()
-        val viewY = (screenPos.y * ratioY).toInt()
-        val viewW = (viewportArea.width * ratioX).toInt()
-        val viewH = (viewportArea.height * ratioY).toInt()
-        lastViewX = viewX; lastViewY = viewY; lastViewW = viewW; lastViewH = viewH
-
-        Gdx.gl.glViewport(0, 0, bw.toInt(), bh.toInt())
-        Gdx.gl.glClearColor(0.15f, 0.15f, 0.15f, 1f)
-        Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT)
-
-        if (viewW > 0 && viewH > 0) {
-            Gdx.gl.glEnable(GL20.GL_SCISSOR_TEST)
-            Gdx.gl.glScissor(viewX, viewY, viewW, viewH)
-            Gdx.gl.glViewport(viewX, viewY, viewW, viewH)
-            Gdx.gl.glClearColor(0.2f, 0.2f, 0.2f, 1f)
-            Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT or GL20.GL_DEPTH_BUFFER_BIT)
-
-            camera.viewportWidth = viewW.toFloat()
-            camera.viewportHeight = viewH.toFloat()
-            camera.update()
-
-            // ── World tiles ─────────────────────────────────────────────────
-            modelBatch.begin(camera)
-            worldRenderer.render(world, modelBatch, environment, maxZ = maxRenderZ)
-
-            // ── Props (decorations) ────────────────────────────────────────
-            for (prop in world.props) {
-                if (prop.z.toInt() <= maxRenderZ) {
-                    propRenderer.render(prop, modelBatch, environment, selected = prop == inputHandler.selectedProp)
-                }
-            }
-
-            // ── Light sources (yellow spheres) ────────────────────────────────
-            for (ls in world.lightSources) {
-                if (ls.z.toInt() <= maxRenderZ) {
-                    val selected = ls == inputHandler.selectedLightSource
-                    val color = if (selected) Color.CYAN else Color.YELLOW
-                    lightSphereInstance.transform.setToTranslation(ls.x, ls.y, ls.z)
-                    if (lightSphereInstance.materials.size > 0) {
-                        lightSphereInstance.materials.get(0).set(ColorAttribute.createDiffuse(color))
-                    }
-                    modelBatch.render(lightSphereInstance, environment)
-                }
-            }
-
-            // ── Grid frames ─────────────────────────────────────────────────
-            if (showFrames) {
-                for (x in 0 until world.width) {
-                    for (y in 0 until world.height) {
-                        for (z in 0..maxRenderZ.coerceAtMost(world.depth - 1)) {
-                            if (x == inputHandler.selectedX && y == inputHandler.selectedY && z == inputHandler.selectedZ) continue
-                            if (x == hoveredX && y == hoveredY && z == hoveredZ) continue
-                            frameInstance.transform.setToTranslation(x.toFloat(), y.toFloat(), z.toFloat())
-                            modelBatch.render(frameInstance)
-                        }
-                    }
-                }
-            }
-            modelBatch.end()
-
-            // ── Hover + selection ───────────────────────────────────────────
-            Gdx.gl.glLineWidth(3f)
-            modelBatch.begin(camera)
-            if (hoveredX != -1) {
-                hoverFrameInstance.transform.setToTranslation(hoveredX.toFloat(), hoveredY.toFloat(), hoveredZ.toFloat())
-                modelBatch.render(hoverFrameInstance)
-            }
-            if (inputHandler.selectedX != -1) {
-                selectedFrameInstance.transform.setToTranslation(
-                    inputHandler.selectedX.toFloat(), inputHandler.selectedY.toFloat(), inputHandler.selectedZ.toFloat()
-                )
-                modelBatch.render(selectedFrameInstance)
-            }
-            modelBatch.end()
-            Gdx.gl.glLineWidth(1f)
-
-            // ── Edge highlight (hovered edge) ───────────────────────────────
-            if (hoveredEdge != null && hoveredX != -1) {
-                Gdx.gl.glLineWidth(4f)
-                shapeRenderer.projectionMatrix = camera.combined
-                shapeRenderer.begin(ShapeRenderer.ShapeType.Line)
-                shapeRenderer.color = Color.ORANGE
-                drawEdge(hoveredX.toFloat(), hoveredY.toFloat(), hoveredZ.toFloat(), hoveredEdge!!)
-                shapeRenderer.end()
-                Gdx.gl.glLineWidth(1f)
-            }
-
-            // ── Selected edge highlight ─────────────────────────────────────
-            if (inputHandler.selectedEdge != null && inputHandler.selectedX != -1) {
-                Gdx.gl.glLineWidth(4f)
-                shapeRenderer.projectionMatrix = camera.combined
-                shapeRenderer.begin(ShapeRenderer.ShapeType.Line)
-                shapeRenderer.color = Color.CYAN
-                drawEdge(inputHandler.selectedX.toFloat(), inputHandler.selectedY.toFloat(), inputHandler.selectedZ.toFloat(), inputHandler.selectedEdge!!)
-                shapeRenderer.end()
-                Gdx.gl.glLineWidth(1f)
-            }
-
-            // ── Room tool drag preview (magenta rectangle) ───────────────────
-            if (inputHandler.isRoomDragging && inputHandler.roomDragStartX != -1) {
-                val rMinX = minOf(inputHandler.roomDragStartX, inputHandler.roomDragEndX).toFloat()
-                val rMaxX = maxOf(inputHandler.roomDragStartX, inputHandler.roomDragEndX).toFloat()
-                val rMinY = minOf(inputHandler.roomDragStartY, inputHandler.roomDragEndY).toFloat()
-                val rMaxY = maxOf(inputHandler.roomDragStartY, inputHandler.roomDragEndY).toFloat()
-                val rz = hoveredZ.toFloat()
-                val s = 0.5f
-                Gdx.gl.glLineWidth(3f)
-                shapeRenderer.projectionMatrix = camera.combined
-                shapeRenderer.begin(ShapeRenderer.ShapeType.Line)
-                shapeRenderer.color = if (inputHandler.isRoomSubtract) Color.RED else Color.MAGENTA
-                // Bottom edge
-                shapeRenderer.line(rMinX - s, rMinY - s, rz, rMaxX + s, rMinY - s, rz)
-                // Top edge
-                shapeRenderer.line(rMinX - s, rMaxY + s, rz, rMaxX + s, rMaxY + s, rz)
-                // Left edge
-                shapeRenderer.line(rMinX - s, rMinY - s, rz, rMinX - s, rMaxY + s, rz)
-                // Right edge
-                shapeRenderer.line(rMaxX + s, rMinY - s, rz, rMaxX + s, rMaxY + s, rz)
-                shapeRenderer.end()
-                Gdx.gl.glLineWidth(1f)
-            }
-
-            // ── Active tool indicator ────────────────────────────────────────
-            if (inputHandler.toolMode != EditorToolMode.NONE && hoveredX != -1) {
-                val toolColor = when (inputHandler.toolMode) {
-                    EditorToolMode.FILL -> Color.YELLOW
-                    EditorToolMode.ROOM -> Color.MAGENTA
-                    else -> Color.WHITE
-                }
-                Gdx.gl.glLineWidth(2f)
-                shapeRenderer.projectionMatrix = camera.combined
-                shapeRenderer.begin(ShapeRenderer.ShapeType.Line)
-                shapeRenderer.color = toolColor
-                val ts = 0.55f
-                val tx = hoveredX.toFloat(); val ty = hoveredY.toFloat(); val tz = hoveredZ.toFloat()
-                shapeRenderer.line(tx - ts, ty - ts, tz, tx + ts, ty - ts, tz)
-                shapeRenderer.line(tx + ts, ty - ts, tz, tx + ts, ty + ts, tz)
-                shapeRenderer.line(tx + ts, ty + ts, tz, tx - ts, ty + ts, tz)
-                shapeRenderer.line(tx - ts, ty + ts, tz, tx - ts, ty - ts, tz)
-                shapeRenderer.end()
-                Gdx.gl.glLineWidth(1f)
-            }
-
-            // ── Door edge highlights (green) ───────────────────────────────
-            Gdx.gl.glLineWidth(3f)
-            shapeRenderer.projectionMatrix = camera.combined
-            shapeRenderer.begin(ShapeRenderer.ShapeType.Line)
-            shapeRenderer.color = Color.GREEN
-            for (x in 0 until world.width) {
-                for (y in 0 until world.height) {
-                    for (z in 0..maxRenderZ.coerceAtMost(world.depth - 1)) {
-                        val node = world.getNode(x, y, z) ?: continue
-                        for (doorSlot in node.doorSlots) {
-                            drawEdge(x.toFloat(), y.toFloat(), z.toFloat(), doorSlot)
-                        }
-                    }
-                }
-            }
-            shapeRenderer.end()
-            Gdx.gl.glLineWidth(1f)
-
-            // ── Stairs direction arrows (light blue) ──────────────────────────
-            Gdx.gl.glLineWidth(3f)
-            shapeRenderer.projectionMatrix = camera.combined
-            shapeRenderer.begin(ShapeRenderer.ShapeType.Line)
-            shapeRenderer.color = Color(0.5f, 0.8f, 1f, 1f) // light blue
-            for (x in 0 until world.width) {
-                for (y in 0 until world.height) {
-                    for (z in 0..maxRenderZ.coerceAtMost(world.depth - 1)) {
-                        val node = world.getNode(x, y, z) ?: continue
-                        val stairsTile = node.getTile(com.roguelike.core.model.TileSlot.STAIRS)
-                        if (stairsTile is com.roguelike.world.StairsTile) {
-                            drawStairsArrow(x.toFloat(), y.toFloat(), z.toFloat(), stairsTile)
-                        }
-                    }
-                }
-            }
-            shapeRenderer.end()
-            Gdx.gl.glLineWidth(1f)
-
-            // ── Ladder up-arrows (green) ────────────────────────────────────
-            Gdx.gl.glLineWidth(3f)
-            shapeRenderer.projectionMatrix = camera.combined
-            shapeRenderer.begin(ShapeRenderer.ShapeType.Line)
-            shapeRenderer.color = Color(0.3f, 1f, 0.3f, 1f) // green
-            for (x in 0 until world.width) {
-                for (y in 0 until world.height) {
-                    for (z in 0..maxRenderZ.coerceAtMost(world.depth - 1)) {
-                        val node = world.getNode(x, y, z) ?: continue
-                        for (slot in node.ladderSlots) {
-                            val offset = edgeOffset(slot)
-                            val ex = x + offset.x
-                            val ey = y + offset.y
-                            val ez = z.toFloat()
-                            drawLadderUpArrow(ex, ey, ez)
-                        }
-                    }
-                }
-            }
-            shapeRenderer.end()
-            Gdx.gl.glLineWidth(1f)
-
-            // ── Tag spheres + labels ────────────────────────────────────────
-            modelBatch.begin(camera)
-            for (x in 0 until world.width) {
-                for (y in 0 until world.height) {
-                    for (z in 0..maxRenderZ.coerceAtMost(world.depth - 1)) {
-                        val node = world.getNode(x, y, z) ?: continue
-                        if (node.tags.isNotEmpty()) {
-                            tagSphereInstance.transform.setToTranslation(x.toFloat(), y.toFloat(), z.toFloat())
-                            modelBatch.render(tagSphereInstance, environment)
-                        }
-                        // Render door_manual spheres at each manual door edge
-                        for (slot in node.manualDoorSlots) {
-                            val offset = edgeOffset(slot)
-                            tagSphereInstance.transform.setToTranslation(x + offset.x, y + offset.y, z + offset.z)
-                            modelBatch.render(tagSphereInstance, environment)
-                        }
-                        // Render socket spheres at each socket edge
-                        for (slot in node.socketSlots) {
-                            val offset = edgeOffset(slot)
-                            tagSphereInstance.transform.setToTranslation(x + offset.x, y + offset.y, z + offset.z)
-                            modelBatch.render(tagSphereInstance, environment)
-                        }
-                        // Render ladder spheres at each ladder edge
-                        for (slot in node.ladderSlots) {
-                            val offset = edgeOffset(slot)
-                            tagSphereInstance.transform.setToTranslation(x + offset.x, y + offset.y, z + offset.z)
-                            modelBatch.render(tagSphereInstance, environment)
-                        }
-                    }
-                }
-            }
-            modelBatch.end()
-
-            val projPos = Vector3()
-            tagSpriteBatch.setProjectionMatrix(
-                com.badlogic.gdx.math.Matrix4().setToOrtho2D(0f, 0f, viewW.toFloat(), viewH.toFloat())
-            )
-            tagSpriteBatch.begin()
-            for (x in 0 until world.width) {
-                for (y in 0 until world.height) {
-                    for (z in 0..maxRenderZ.coerceAtMost(world.depth - 1)) {
-                        val node = world.getNode(x, y, z) ?: continue
-                        if (node.tags.isNotEmpty()) {
-                            projPos.set(x.toFloat(), y.toFloat() + 0.45f, z.toFloat())
-                            camera.project(projPos, 0f, 0f, viewW.toFloat(), viewH.toFloat())
-                            if (projPos.z in 0f..1f) {
-                                tagFont.draw(tagSpriteBatch, node.tags.joinToString("\n"), projPos.x - 30f, projPos.y + 4f)
-                            }
-                        }
-                        // Render door_manual labels at each manual door edge
-                        for (slot in node.manualDoorSlots) {
-                            val offset = edgeOffset(slot)
-                            projPos.set(x + offset.x, y + offset.y + 0.45f, z + offset.z)
-                            camera.project(projPos, 0f, 0f, viewW.toFloat(), viewH.toFloat())
-                            if (projPos.z in 0f..1f) {
-                                tagFont.draw(tagSpriteBatch, WorldNode.Tags.DOOR_MANUAL, projPos.x - 30f, projPos.y + 4f)
-                            }
-                        }
-                        // Render socket labels at each socket edge
-                        for (slot in node.socketSlots) {
-                            val offset = edgeOffset(slot)
-                            projPos.set(x + offset.x, y + offset.y + 0.45f, z + offset.z)
-                            camera.project(projPos, 0f, 0f, viewW.toFloat(), viewH.toFloat())
-                            if (projPos.z in 0f..1f) {
-                                tagFont.draw(tagSpriteBatch, WorldNode.Tags.SOCKET, projPos.x - 30f, projPos.y + 4f)
-                            }
-                        }
-                        // Render ladder labels at each ladder edge
-                        for (slot in node.ladderSlots) {
-                            val offset = edgeOffset(slot)
-                            projPos.set(x + offset.x, y + offset.y + 0.45f, z + offset.z)
-                            camera.project(projPos, 0f, 0f, viewW.toFloat(), viewH.toFloat())
-                            if (projPos.z in 0f..1f) {
-                                tagFont.draw(tagSpriteBatch, WorldNode.Tags.LADDER, projPos.x - 30f, projPos.y + 4f)
-                            }
-                        }
-                    }
-                }
-            }
-            tagSpriteBatch.end()
-
-            // ── Crosshair at viewport centre ────────────────────────────────
-            Gdx.gl.glEnable(GL20.GL_BLEND)
-            val ortho = com.badlogic.gdx.math.Matrix4().setToOrtho2D(0f, 0f, viewW.toFloat(), viewH.toFloat())
-            shapeRenderer.projectionMatrix = ortho
-            shapeRenderer.begin(ShapeRenderer.ShapeType.Line)
-            shapeRenderer.color = Color(1f, 1f, 1f, 0.5f)
-            val cx = viewW / 2f; val cy = viewH / 2f; val cs = 12f
-            shapeRenderer.line(cx - cs, cy, cx + cs, cy)
-            shapeRenderer.line(cx, cy - cs, cx, cy + cs)
-            shapeRenderer.end()
-            Gdx.gl.glDisable(GL20.GL_BLEND)
-
-            Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST)
-            Gdx.gl.glViewport(0, 0, bw.toInt(), bh.toInt())
+            items.add(MenuBar.MenuItem("", isDivider = true))
         }
 
-        stage.act(delta)
-        stage.draw()
-        scrolledThisFrame = false
+        items.add(MenuBar.MenuItem("Exit", "file.exit"))
+        menuBar.updateMenu("File", items)
+    }
+
+    init {
+        menuBar.addMenu("File", listOf(
+            MenuBar.MenuItem("New", "file.new"),
+            MenuBar.MenuItem("Exit", "file.exit")
+        ))
+    }
+
+    // ---- Main Render Loop ----
+
+    fun render(): Boolean {
+        val w = world ?: return false
+
+        val now = System.nanoTime()
+        val delta = ((now - lastFrameTime) / 1_000_000_000.0).toFloat().coerceIn(0f, 0.1f)
+        lastFrameTime = now
+
+        // Handle file dialog first (modal)
+        if (fileDialog.isOpen) {
+            fileDialog.render()
+            return true
+        }
+
+        // Check menu state for input blocking (rendered later for correct Z-order)
+        val menuActive = menuBar.isMouseOverBar(inputSystem)
+        val mx = inputSystem.getMouseX()
+        val my = inputSystem.getMouseY()
+
+        // Compute layout regions
+        val barH = menuBar.barHeight
+        val sw = ui.screenWidth
+        val editorModesRight = editorModesWidth
+        val toolsPaletteLeft = sw - toolsPaletteWidth
+
+        // Handle tools palette handle dragging
+        val handleX = toolsPaletteLeft - toolsPaletteHandleWidth
+        val overHandle = mx >= handleX && mx < toolsPaletteLeft && my > barH
+        if (inputSystem.isMouseButtonJustPressed(0) && overHandle) {
+            draggingPaletteHandle = true
+        }
+        if (draggingPaletteHandle) {
+            if (inputSystem.isMouseButtonPressed(0)) {
+                toolsPaletteWidth = (sw - mx).coerceIn(toolsPaletteMinWidth, toolsPaletteMaxWidth)
+            } else {
+                draggingPaletteHandle = false
+            }
+        }
+
+        // Determine if mouse is over a UI panel (not the viewport)
+        val overEditorModes = mx < editorModesRight && my > barH
+        val overToolsPalette = mx >= toolsPaletteLeft - toolsPaletteHandleWidth && my > barH
+        val uiBlocking = menuActive || overEditorModes || overToolsPalette || draggingPaletteHandle
+
+        // Update lightPreviewEnabled based solely on the LIGHTS editor mode
+        lightPreviewEnabled = selectedEditorMode == EditorMode.LIGHTS || selectedEditorMode == EditorMode.GPU_RENDER
+        gpuRenderingEnabled = selectedEditorMode == EditorMode.GPU_RENDER
+
+        // --- Camera controls (only when mouse not over UI panels) ---
+        if (!uiBlocking) {
+            val rotSpeed = 90f * delta
+            val zoomSpeed = 15f * delta
+            val shiftHeld = inputSystem.isKeyPressed(GLFW_KEY_LEFT_SHIFT) || inputSystem.isKeyPressed(GLFW_KEY_RIGHT_SHIFT)
+
+            if (shiftHeld) {
+                val azRad = Math.toRadians(azimuth.toDouble()).toFloat()
+                val panSpeed = 10f * delta
+                val rightX = -sin(azRad)
+                val rightY = cos(azRad)
+                val fwdX = -cos(azRad)
+                val fwdY = -sin(azRad)
+                if (inputSystem.isKeyPressed(GLFW_KEY_A)) {
+                    orbitCenterX -= rightX * panSpeed
+                    orbitCenterY -= rightY * panSpeed
+                }
+                if (inputSystem.isKeyPressed(GLFW_KEY_D)) {
+                    orbitCenterX += rightX * panSpeed
+                    orbitCenterY += rightY * panSpeed
+                }
+                if (inputSystem.isKeyPressed(GLFW_KEY_W)) {
+                    orbitCenterX += fwdX * panSpeed
+                    orbitCenterY += fwdY * panSpeed
+                }
+                if (inputSystem.isKeyPressed(GLFW_KEY_S)) {
+                    orbitCenterX -= fwdX * panSpeed
+                    orbitCenterY -= fwdY * panSpeed
+                }
+            } else {
+                if (inputSystem.isKeyPressed(GLFW_KEY_A)) azimuth -= rotSpeed
+                if (inputSystem.isKeyPressed(GLFW_KEY_D)) azimuth += rotSpeed
+            }
+
+            if (!shiftHeld) {
+                if (inputSystem.isKeyPressed(GLFW_KEY_Q)) distance = (distance - zoomSpeed).coerceAtLeast(3f)
+                if (inputSystem.isKeyPressed(GLFW_KEY_E)) distance = (distance + zoomSpeed).coerceAtMost(200f)
+                if (inputSystem.isKeyPressed(GLFW_KEY_W)) elevation = (elevation + rotSpeed).coerceAtMost(89f)
+                if (inputSystem.isKeyPressed(GLFW_KEY_S)) elevation = (elevation - rotSpeed).coerceAtLeast(5f)
+            }
+
+            if (inputSystem.isKeyJustPressed(GLFW_KEY_Z)) currentZ = (currentZ - 1).coerceAtLeast(0)
+            if (inputSystem.isKeyJustPressed(GLFW_KEY_X)) currentZ = (currentZ + 1).coerceAtMost(w.depth - 1)
+
+            val scroll = inputSystem.getScrollDelta()
+            if (scroll != 0f) {
+                distance = (distance - scroll * 2f).coerceIn(3f, 200f)
+            }
+
+            // Tool selection
+            if (inputSystem.isKeyJustPressed(GLFW_KEY_1)) currentTool = EditorTool.FLOOR
+            if (inputSystem.isKeyJustPressed(GLFW_KEY_2)) currentTool = EditorTool.WALL_N
+            if (inputSystem.isKeyJustPressed(GLFW_KEY_3)) currentTool = EditorTool.WALL_S
+            if (inputSystem.isKeyJustPressed(GLFW_KEY_4)) currentTool = EditorTool.WALL_E
+            if (inputSystem.isKeyJustPressed(GLFW_KEY_5)) currentTool = EditorTool.WALL_W
+            if (inputSystem.isKeyJustPressed(GLFW_KEY_6)) currentTool = EditorTool.ERASE
+            if (inputSystem.isKeyJustPressed(GLFW_KEY_7)) currentTool = EditorTool.LIGHT
+
+            // Cursor
+            updateCursorFromMouse(w)
+
+            // Place/erase with left mouse
+            if (inputSystem.isMouseButtonPressed(0)) {
+                if (cursorX in 0 until w.width && cursorY in 0 until w.height) {
+                    val node = w.getNode(cursorX, cursorY, currentZ)
+                    if (node != null) {
+                        when (currentTool) {
+                            EditorTool.FLOOR -> node.setTile(FloorTile())
+                            EditorTool.WALL_N -> node.setTile(WallNorthTile())
+                            EditorTool.WALL_S -> node.setTile(WallSouthTile())
+                            EditorTool.WALL_E -> node.setTile(WallEastTile())
+                            EditorTool.WALL_W -> node.setTile(WallWestTile())
+                            EditorTool.ERASE -> node.clear()
+                            EditorTool.LIGHT -> {} // handled below
+                        }
+                    }
+                }
+            }
+
+            // Light selection, dragging, and placement
+            if (currentTool == EditorTool.LIGHT && inputSystem.isMouseButtonJustPressed(0)) {
+                // Try to select an existing light first (check proximity in screen space)
+                val clickedLightIdx = findLightAtMouse(w)
+                if (clickedLightIdx >= 0) {
+                    selectedLightIndex = clickedLightIdx
+                    draggingLight = true
+                } else if (cursorX in 0 until w.width && cursorY in 0 until w.height) {
+                    // Place new light
+                    w.lightSources.add(com.roguelike.core.model.LightSource(
+                        x = cursorX + 0.5f,
+                        y = cursorY + 0.5f,
+                        z = currentZ + 0.8f, // slightly above floor
+                        intensity = defaultLightIntensity,
+                        radius = defaultLightRadius,
+                        colorHex = "ffcc88"
+                    ))
+                    // Select the newly placed light
+                    selectedLightIndex = w.lightSources.size - 1
+                }
+            }
+
+            // Drag selected light along XY plane
+            if (draggingLight && selectedLightIndex in 0 until w.lightSources.size) {
+                if (inputSystem.isMouseButtonPressed(0)) {
+                    val hitPos = raycastXYPlane(w.lightSources[selectedLightIndex].z)
+                    if (hitPos != null) {
+                        w.lightSources[selectedLightIndex].x = hitPos.first
+                        w.lightSources[selectedLightIndex].y = hitPos.second
+                    }
+                } else {
+                    draggingLight = false
+                }
+            }
+
+            // Deselect light if clicking in viewport with non-light tool
+            if (currentTool != EditorTool.LIGHT && inputSystem.isMouseButtonJustPressed(0)) {
+                selectedLightIndex = -1
+            }
+        }
+
+        // Ctrl+S shortcut
+        if (inputSystem.isKeyPressed(GLFW_KEY_LEFT_CONTROL) && inputSystem.isKeyJustPressed(GLFW_KEY_S)) {
+            handleMenuAction("file.save")
+        }
+
+        // Update camera
+        updateOrbitalCamera()
+
+        // Render grid (main viewport)
+        renderGrid(w)
+
+        // Draw gimbal cube overlay
+        drawGimbalCube()
+
+        // Draw editor modes (left)
+        renderEditorModes()
+
+        // Draw tools palette (right)
+        renderToolsPalette(w)
+
+        // Render menu bar last so dropdowns appear on top of all content
+        val menuAction = menuBar.render(inputSystem)
+        if (menuAction != null) handleMenuAction(menuAction)
+
+        return true
+    }
+
+    // ---- Menu Action Handler ----
+
+    private fun handleMenuAction(action: String) {
+        when (action) {
+            "file.new" -> {
+                newWorld()
+            }
+            "file.load" -> {
+                fileDialog.open(FileDialog.Mode.OPEN, File("saved-worlds")) { file ->
+                    if (file != null) loadWorldFromFile(file)
+                }
+            }
+            "file.save" -> {
+                val path = currentFilePath
+                if (path != null) {
+                    saveWorldToFile(File(path))
+                } else {
+                    handleMenuAction("file.saveas")
+                }
+            }
+            "file.saveas" -> {
+                fileDialog.open(FileDialog.Mode.SAVE, File("saved-worlds")) { file ->
+                    if (file != null) saveWorldToFile(file)
+                }
+            }
+            "file.exit" -> {
+                exitRequested = true
+            }
+            else -> {
+                if (action.startsWith("file.recent.")) {
+                    val idx = action.removePrefix("file.recent.").toIntOrNull() ?: return
+                    val recent = recentFiles.list()
+                    if (idx in recent.indices) {
+                        val file = File(recent[idx])
+                        if (file.exists()) {
+                            loadWorldFromFile(file)
+                        } else {
+                            println("[MapEditor] Recent file not found: ${file.path}")
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /**
-     * Draw a thick line on the edge of a node for the given wall slot.
-     * The edge is drawn as 4 lines forming a rectangle on the face of the node cube.
+     * Compute camera position and direction from azimuth, elevation, distance.
      */
-    private fun edgeOffset(slot: TileSlot): Vector3 = when (slot) {
-        TileSlot.WALL_NORTH -> Vector3(0f, 0.5f, 0f)
-        TileSlot.WALL_SOUTH -> Vector3(0f, -0.5f, 0f)
-        TileSlot.WALL_EAST  -> Vector3(0.5f, 0f, 0f)
-        TileSlot.WALL_WEST  -> Vector3(-0.5f, 0f, 0f)
-        else -> Vector3(0f, 0f, 0f)
+    private fun updateOrbitalCamera() {
+        val azRad = Math.toRadians(azimuth.toDouble()).toFloat()
+        val elRad = Math.toRadians(elevation.toDouble()).toFloat()
+
+        val cosEl = cos(elRad)
+        val camOffX = distance * cosEl * cos(azRad)
+        val camOffY = distance * cosEl * sin(azRad)
+        val camOffZ = distance * sin(elRad)
+
+        camera.position.set(
+            orbitCenterX + camOffX,
+            orbitCenterY + camOffY,
+            orbitCenterZ + camOffZ
+        )
+        camera.direction.set(
+            orbitCenterX - camera.position.x,
+            orbitCenterY - camera.position.y,
+            orbitCenterZ - camera.position.z
+        ).normalize()
+
+        camera.up.set(0f, 0f, 1f)
+        camera.update()
     }
 
-    private fun drawStairsArrow(x: Float, y: Float, z: Float, stairsTile: com.roguelike.world.StairsTile) {
-        val facing = stairsTile.facingDirection()
-        // Direction vector for the arrow
-        val dx: Float; val dy: Float
-        when (facing) {
-            TileSlot.WALL_NORTH -> { dx = 0f; dy = 1f }
-            TileSlot.WALL_SOUTH -> { dx = 0f; dy = -1f }
-            TileSlot.WALL_EAST  -> { dx = 1f; dy = 0f }
-            TileSlot.WALL_WEST  -> { dx = -1f; dy = 0f }
-            else -> return
+    /**
+     * Ray-cast from mouse into the Z=currentZ plane to get tile coords.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    private fun updateCursorFromMouse(w: World) {
+        val mx = inputSystem.getMouseX()
+        val my = inputSystem.getMouseY()
+        val sw = ui.screenWidth
+        val sh = ui.screenHeight
+
+        val nearWorld = camera.unproject(
+            org.joml.Vector3f(mx, my, 0f), sw, sh
+        )
+        val farWorld = camera.unproject(
+            org.joml.Vector3f(mx, my, 1f), sw, sh
+        )
+        val dir = org.joml.Vector3f(farWorld).sub(nearWorld)
+        val planeZ = currentZ.toFloat()
+
+        if (abs(dir.z) < 1e-6f) return
+
+        val t = (planeZ - nearWorld.z) / dir.z
+        if (t < 0) return
+
+        val hitX = nearWorld.x + dir.x * t
+        val hitY = nearWorld.y + dir.y * t
+        cursorX = floor(hitX.toDouble()).toInt()
+        cursorY = floor(hitY.toDouble()).toInt()
+    }
+
+    /**
+     * Ray-cast from mouse position to a given Z plane. Returns (x, y) hit or null.
+     */
+    private fun raycastXYPlane(planeZ: Float): Pair<Float, Float>? {
+        val mx = inputSystem.getMouseX()
+        val my = inputSystem.getMouseY()
+        val sw = ui.screenWidth
+        val sh = ui.screenHeight
+
+        val nearWorld = camera.unproject(org.joml.Vector3f(mx, my, 0f), sw, sh)
+        val farWorld = camera.unproject(org.joml.Vector3f(mx, my, 1f), sw, sh)
+        val dir = org.joml.Vector3f(farWorld).sub(nearWorld)
+
+        if (abs(dir.z) < 1e-6f) return null
+        val t = (planeZ - nearWorld.z) / dir.z
+        if (t < 0) return null
+
+        return (nearWorld.x + dir.x * t) to (nearWorld.y + dir.y * t)
+    }
+
+    /**
+     * Find the light source closest to the mouse click in screen space.
+     * Returns the index or -1 if none is within pick radius.
+     */
+    private fun findLightAtMouse(w: World): Int {
+        val mx = inputSystem.getMouseX()
+        val my = inputSystem.getMouseY()
+        val sw = ui.screenWidth
+        val sh = ui.screenHeight
+        val pickRadius = 20f // pixels
+
+        var bestIdx = -1
+        var bestDist = pickRadius
+
+        for ((idx, ls) in w.lightSources.withIndex()) {
+            val screenPos = camera.project(org.joml.Vector3f(ls.x, ls.y, ls.z), sw, sh)
+            val dx = screenPos.x - mx
+            val dy = screenPos.y - my
+            val dist = sqrt(dx * dx + dy * dy)
+            if (dist < bestDist) {
+                bestDist = dist
+                bestIdx = idx
+            }
         }
-        val len = 0.4f
-        val headLen = 0.15f
-        val tipX = x + dx * len
-        val tipY = y + dy * len
-        // Arrow shaft
-        shapeRenderer.line(x - dx * len, y - dy * len, z, tipX, tipY, z)
-        // Arrowhead wings (perpendicular)
-        shapeRenderer.line(tipX, tipY, z, tipX - dx * headLen + dy * headLen, tipY - dy * headLen - dx * headLen, z)
-        shapeRenderer.line(tipX, tipY, z, tipX - dx * headLen - dy * headLen, tipY - dy * headLen + dx * headLen, z)
+        return bestIdx
     }
 
-    /** Draw an arrow pointing up along Z axis at the given edge position. */
-    private fun drawLadderUpArrow(x: Float, y: Float, z: Float) {
-        val len = 0.4f
-        val headLen = 0.15f
-        val tipZ = z + len
-        // Shaft pointing up
-        shapeRenderer.line(x, y, z - len, x, y, tipZ)
-        // Arrowhead wings in X and Y
-        shapeRenderer.line(x, y, tipZ, x + headLen, y, tipZ - headLen)
-        shapeRenderer.line(x, y, tipZ, x - headLen, y, tipZ - headLen)
+    // ---- Rendering ----
+
+    /** Project a 3D world point to screen pixels. */
+    private fun proj(x: Float, y: Float, z: Float): org.joml.Vector3f {
+        return camera.project(org.joml.Vector3f(x, y, z), ui.screenWidth, ui.screenHeight)
     }
 
-    private fun drawEdge(x: Float, y: Float, z: Float, slot: TileSlot) {
-        val s = 0.5f
-        when (slot) {
-            TileSlot.WALL_NORTH -> {
-                shapeRenderer.line(x - s, y + s, z - s, x + s, y + s, z - s)
-                shapeRenderer.line(x - s, y + s, z + s, x + s, y + s, z + s)
-                shapeRenderer.line(x - s, y + s, z - s, x - s, y + s, z + s)
-                shapeRenderer.line(x + s, y + s, z - s, x + s, y + s, z + s)
-            }
-            TileSlot.WALL_SOUTH -> {
-                shapeRenderer.line(x - s, y - s, z - s, x + s, y - s, z - s)
-                shapeRenderer.line(x - s, y - s, z + s, x + s, y - s, z + s)
-                shapeRenderer.line(x - s, y - s, z - s, x - s, y - s, z + s)
-                shapeRenderer.line(x + s, y - s, z - s, x + s, y - s, z + s)
-            }
-            TileSlot.WALL_EAST -> {
-                shapeRenderer.line(x + s, y - s, z - s, x + s, y + s, z - s)
-                shapeRenderer.line(x + s, y - s, z + s, x + s, y + s, z + s)
-                shapeRenderer.line(x + s, y - s, z - s, x + s, y - s, z + s)
-                shapeRenderer.line(x + s, y + s, z - s, x + s, y + s, z + s)
-            }
-            TileSlot.WALL_WEST -> {
-                shapeRenderer.line(x - s, y - s, z - s, x - s, y + s, z - s)
-                shapeRenderer.line(x - s, y - s, z + s, x - s, y + s, z + s)
-                shapeRenderer.line(x - s, y - s, z - s, x - s, y - s, z + s)
-                shapeRenderer.line(x - s, y + s, z - s, x - s, y + s, z + s)
-            }
-            else -> {}
-        }
-    }
+    /**
+     * Render the world as actual 3D cubes.
+     */
+    private fun renderGrid(w: World) {
+        val sw = ui.screenWidth
+        val sh = ui.screenHeight
 
-    // ── Hover detection ──────────────────────────────────────────────────
-
-    private fun updateHover() {
-        val scaleX = Gdx.graphics.backBufferWidth.toFloat() / Gdx.graphics.width
-        val scaleY = Gdx.graphics.backBufferHeight.toFloat() / Gdx.graphics.height
-        val mouseXPx = Gdx.input.x * scaleX
-        val mouseYPx = (Gdx.graphics.height - Gdx.input.y) * scaleY
-
-        if (lastViewW <= 0 || lastViewH <= 0 ||
-            mouseXPx < lastViewX || mouseXPx > lastViewX + lastViewW ||
-            mouseYPx < lastViewY || mouseYPx > lastViewY + lastViewH
-        ) {
-            hoveredX = -1; hoveredEdge = null; return
-        }
-
-        val ray = camera.getPickRay(
-            Gdx.input.x.toFloat(), Gdx.input.y.toFloat(),
-            lastViewX / scaleX, lastViewY / scaleY,
-            lastViewW / scaleX, lastViewH / scaleY
+        data class Face(
+            val c0: Triple<Float,Float,Float>,
+            val c1: Triple<Float,Float,Float>,
+            val c2: Triple<Float,Float,Float>,
+            val c3: Triple<Float,Float,Float>,
+            val nx: Float, val ny: Float, val nz: Float,
+            val shade: Float
         )
 
-        var bestT = Float.MAX_VALUE
-        var bestEmptyT = Float.MAX_VALUE
-        var emptyX = -1; var emptyY = -1; var emptyZ = -1
-        hoveredX = -1; hoveredEdge = null
+        val faces = arrayOf(
+            Face(Triple(0f,0f,1f), Triple(1f,0f,1f), Triple(1f,1f,1f), Triple(0f,1f,1f), 0f,0f,1f, 1.0f),
+            Face(Triple(0f,1f,0f), Triple(1f,1f,0f), Triple(1f,0f,0f), Triple(0f,0f,0f), 0f,0f,-1f, 0.35f),
+            Face(Triple(0f,1f,0f), Triple(0f,1f,1f), Triple(1f,1f,1f), Triple(1f,1f,0f), 0f,1f,0f, 0.7f),
+            Face(Triple(1f,0f,0f), Triple(1f,0f,1f), Triple(0f,0f,1f), Triple(0f,0f,0f), 0f,-1f,0f, 0.55f),
+            Face(Triple(1f,0f,0f), Triple(1f,1f,0f), Triple(1f,1f,1f), Triple(1f,0f,1f), 1f,0f,0f, 0.6f),
+            Face(Triple(0f,1f,0f), Triple(0f,0f,0f), Triple(0f,0f,1f), Triple(0f,1f,1f), -1f,0f,0f, 0.5f)
+        )
 
-        val editZ = maxRenderZ.coerceAtMost(world.depth - 1)
+        val floorR = 0.25f; val floorG = 0.30f; val floorB = 0.40f
+        val wallR  = 0.55f; val wallG  = 0.42f; val wallB  = 0.30f
 
-        for (x in 0 until world.width) {
-            for (y in 0 until world.height) {
-                    val z = editZ
-                    val hs = 0.5f
-                    val minX = x - hs; val maxX = x + hs
-                    val minY = y - hs; val maxY = y + hs
-                    val minZ = z - hs; val maxZ = z + hs
-                    var tmin = Float.NEGATIVE_INFINITY; var tmax = Float.POSITIVE_INFINITY
+        val camPos = camera.position
 
-                    if (Math.abs(ray.direction.x) > 0.00001f) {
-                        val t1 = (minX - ray.origin.x) / ray.direction.x; val t2 = (maxX - ray.origin.x) / ray.direction.x
-                        tmin = maxOf(tmin, minOf(t1, t2)); tmax = minOf(tmax, maxOf(t1, t2))
-                    } else if (ray.origin.x < minX || ray.origin.x > maxX) continue
-                    if (Math.abs(ray.direction.y) > 0.00001f) {
-                        val t1 = (minY - ray.origin.y) / ray.direction.y; val t2 = (maxY - ray.origin.y) / ray.direction.y
-                        tmin = maxOf(tmin, minOf(t1, t2)); tmax = minOf(tmax, maxOf(t1, t2))
-                    } else if (ray.origin.y < minY || ray.origin.y > maxY) continue
-                    if (Math.abs(ray.direction.z) > 0.00001f) {
-                        val t1 = (minZ - ray.origin.z) / ray.direction.z; val t2 = (maxZ - ray.origin.z) / ray.direction.z
-                        tmin = maxOf(tmin, minOf(t1, t2)); tmax = minOf(tmax, maxOf(t1, t2))
-                    } else if (ray.origin.z < minZ || ray.origin.z > maxZ) continue
-                    if (tmax < tmin || tmax < 0) continue
-
-                    val node = world.getNode(x, y, z)
-                    val hasContent = node != null && (node.tiles.isNotEmpty() || node.items.isNotEmpty() || node.tags.isNotEmpty() || node.manualDoorSlots.isNotEmpty() || node.socketSlots.isNotEmpty())
-                    if (hasContent) {
-                        if (tmin < bestT) {
-                            bestT = tmin; hoveredX = x; hoveredY = y; hoveredZ = z
-                        }
-                    } else {
-                        if (tmin < bestEmptyT) {
-                            bestEmptyT = tmin; emptyX = x; emptyY = y; emptyZ = z
+        // Upload lighting data to GPU when light preview is enabled
+        if (lightPreviewEnabled && w.lightSources.isNotEmpty()) {
+            val gridW = w.width; val gridH = w.height; val gridD = w.depth
+            val occupancy = IntArray(gridW * gridH * gridD)
+            for (z in 0 until gridD) {
+                for (y in 0 until gridH) {
+                    for (x in 0 until gridW) {
+                        val node = w.getNode(x, y, z)
+                        if (node != null && (
+                                    node.hasTile(TileSlot.WALL_NORTH) || node.hasTile(TileSlot.WALL_SOUTH) ||
+                                    node.hasTile(TileSlot.WALL_EAST) || node.hasTile(TileSlot.WALL_WEST))) {
+                            occupancy[z * gridW * gridH + y * gridW + x] = 1
                         }
                     }
+                }
             }
-        }
-        if (hoveredX == -1 && emptyX != -1) {
-            hoveredX = emptyX; hoveredY = emptyY; hoveredZ = emptyZ
+            val lights = w.lightSources.map { ls ->
+                SimpleUI.LightData(ls.x, ls.y, ls.z, ls.intensity, ls.colorR(), ls.colorG(), ls.colorB(), ls.radius)
+            }
+            ui.updateLighting(lights, occupancy, gridW, gridH, gridD)
+        } else {
+            ui.updateLighting(emptyList(), IntArray(1), 1, 1, 1)
         }
 
-        // Determine which edge (face) of the hovered node the ray hits
-        if (hoveredX != -1) {
-            hoveredEdge = detectHoveredEdge(ray, hoveredX.toFloat(), hoveredY.toFloat(), hoveredZ.toFloat())
+        // GPU rendering path: no sorting needed, depth buffer handles ordering
+        if (gpuRenderingEnabled) {
+            // Upload VP matrix to GPU
+            val vpFloats = FloatArray(16)
+            camera.viewProjection.get(vpFloats)
+            ui.setViewProjection(vpFloats)
+
+            for (z in 0..currentZ) {
+                for (x in 0 until w.width) {
+                    for (y in 0 until w.height) {
+                        val node = w.getNode(x, y, z) ?: continue
+                        val hasFloor = node.hasTile(TileSlot.FLOOR)
+                        val hasWallN = node.hasTile(TileSlot.WALL_NORTH)
+                        val hasWallS = node.hasTile(TileSlot.WALL_SOUTH)
+                        val hasWallE = node.hasTile(TileSlot.WALL_EAST)
+                        val hasWallW = node.hasTile(TileSlot.WALL_WEST)
+                        val hasAnyContent = hasFloor || hasWallN || hasWallS || hasWallE || hasWallW
+                        if (!hasAnyContent) continue
+
+                        val tbx = x.toFloat()
+                        val tby = y.toFloat()
+                        val tbz = z.toFloat()
+                        val isActiveLayer = z == currentZ
+                        val layerDim = if (isActiveLayer) 1f else 0.45f
+
+                        val baseR: Float; val baseG: Float; val baseB: Float
+                        if (hasWallN || hasWallS || hasWallE || hasWallW) {
+                            baseR = wallR * layerDim; baseG = wallG * layerDim; baseB = wallB * layerDim
+                        } else {
+                            baseR = floorR * layerDim; baseG = floorG * layerDim; baseB = floorB * layerDim
+                        }
+
+                        for (face in faces) {
+                            val s = face.shade
+                            // GPU pipeline uses CCW winding + back-face culling — no CPU cull needed
+                            ui.drawGpuQuad(
+                                tbx + face.c0.first, tby + face.c0.second, tbz + face.c0.third,
+                                tbx + face.c1.first, tby + face.c1.second, tbz + face.c1.third,
+                                tbx + face.c2.first, tby + face.c2.second, tbz + face.c2.third,
+                                tbx + face.c3.first, tby + face.c3.second, tbz + face.c3.third,
+                                face.nx, face.ny, face.nz,
+                                baseR * s, baseG * s, baseB * s, 1f
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Draw cursor highlight (still CPU-projected wireframe on top)
+            if (cursorX in 0 until w.width && cursorY in 0 until w.height) {
+                debugRenderer.drawWireframeCube(
+                    cursorX.toFloat(), cursorY.toFloat(), currentZ.toFloat(), 1f, camera,
+                    1f, 1f, 0f, 0.9f, 2f
+                )
+            }
+
+            // Draw light sources
+            for ((idx, ls) in w.lightSources.withIndex()) {
+                val lr = ls.colorR(); val lg = ls.colorG(); val lb = ls.colorB()
+                val alpha = if (idx == selectedLightIndex) 0.6f else 0.4f
+                debugRenderer.drawFilledSphere(ls.x, ls.y, ls.z, 0.15f, camera, lr, lg, lb, alpha)
+                debugRenderer.drawWireframeSphere(ls.x, ls.y, ls.z, 0.15f, camera, lr, lg, lb, 0.8f, 12, 1.5f)
+                if (lightPreviewEnabled) {
+                    debugRenderer.drawWireframeSphere(ls.x, ls.y, ls.z, ls.radius, camera,
+                        lr * 0.5f, lg * 0.5f, lb * 0.5f, 0.15f, 24, 1f)
+                }
+            }
+
+            // HUD
+            val hudX = editorModesWidth + 6f
+            val hudY = menuBar.barHeight + 4f
+            val viewportRight = sw - toolsPaletteWidth - 10f
+            ui.drawText("Tool: ${currentTool.name}  Layer: $currentZ  [GPU]", hudX, hudY, 0.7f, 0.7f, 0.8f, 1f, 1f)
+            val helpStr = "A/D: Rotate  W/S: Pitch  Q/E: Zoom  Shift: Pan  Z/X: Layer  Ctrl+S: Save"
+            ui.drawText(helpStr, hudX, sh - 30f, 0.5f, 0.55f, 0.65f, 0.8f, 1f)
+            val fileLabel = if (currentFilePath != null) File(currentFilePath!!).name else "[unsaved]"
+            val azStr = "Az: ${azimuth.toInt()}  El: ${elevation.toInt()}  Dist: ${distance.toInt()}"
+            val coordStr = "$fileLabel  Cursor: $cursorX, $cursorY  ${w.width}x${w.height}x${w.depth}  $azStr"
+            ui.drawText(coordStr, viewportRight - ui.textWidth(coordStr), hudY, 0.6f, 0.6f, 0.7f, 0.8f, 1f)
+            return
         }
+
+        // CPU rendering path (painter's algorithm)
+
+        data class TileEntry(val x: Int, val y: Int, val z: Int, val dist: Float)
+        val tiles = ArrayList<TileEntry>(w.width * w.height * (currentZ + 1))
+        for (z in 0..currentZ) {
+            val bz = z.toFloat()
+            for (x in 0 until w.width) {
+                for (y in 0 until w.height) {
+                    val cx = x + 0.5f
+                    val cy = y + 0.5f
+                    val cz = bz + 0.5f
+                    val dx = cx - camPos.x
+                    val dy = cy - camPos.y
+                    val dz = cz - camPos.z
+                    tiles.add(TileEntry(x, y, z, dx * dx + dy * dy + dz * dz))
+                }
+            }
+        }
+        tiles.sortByDescending { it.dist }
+
+        for (tile in tiles) {
+            val node = w.getNode(tile.x, tile.y, tile.z) ?: continue
+            val hasFloor = node.hasTile(TileSlot.FLOOR)
+            val hasWallN = node.hasTile(TileSlot.WALL_NORTH)
+            val hasWallS = node.hasTile(TileSlot.WALL_SOUTH)
+            val hasWallE = node.hasTile(TileSlot.WALL_EAST)
+            val hasWallW = node.hasTile(TileSlot.WALL_WEST)
+            val hasAnyContent = hasFloor || hasWallN || hasWallS || hasWallE || hasWallW
+
+            val tbx = tile.x.toFloat()
+            val tby = tile.y.toFloat()
+            val tbz = tile.z.toFloat()
+            val isActiveLayer = tile.z == currentZ
+            val layerDim = if (isActiveLayer) 1f else 0.45f
+
+            if (!hasAnyContent) {
+                if (showWireframes) {
+                    val wireAlpha = if (isActiveLayer) 0.25f else 0.12f
+                    debugRenderer.drawWireframeCube(tbx, tby, tbz, 1f, camera,
+                        0.2f * layerDim, 0.25f * layerDim, 0.3f * layerDim, wireAlpha)
+                }
+                continue
+            }
+
+            val viewDirX = camPos.x - (tbx + 0.5f)
+            val viewDirY = camPos.y - (tby + 0.5f)
+            val viewDirZ = camPos.z - (tbz + 0.5f)
+
+            val baseR: Float; val baseG: Float; val baseB: Float
+            if (hasWallN || hasWallS || hasWallE || hasWallW) {
+                baseR = wallR * layerDim; baseG = wallG * layerDim; baseB = wallB * layerDim
+            } else {
+                baseR = floorR * layerDim; baseG = floorG * layerDim; baseB = floorB * layerDim
+            }
+
+            // Draw solid faces with back-face culling
+            for (face in faces) {
+                val dot = face.nx * viewDirX + face.ny * viewDirY + face.nz * viewDirZ
+                if (dot < 0f) continue
+
+                val p0 = proj(tbx + face.c0.first, tby + face.c0.second, tbz + face.c0.third)
+                val p1 = proj(tbx + face.c1.first, tby + face.c1.second, tbz + face.c1.third)
+                val p2 = proj(tbx + face.c2.first, tby + face.c2.second, tbz + face.c2.third)
+                val p3 = proj(tbx + face.c3.first, tby + face.c3.second, tbz + face.c3.third)
+
+                val s = face.shade
+
+                if (lightPreviewEnabled && w.lightSources.isNotEmpty()) {
+                    // Per-pixel lighting via GPU shader with shadow raymarching
+                    ui.drawLitQuad(
+                        p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y,
+                        tbx + face.c0.first, tby + face.c0.second, tbz + face.c0.third,
+                        tbx + face.c1.first, tby + face.c1.second, tbz + face.c1.third,
+                        tbx + face.c2.first, tby + face.c2.second, tbz + face.c2.third,
+                        tbx + face.c3.first, tby + face.c3.second, tbz + face.c3.third,
+                        face.nx, face.ny, face.nz,
+                        baseR * s, baseG * s, baseB * s, 1f
+                    )
+                } else {
+                    // Environment lighting: flat shading per face
+                    ui.drawQuad(
+                        p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y,
+                        baseR * s, baseG * s, baseB * s, 1f
+                    )
+                }
+            }
+
+            // Draw wireframe edges on top of faces
+            if (lightPreviewEnabled && w.lightSources.isNotEmpty()) {
+                debugRenderer.drawLitWireframeCube(
+                    tbx, tby, tbz, 1f, camera,
+                    0.15f * layerDim, 0.18f * layerDim, 0.22f * layerDim, 0.7f, 1.5f
+                )
+            } else {
+                debugRenderer.drawWireframeCube(
+                    tbx, tby, tbz, 1f, camera,
+                    0.15f * layerDim, 0.18f * layerDim, 0.22f * layerDim, 0.7f
+                )
+            }
+        }
+
+        // Draw cursor highlight
+        if (cursorX in 0 until w.width && cursorY in 0 until w.height) {
+            debugRenderer.drawWireframeCube(
+                cursorX.toFloat(), cursorY.toFloat(), currentZ.toFloat(), 1f, camera,
+                1f, 1f, 0f, 0.9f, 2f
+            )
+        }
+
+        // Draw light sources
+        for ((idx, ls) in w.lightSources.withIndex()) {
+            val lr = ls.colorR(); val lg = ls.colorG(); val lb = ls.colorB()
+            // Highlight selected light
+            val alpha = if (idx == selectedLightIndex) 0.6f else 0.4f
+            debugRenderer.drawFilledSphere(ls.x, ls.y, ls.z, 0.15f, camera, lr, lg, lb, alpha)
+            debugRenderer.drawWireframeSphere(ls.x, ls.y, ls.z, 0.15f, camera, lr, lg, lb, 0.8f, 12, 1.5f)
+            // Light radius indicator (only when light preview enabled)
+            if (lightPreviewEnabled) {
+                debugRenderer.drawWireframeSphere(ls.x, ls.y, ls.z, ls.radius, camera,
+                    lr * 0.5f, lg * 0.5f, lb * 0.5f, 0.15f, 24, 1f)
+            }
+        }
+
+        // HUD (in the viewport area, between editor modes and tools palette)
+        val hudX = editorModesWidth + 6f
+        val hudY = menuBar.barHeight + 4f
+        val viewportRight = sw - toolsPaletteWidth - 10f
+        ui.drawText("Tool: ${currentTool.name}  Layer: $currentZ", hudX, hudY, 0.7f, 0.7f, 0.8f, 1f, 1f)
+        val helpStr = "A/D: Rotate  W/S: Pitch  Q/E: Zoom  Shift: Pan  Z/X: Layer  Ctrl+S: Save"
+        ui.drawText(helpStr, hudX, sh - 30f, 0.5f, 0.55f, 0.65f, 0.8f, 1f)
+        val fileLabel = if (currentFilePath != null) File(currentFilePath!!).name else "[unsaved]"
+        val azStr = "Az: ${azimuth.toInt()}  El: ${elevation.toInt()}  Dist: ${distance.toInt()}"
+        val coordStr = "$fileLabel  Cursor: $cursorX, $cursorY  ${w.width}x${w.height}x${w.depth}  $azStr"
+        ui.drawText(coordStr, viewportRight - ui.textWidth(coordStr), hudY, 0.6f, 0.6f, 0.7f, 0.8f, 1f)
+    }
+
+
+
+    // ---- Editor Modes (left side) ----
+
+    private fun renderEditorModes() {
+        val barH = menuBar.barHeight
+        val sh = ui.screenHeight
+        val colW = editorModesWidth
+        val btnSize = 32f
+        val btnPad = 4f
+        val mx = inputSystem.getMouseX()
+        val my = inputSystem.getMouseY()
+
+        // Background
+        ui.drawRect(0f, barH, colW, sh - barH, 0.12f, 0.13f, 0.17f, 0.95f)
+        // Right border
+        ui.drawRect(colW - 1f, barH, 1f, sh - barH, 0.3f, 0.35f, 0.45f, 0.7f)
+
+        var by = barH + btnPad
+
+        // --- Normal / pointer mode (cursor-default-outline icon) ---
+        drawModeButton(btnPad, by, btnSize, selectedEditorMode == EditorMode.NORMAL, mx, my,
+            iconDrawer = { x, y, s -> drawCursorIcon(x, y, s) }
+        ) {
+            selectedEditorMode = EditorMode.NORMAL
+        }
+        by += btnSize + btnPad
+
+        // --- Show/hide grid wireframes (view-grid-outline icon) ---
+        drawModeButton(btnPad, by, btnSize, selectedEditorMode == EditorMode.GRID_TOGGLE, mx, my,
+            iconDrawer = { x, y, s -> drawGridIcon(x, y, s, showWireframes) }
+        ) {
+            selectedEditorMode = EditorMode.GRID_TOGGLE
+            showWireframes = !showWireframes
+        }
+        by += btnSize + btnPad
+
+        // --- Lights mode (lightbulb-on-outline icon) ---
+        drawModeButton(btnPad, by, btnSize, selectedEditorMode == EditorMode.LIGHTS, mx, my,
+            iconDrawer = { x, y, s -> drawLightbulbIcon(x, y, s, selectedEditorMode == EditorMode.LIGHTS) }
+        ) {
+            selectedEditorMode = if (selectedEditorMode == EditorMode.LIGHTS) EditorMode.NORMAL else EditorMode.LIGHTS
+        }
+        by += btnSize + btnPad
+
+        // --- GPU render mode (cube icon with "3D" label) ---
+        drawModeButton(btnPad, by, btnSize, selectedEditorMode == EditorMode.GPU_RENDER, mx, my,
+            iconDrawer = { x, y, s -> drawGpuIcon(x, y, s) }
+        ) {
+            selectedEditorMode = if (selectedEditorMode == EditorMode.GPU_RENDER) EditorMode.NORMAL else EditorMode.GPU_RENDER
+        }
+        by += btnSize + btnPad
     }
 
     /**
-     * Given that the ray hits the AABB of the node at (nx,ny,nz),
-     * determine which face it enters — and map to a TileSlot.
+     * Draw a square toggle button in the editor modes column with a procedural icon.
      */
-    private fun detectHoveredEdge(ray: com.badlogic.gdx.math.collision.Ray, nx: Float, ny: Float, nz: Float): TileSlot? {
-        val s = 0.5f
-        // Compute entry t for each face
-        data class FaceHit(val slot: TileSlot, val t: Float)
-        val hits = mutableListOf<FaceHit>()
+    private inline fun drawModeButton(
+        x: Float, y: Float, size: Float,
+        active: Boolean,
+        mx: Float, my: Float,
+        iconDrawer: (Float, Float, Float) -> Unit,
+        onClick: () -> Unit
+    ) {
+        val hovered = mx >= x && mx < x + size && my >= y && my < y + size
 
-        // North face (y + 0.5)
-        if (Math.abs(ray.direction.y) > 0.00001f) {
-            val t = (ny + s - ray.origin.y) / ray.direction.y
-            if (t > 0) {
-                val hx = ray.origin.x + t * ray.direction.x
-                val hz = ray.origin.z + t * ray.direction.z
-                if (hx >= nx - s && hx <= nx + s && hz >= nz - s && hz <= nz + s) hits.add(FaceHit(TileSlot.WALL_NORTH, t))
-            }
-        }
-        // South face (y - 0.5)
-        if (Math.abs(ray.direction.y) > 0.00001f) {
-            val t = (ny - s - ray.origin.y) / ray.direction.y
-            if (t > 0) {
-                val hx = ray.origin.x + t * ray.direction.x
-                val hz = ray.origin.z + t * ray.direction.z
-                if (hx >= nx - s && hx <= nx + s && hz >= nz - s && hz <= nz + s) hits.add(FaceHit(TileSlot.WALL_SOUTH, t))
-            }
-        }
-        // East face (x + 0.5)
-        if (Math.abs(ray.direction.x) > 0.00001f) {
-            val t = (nx + s - ray.origin.x) / ray.direction.x
-            if (t > 0) {
-                val hy = ray.origin.y + t * ray.direction.y
-                val hz = ray.origin.z + t * ray.direction.z
-                if (hy >= ny - s && hy <= ny + s && hz >= nz - s && hz <= nz + s) hits.add(FaceHit(TileSlot.WALL_EAST, t))
-            }
-        }
-        // West face (x - 0.5)
-        if (Math.abs(ray.direction.x) > 0.00001f) {
-            val t = (nx - s - ray.origin.x) / ray.direction.x
-            if (t > 0) {
-                val hy = ray.origin.y + t * ray.direction.y
-                val hz = ray.origin.z + t * ray.direction.z
-                if (hy >= ny - s && hy <= ny + s && hz >= nz - s && hz <= nz + s) hits.add(FaceHit(TileSlot.WALL_WEST, t))
-            }
+        if (active) {
+            ui.drawRect(x, y, size, size, 0.3f, 0.45f, 0.7f, 0.9f)
+        } else if (hovered) {
+            ui.drawRect(x, y, size, size, 0.22f, 0.28f, 0.4f, 0.8f)
+        } else {
+            ui.drawRect(x, y, size, size, 0.16f, 0.18f, 0.24f, 0.85f)
         }
 
-        return hits.minByOrNull { it.t }?.slot
+        val bc = if (active) 0.6f else 0.3f
+        ui.drawRect(x, y, size, 1f, bc, bc + 0.1f, bc + 0.2f)
+        ui.drawRect(x, y + size - 1f, size, 1f, bc, bc + 0.1f, bc + 0.2f)
+        ui.drawRect(x, y, 1f, size, bc, bc + 0.1f, bc + 0.2f)
+        ui.drawRect(x + size - 1f, y, 1f, size, bc, bc + 0.1f, bc + 0.2f)
+
+        iconDrawer(x + 4f, y + 4f, size - 8f)
+
+        if (hovered && inputSystem.isMouseButtonJustPressed(0)) {
+            onClick()
+        }
     }
 
-    override fun resize(width: Int, height: Int) {
-        stage.viewport.update(width, height, true)
+    // ---- Procedural Icons ----
+
+    private fun drawCursorIcon(x: Float, y: Float, s: Float) {
+        val col = 0.85f
+        val ax = x + s * 0.15f; val ay = y + s * 0.1f
+        val bx = x + s * 0.15f; val by2 = y + s * 0.85f
+        val cx = x + s * 0.65f; val cy = y + s * 0.6f
+
+        ui.drawQuad(ax, ay, bx, by2, cx, cy, ax, ay, col, col, col + 0.1f, 0.9f)
+
+        val stemX = x + s * 0.35f
+        val stemY = y + s * 0.6f
+        debugRenderer.drawLine(stemX, stemY, x + s * 0.7f, y + s * 0.9f, col, col, col + 0.1f, 0.9f, 2f)
     }
 
-    override fun pause() {}
-    override fun resume() {}
-    override fun hide() {}
+    private fun drawGridIcon(x: Float, y: Float, s: Float, enabled: Boolean) {
+        val col = if (enabled) 0.85f else 0.45f
+        val a = if (enabled) 0.9f else 0.5f
+        val t = 1.5f
 
-    override fun dispose() {
-        modelBatch.dispose()
-        shapeRenderer.dispose()
-        assetLoader.dispose()
-        frameModel.dispose()
-        tagSphereModel.dispose()
-        tagFont.dispose()
-        tagSpriteBatch.dispose()
-        orientationGizmo.dispose()
-        VisUI.dispose()
+        debugRenderer.drawLine(x, y, x + s, y, col, col, col + 0.1f, a, t)
+        debugRenderer.drawLine(x, y + s, x + s, y + s, col, col, col + 0.1f, a, t)
+        debugRenderer.drawLine(x, y, x, y + s, col, col, col + 0.1f, a, t)
+        debugRenderer.drawLine(x + s, y, x + s, y + s, col, col, col + 0.1f, a, t)
+
+        val third = s / 3f
+        debugRenderer.drawLine(x, y + third, x + s, y + third, col, col, col + 0.1f, a, t)
+        debugRenderer.drawLine(x, y + third * 2, x + s, y + third * 2, col, col, col + 0.1f, a, t)
+        debugRenderer.drawLine(x + third, y, x + third, y + s, col, col, col + 0.1f, a, t)
+        debugRenderer.drawLine(x + third * 2, y, x + third * 2, y + s, col, col, col + 0.1f, a, t)
+
+        if (!enabled) {
+            debugRenderer.drawLine(x, y, x + s, y + s, 0.8f, 0.3f, 0.3f, 0.7f, 2f)
+        }
+    }
+
+    private fun drawLightbulbIcon(x: Float, y: Float, s: Float, enabled: Boolean) {
+        val col = if (enabled) 1f else 0.45f
+        val a = if (enabled) 0.9f else 0.5f
+        val cx = x + s / 2f
+        val cy = y + s * 0.35f
+        val r = s * 0.28f
+
+        val segments = 10
+        val step = (Math.PI / segments).toFloat()
+        for (i in 0 until segments) {
+            val a0 = Math.PI.toFloat() + i * step
+            val a1 = Math.PI.toFloat() + (i + 1) * step
+            val x0 = cx + cos(a0) * r; val y0 = cy + sin(a0) * r
+            val x1 = cx + cos(a1) * r; val y1 = cy + sin(a1) * r
+            debugRenderer.drawLine(x0, y0, x1, y1, col, col * 0.85f, col * 0.3f, a, 1.5f)
+        }
+        debugRenderer.drawLine(cx - r * 0.6f, cy + r, cx - r * 0.6f, cy + r + s * 0.15f, col, col * 0.85f, col * 0.3f, a, 1.5f)
+        debugRenderer.drawLine(cx + r * 0.6f, cy + r, cx + r * 0.6f, cy + r + s * 0.15f, col, col * 0.85f, col * 0.3f, a, 1.5f)
+        val baseY = cy + r + s * 0.15f
+        debugRenderer.drawLine(cx - r * 0.6f, baseY, cx + r * 0.6f, baseY, col, col * 0.85f, col * 0.3f, a, 1.5f)
+        debugRenderer.drawLine(cx - r * 0.4f, baseY + 3f, cx + r * 0.4f, baseY + 3f, col, col * 0.85f, col * 0.3f, a, 1.5f)
+
+        if (enabled) {
+            val rayLen = s * 0.12f
+            for (i in 0 until 5) {
+                val angle = (-Math.PI.toFloat() * 0.8f + i * Math.PI.toFloat() * 0.4f)
+                val rx = cx + cos(angle) * (r + 2f); val ry = cy + sin(angle) * (r + 2f)
+                val rx2 = cx + cos(angle) * (r + 2f + rayLen); val ry2 = cy + sin(angle) * (r + 2f + rayLen)
+                debugRenderer.drawLine(rx, ry, rx2, ry2, col, col * 0.9f, col * 0.4f, a * 0.7f, 1f)
+            }
+        }
+    }
+
+    /** Draw a simple "3D" cube icon for GPU render mode. */
+    private fun drawGpuIcon(x: Float, y: Float, s: Float) {
+        val col = if (gpuRenderingEnabled) 0.9f else 0.5f
+        val a = if (gpuRenderingEnabled) 0.9f else 0.5f
+        // Draw a small 3D cube outline
+        val cx = x + s * 0.5f
+        val cy = y + s * 0.5f
+        val hs = s * 0.3f
+        val ox = hs * 0.4f; val oy = hs * 0.3f
+        // Front face
+        debugRenderer.drawLine(cx - hs, cy - hs, cx + hs, cy - hs, col, col * 0.7f, col * 0.3f, a, 1.5f)
+        debugRenderer.drawLine(cx + hs, cy - hs, cx + hs, cy + hs, col, col * 0.7f, col * 0.3f, a, 1.5f)
+        debugRenderer.drawLine(cx + hs, cy + hs, cx - hs, cy + hs, col, col * 0.7f, col * 0.3f, a, 1.5f)
+        debugRenderer.drawLine(cx - hs, cy + hs, cx - hs, cy - hs, col, col * 0.7f, col * 0.3f, a, 1.5f)
+        // Back face (offset)
+        debugRenderer.drawLine(cx - hs + ox, cy - hs - oy, cx + hs + ox, cy - hs - oy, col * 0.6f, col * 0.5f, col * 0.2f, a * 0.7f, 1f)
+        debugRenderer.drawLine(cx + hs + ox, cy - hs - oy, cx + hs + ox, cy + hs - oy, col * 0.6f, col * 0.5f, col * 0.2f, a * 0.7f, 1f)
+        // Connecting edges
+        debugRenderer.drawLine(cx + hs, cy - hs, cx + hs + ox, cy - hs - oy, col * 0.6f, col * 0.5f, col * 0.2f, a * 0.7f, 1f)
+        debugRenderer.drawLine(cx + hs, cy + hs, cx + hs + ox, cy + hs - oy, col * 0.6f, col * 0.5f, col * 0.2f, a * 0.7f, 1f)
+        debugRenderer.drawLine(cx - hs, cy - hs, cx - hs + ox, cy - hs - oy, col * 0.6f, col * 0.5f, col * 0.2f, a * 0.7f, 1f)
+    }
+
+    // ---- Tools Palette (right side) ----
+
+    private fun renderToolsPalette(w: World) {
+        val barH = menuBar.barHeight
+        val sw = ui.screenWidth
+        val sh = ui.screenHeight
+        val palX = sw - toolsPaletteWidth
+
+        // Background
+        ui.drawRect(palX, barH, toolsPaletteWidth, sh - barH, 0.12f, 0.13f, 0.17f, 0.95f)
+        // Left border
+        ui.drawRect(palX, barH, 1f, sh - barH, 0.3f, 0.35f, 0.45f, 0.7f)
+
+        // Draggable handle
+        val handleX = palX - toolsPaletteHandleWidth
+        val overHandle = inputSystem.getMouseX() >= handleX && inputSystem.getMouseX() < palX && inputSystem.getMouseY() > barH
+        val handleColor = if (draggingPaletteHandle || overHandle) 0.5f else 0.25f
+        ui.drawRect(handleX, barH, toolsPaletteHandleWidth, sh - barH, handleColor, handleColor + 0.05f, handleColor + 0.15f, 0.8f)
+
+        // Tools palette header
+        ui.drawText("TOOLS PALETTE", palX + 8f, barH + 8f, 0.7f, 0.75f, 0.85f, 1f, 1.3f)
+
+        val btnW = toolsPaletteWidth - 16f
+        val btnH = 24f
+        val mx = inputSystem.getMouseX()
+        val my = inputSystem.getMouseY()
+
+        // --- Tab bar ---
+        var tabY = barH + 32f
+        val tabW = (toolsPaletteWidth - 16f) / 2f
+        val tabH = 24f
+
+        // Structures tab
+        val structActive = selectedPaletteTab == PaletteTab.STRUCTURES
+        val structHovered = mx >= palX + 8f && mx < palX + 8f + tabW && my >= tabY && my < tabY + tabH
+        if (structActive) {
+            ui.drawRect(palX + 8f, tabY, tabW, tabH, 0.25f, 0.35f, 0.55f, 0.9f)
+        } else if (structHovered) {
+            ui.drawRect(palX + 8f, tabY, tabW, tabH, 0.2f, 0.26f, 0.38f, 0.7f)
+        } else {
+            ui.drawRect(palX + 8f, tabY, tabW, tabH, 0.15f, 0.17f, 0.22f, 0.6f)
+        }
+        ui.drawText("Structures", palX + 12f, tabY + 5f, 0.82f, 0.82f, 0.9f, 1f, 1f)
+        if (structHovered && inputSystem.isMouseButtonJustPressed(0)) {
+            selectedPaletteTab = PaletteTab.STRUCTURES
+            currentTool = EditorTool.FLOOR
+        }
+
+        // Lights tab
+        val lightsActive = selectedPaletteTab == PaletteTab.LIGHTS
+        val lightsHovered = mx >= palX + 8f + tabW && mx < palX + 8f + tabW * 2f && my >= tabY && my < tabY + tabH
+        if (lightsActive) {
+            ui.drawRect(palX + 8f + tabW, tabY, tabW, tabH, 0.25f, 0.35f, 0.55f, 0.9f)
+        } else if (lightsHovered) {
+            ui.drawRect(palX + 8f + tabW, tabY, tabW, tabH, 0.2f, 0.26f, 0.38f, 0.7f)
+        } else {
+            ui.drawRect(palX + 8f + tabW, tabY, tabW, tabH, 0.15f, 0.17f, 0.22f, 0.6f)
+        }
+        ui.drawText("Lights", palX + 12f + tabW, tabY + 5f, 0.82f, 0.82f, 0.9f, 1f, 1f)
+        if (lightsHovered && inputSystem.isMouseButtonJustPressed(0)) {
+            selectedPaletteTab = PaletteTab.LIGHTS
+            currentTool = EditorTool.LIGHT
+        }
+
+        // Tab underline
+        ui.drawRect(palX + 8f, tabY + tabH, toolsPaletteWidth - 16f, 1f, 0.3f, 0.35f, 0.45f, 0.7f)
+
+        var by = tabY + tabH + 8f
+
+        when (selectedPaletteTab) {
+            PaletteTab.STRUCTURES -> {
+                // Structure tools (walls, floors, erase)
+                val structureTools = arrayOf(
+                    "Floor" to EditorTool.FLOOR,
+                    "Wall N" to EditorTool.WALL_N,
+                    "Wall S" to EditorTool.WALL_S,
+                    "Wall E" to EditorTool.WALL_E,
+                    "Wall W" to EditorTool.WALL_W,
+                    "Erase" to EditorTool.ERASE
+                )
+
+                for ((label, tool) in structureTools) {
+                    val selected = currentTool == tool
+                    val hovered = mx >= palX + 8f && mx < palX + 8f + btnW && my >= by && my < by + btnH
+
+                    if (selected) {
+                        ui.drawRect(palX + 8f, by, btnW, btnH, 0.3f, 0.42f, 0.65f, 0.9f)
+                    } else if (hovered) {
+                        ui.drawRect(palX + 8f, by, btnW, btnH, 0.2f, 0.26f, 0.38f, 0.7f)
+                    } else {
+                        ui.drawRect(palX + 8f, by, btnW, btnH, 0.15f, 0.17f, 0.22f, 0.6f)
+                    }
+
+                    ui.drawText(label, palX + 14f, by + 5f, 0.82f, 0.82f, 0.9f, 1f, 1.1f)
+
+                    if (hovered && inputSystem.isMouseButtonJustPressed(0)) {
+                        currentTool = tool
+                    }
+
+                    by += btnH + 4f
+                }
+            }
+
+            PaletteTab.LIGHTS -> {
+                // Light tool button
+                val lightSelected = currentTool == EditorTool.LIGHT
+                val lightHovered = mx >= palX + 8f && mx < palX + 8f + btnW && my >= by && my < by + btnH
+
+                if (lightSelected) {
+                    ui.drawRect(palX + 8f, by, btnW, btnH, 0.3f, 0.42f, 0.65f, 0.9f)
+                } else if (lightHovered) {
+                    ui.drawRect(palX + 8f, by, btnW, btnH, 0.2f, 0.26f, 0.38f, 0.7f)
+                } else {
+                    ui.drawRect(palX + 8f, by, btnW, btnH, 0.15f, 0.17f, 0.22f, 0.6f)
+                }
+                ui.drawText("Place Light", palX + 14f, by + 5f, 0.82f, 0.82f, 0.9f, 1f, 1.1f)
+                if (lightHovered && inputSystem.isMouseButtonJustPressed(0)) {
+                    currentTool = EditorTool.LIGHT
+                }
+                by += btnH + 12f
+
+                // --- Light property controls ---
+                ui.drawRect(palX + 8f, by, btnW, 1f, 0.3f, 0.35f, 0.45f, 0.5f)
+                by += 8f
+
+                // Determine the light source to edit: selected light or defaults
+                val editingLight = if (selectedLightIndex in 0 until w.lightSources.size) {
+                    w.lightSources[selectedLightIndex]
+                } else null
+
+                val displayRadius = editingLight?.radius ?: defaultLightRadius
+                val displayIntensity = editingLight?.intensity ?: defaultLightIntensity
+
+                // Light Radius controls
+                ui.drawText("Radius: ${"%.1f".format(displayRadius)}", palX + 14f, by, 0.7f, 0.75f, 0.85f, 1f, 1.1f)
+                by += 20f
+
+                val ctrlBtnW = 36f
+                val ctrlBtnH = 22f
+                val ctrlSpacing = 4f
+
+                // [-] radius button
+                val rMinusX = palX + 14f
+                val rMinusHovered = mx >= rMinusX && mx < rMinusX + ctrlBtnW && my >= by && my < by + ctrlBtnH
+                if (rMinusHovered) {
+                    ui.drawRect(rMinusX, by, ctrlBtnW, ctrlBtnH, 0.25f, 0.28f, 0.4f, 0.8f)
+                } else {
+                    ui.drawRect(rMinusX, by, ctrlBtnW, ctrlBtnH, 0.18f, 0.2f, 0.28f, 0.7f)
+                }
+                ui.drawText(" -", rMinusX + 8f, by + 4f, 0.9f, 0.9f, 0.95f, 1f, 1.1f)
+                if (rMinusHovered && inputSystem.isMouseButtonJustPressed(0)) {
+                    val newVal = (displayRadius - 0.5f).coerceAtLeast(0.5f)
+                    if (editingLight != null) editingLight.radius = newVal
+                    defaultLightRadius = newVal
+                }
+
+                // [+] radius button
+                val rPlusX = rMinusX + ctrlBtnW + ctrlSpacing
+                val rPlusHovered = mx >= rPlusX && mx < rPlusX + ctrlBtnW && my >= by && my < by + ctrlBtnH
+                if (rPlusHovered) {
+                    ui.drawRect(rPlusX, by, ctrlBtnW, ctrlBtnH, 0.25f, 0.28f, 0.4f, 0.8f)
+                } else {
+                    ui.drawRect(rPlusX, by, ctrlBtnW, ctrlBtnH, 0.18f, 0.2f, 0.28f, 0.7f)
+                }
+                ui.drawText(" +", rPlusX + 8f, by + 4f, 0.9f, 0.9f, 0.95f, 1f, 1.1f)
+                if (rPlusHovered && inputSystem.isMouseButtonJustPressed(0)) {
+                    val newVal = (displayRadius + 0.5f).coerceAtMost(50f)
+                    if (editingLight != null) editingLight.radius = newVal
+                    defaultLightRadius = newVal
+                }
+                by += ctrlBtnH + 12f
+
+                // Light Intensity controls
+                ui.drawText("Intensity: ${"%.1f".format(displayIntensity)}", palX + 14f, by, 0.7f, 0.75f, 0.85f, 1f, 1.1f)
+                by += 20f
+
+                // [-] intensity button
+                val iMinusX = palX + 14f
+                val iMinusHovered = mx >= iMinusX && mx < iMinusX + ctrlBtnW && my >= by && my < by + ctrlBtnH
+                if (iMinusHovered) {
+                    ui.drawRect(iMinusX, by, ctrlBtnW, ctrlBtnH, 0.25f, 0.28f, 0.4f, 0.8f)
+                } else {
+                    ui.drawRect(iMinusX, by, ctrlBtnW, ctrlBtnH, 0.18f, 0.2f, 0.28f, 0.7f)
+                }
+                ui.drawText(" -", iMinusX + 8f, by + 4f, 0.9f, 0.9f, 0.95f, 1f, 1.1f)
+                if (iMinusHovered && inputSystem.isMouseButtonJustPressed(0)) {
+                    val newVal = (displayIntensity - 0.5f).coerceAtLeast(0.5f)
+                    if (editingLight != null) editingLight.intensity = newVal
+                    defaultLightIntensity = newVal
+                }
+
+                // [+] intensity button
+                val iPlusX = iMinusX + ctrlBtnW + ctrlSpacing
+                val iPlusHovered = mx >= iPlusX && mx < iPlusX + ctrlBtnW && my >= by && my < by + ctrlBtnH
+                if (iPlusHovered) {
+                    ui.drawRect(iPlusX, by, ctrlBtnW, ctrlBtnH, 0.25f, 0.28f, 0.4f, 0.8f)
+                } else {
+                    ui.drawRect(iPlusX, by, ctrlBtnW, ctrlBtnH, 0.18f, 0.2f, 0.28f, 0.7f)
+                }
+                ui.drawText(" +", iPlusX + 8f, by + 4f, 0.9f, 0.9f, 0.95f, 1f, 1.1f)
+                if (iPlusHovered && inputSystem.isMouseButtonJustPressed(0)) {
+                    val newVal = (displayIntensity + 0.5f).coerceAtMost(50f)
+                    if (editingLight != null) editingLight.intensity = newVal
+                    defaultLightIntensity = newVal
+                }
+                by += ctrlBtnH + 12f
+
+                // Show selected light info
+                if (editingLight != null) {
+                    ui.drawText("Selected: Light #${selectedLightIndex + 1}", palX + 14f, by, 0.55f, 0.6f, 0.7f, 0.8f, 1f)
+                } else {
+                    ui.drawText("No light selected", palX + 14f, by, 0.45f, 0.5f, 0.6f, 0.6f, 1f)
+                }
+                by += 20f
+
+                // Light count
+                ui.drawText("Lights: ${w.lightSources.size}", palX + 14f, by, 0.55f, 0.6f, 0.7f, 0.8f, 1f)
+                by += 20f
+            }
+        }
+
+        // Layer info
+        by += 12f
+        ui.drawText("Layer: $currentZ / ${w.depth - 1}", palX + 8f, by, 0.6f, 0.65f, 0.75f, 1f, 1.1f)
+        by += 20f
+        ui.drawText("Z/X to change layer", palX + 8f, by, 0.45f, 0.5f, 0.6f, 0.7f, 1f)
+    }
+
+    // ---- Gimbal Orientation Cube ----
+
+    private fun drawGimbalCube() {
+        val sw = ui.screenWidth
+        val cubeSize = 40f
+        val margin = 20f
+        val cx = sw - toolsPaletteWidth - margin - cubeSize
+        val cy = margin + cubeSize
+
+        val azRad = Math.toRadians(azimuth.toDouble())
+        val elRad = Math.toRadians(elevation.toDouble())
+        val cosA = cos(azRad).toFloat()
+        val sinA = sin(azRad).toFloat()
+        val cosE = cos(elRad).toFloat()
+        val sinE = sin(elRad).toFloat()
+
+        // Project a unit-cube vertex into the small widget space.
+        // We use an isometric-style projection matching the camera angles.
+        fun proj(lx: Float, ly: Float, lz: Float): Pair<Float, Float> {
+            // Rotate around Z by -azimuth, then tilt by elevation
+            val rx = lx * cosA + ly * sinA
+            val ry = -lx * sinA + ly * cosA
+            val rz = lz
+
+            // Pitch (elevation): rotate around the new X axis
+            val fz = ry * sinE + rz * cosE
+
+            val screenX = cx + rx * cubeSize
+            val screenY = cy - fz * cubeSize  // Y-up on screen → subtract
+            return screenX to screenY
+        }
+
+        // 8 cube vertices in local space (±0.5 on each axis)
+        val v = arrayOf(
+            Triple(-0.5f, -0.5f, -0.5f), Triple(0.5f, -0.5f, -0.5f),
+            Triple(0.5f,  0.5f, -0.5f),  Triple(-0.5f,  0.5f, -0.5f),
+            Triple(-0.5f, -0.5f,  0.5f), Triple(0.5f, -0.5f,  0.5f),
+            Triple(0.5f,  0.5f,  0.5f),  Triple(-0.5f,  0.5f,  0.5f)
+        )
+
+        // 12 edges
+        val edges = arrayOf(
+            0 to 1, 1 to 2, 2 to 3, 3 to 0,
+            4 to 5, 5 to 6, 6 to 7, 7 to 4,
+            0 to 4, 1 to 5, 2 to 6, 3 to 7
+        )
+
+        // Draw edges as thin rectangles
+        for ((a, b) in edges) {
+            val (x1, y1) = proj(v[a].first, v[a].second, v[a].third)
+            val (x2, y2) = proj(v[b].first, v[b].second, v[b].third)
+            drawLine(x1, y1, x2, y2, 0.4f, 0.45f, 0.6f, 0.6f)
+        }
+
+        // Colour the three edges emanating from the (-0.5, -0.5, -0.5) corner
+        // as axis indicators: X=red, Y=green, Z=blue.
+        // Vertex 0 = (-0.5,-0.5,-0.5)
+        // Edge 0→1 = X axis, Edge 0→3 = Y axis, Edge 0→4 = Z axis
+        val (ox, oy) = proj(v[0].first, v[0].second, v[0].third)
+        val (xxEnd, xyEnd) = proj(v[1].first, v[1].second, v[1].third) // +X
+        val (yxEnd, yyEnd) = proj(v[3].first, v[3].second, v[3].third) // +Y
+        val (zxEnd, zyEnd) = proj(v[4].first, v[4].second, v[4].third) // +Z
+
+        drawLine(ox, oy, xxEnd, xyEnd, 1f, 0.3f, 0.3f, 1f)
+        drawLine(ox, oy, yxEnd, yyEnd, 0.3f, 1f, 0.3f, 1f)
+        drawLine(ox, oy, zxEnd, zyEnd, 0.3f, 0.5f, 1f, 1f)
+
+        // Axis labels at the ends of the coloured edges
+        ui.drawText("X", xxEnd - 3f, xyEnd - 6f, 1f, 0.3f, 0.3f, 1f, 0.8f)
+        ui.drawText("Y", yxEnd - 3f, yyEnd - 6f, 0.3f, 1f, 0.3f, 1f, 0.8f)
+        ui.drawText("Z", zxEnd - 3f, zyEnd - 6f, 0.3f, 0.5f, 1f, 1f, 0.8f)
+    }
+
+    /**
+     * Draw a line between two screen-space points as a thin rotated rectangle.
+     */
+    private fun drawLine(x1: Float, y1: Float, x2: Float, y2: Float,
+                         r: Float, g: Float, b: Float, a: Float, thickness: Float = 2f) {
+        debugRenderer.drawLine(x1, y1, x2, y2, r, g, b, a, thickness)
+    }
+
+    fun resize(width: Int, height: Int) {
+        camera.resize(width, height)
+    }
+
+    fun dispose() {
+        world = null
     }
 }

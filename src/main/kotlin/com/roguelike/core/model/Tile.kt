@@ -5,6 +5,7 @@ package com.roguelike.core.model
  */
 enum class TileSlot {
     FLOOR,
+    CEILING,
     WALL_NORTH,
     WALL_SOUTH,
     WALL_EAST,

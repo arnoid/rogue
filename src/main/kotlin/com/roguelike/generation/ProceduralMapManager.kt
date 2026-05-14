@@ -1,6 +1,6 @@
 package com.roguelike.generation
 
-import com.badlogic.gdx.Gdx
+
 import com.roguelike.core.model.Tile
 import com.roguelike.core.model.World
 import com.roguelike.core.model.WorldNode
@@ -48,7 +48,7 @@ class ProceduralMapManager(
     fun loadTemplates(directory: String) {
         val dir = File(directory)
         if (!dir.exists() || !dir.isDirectory) {
-            Gdx.app?.log("ProceduralMapManager", "Template directory not found: $directory")
+            println("[ProceduralMapManager] " + "Template directory not found: $directory")
             return
         }
 
@@ -62,14 +62,14 @@ class ProceduralMapManager(
                 val template = SubmapTemplate.fromWorld(file.nameWithoutExtension, world)
                 if (template.sockets.isNotEmpty()) {
                     loadedTemplates.add(template)
-                    Gdx.app?.log("ProceduralMapManager", "Loaded template: ${file.name} with ${template.sockets.size} sockets")
+                    println("[ProceduralMapManager] " + "Loaded template: ${file.name} with ${template.sockets.size} sockets")
                 } else {
-                    Gdx.app?.log("ProceduralMapManager", "Skipped template with no sockets: ${file.name}")
+                    println("[ProceduralMapManager] " + "Skipped template with no sockets: ${file.name}")
                 }
             }
         }
 
-        Gdx.app?.log("ProceduralMapManager", "Loaded ${loadedTemplates.size} templates total")
+        println("[ProceduralMapManager] " + "Loaded ${loadedTemplates.size} templates total")
     }
 
     /**
@@ -82,7 +82,7 @@ class ProceduralMapManager(
     fun initialize(initialPath: String): World? {
         val initialWorld = WorldIO.loadWorld(initialPath, worldFactory, tileFactory)
         if (initialWorld == null) {
-            Gdx.app?.error("ProceduralMapManager", "Failed to load initial submap: $initialPath")
+            System.err.println("[ProceduralMapManager] " + "Failed to load initial submap: $initialPath")
             return null
         }
 
@@ -95,7 +95,7 @@ class ProceduralMapManager(
             }
         }
         if (!hasSpawn) {
-            Gdx.app?.error("ProceduralMapManager", "Initial submap has no player_spawn tag!")
+            System.err.println("[ProceduralMapManager] " + "Initial submap has no player_spawn tag!")
             return null
         }
 
@@ -126,7 +126,7 @@ class ProceduralMapManager(
                 while (isActive) {
                     val candidate = gen.debugChannel.receive()
                     val decision = CompletableDeferred<DebugDecision>()
-                    Gdx.app.postRunnable {
+                    /* postRunnable */ run {
                         debugCallback?.showCandidate(
                             candidate,
                             onConfirm = { decision.complete(DebugDecision.CONFIRM) },
@@ -153,14 +153,14 @@ class ProceduralMapManager(
 
         neighborsGenerated.add(initialOffset)
 
-        Gdx.app?.log("ProceduralMapManager", "Initial submap at $initialOffset, size=${initialTemplate.footprint}, sockets=${placed.sockets.size}, world=${world.width}x${world.height}x${world.depth}")
+        println("[ProceduralMapManager] " + "Initial submap at $initialOffset, size=${initialTemplate.footprint}, sockets=${placed.sockets.size}, world=${world.width}x${world.height}x${world.depth}")
 
         // Immediately generate adjacent submaps for seamless player experience
         generationScope.launch {
-            Gdx.app?.log("ProceduralMapManager", "Starting neighbor generation for initial submap...")
+            println("[ProceduralMapManager] " + "Starting neighbor generation for initial submap...")
             generator!!.generateNeighbors(placed)
-            Gdx.app?.log("ProceduralMapManager", "Neighbor generation done. Total placed: ${generator!!.placedSubmaps.size}")
-            Gdx.app.postRunnable { stampNewSubmaps() }
+            println("[ProceduralMapManager] " + "Neighbor generation done. Total placed: ${generator!!.placedSubmaps.size}")
+            /* postRunnable */ run { stampNewSubmaps() }
         }
 
         return activeWorld
@@ -182,7 +182,7 @@ class ProceduralMapManager(
                 neighborsGenerated.add(currentSubmap.origin)
                 generationScope.launch {
                     gen.generateNeighbors(currentSubmap)
-                    Gdx.app.postRunnable { stampNewSubmaps() }
+                    /* postRunnable */ run { stampNewSubmaps() }
                 }
             }
         }
@@ -204,17 +204,17 @@ class ProceduralMapManager(
                 val needed = placed.origin + placed.template.footprint
                 world.ensureSize(needed.x, needed.y, needed.z)
 
-                Gdx.app?.log("ProceduralMapManager", "Stamping '${placed.template.name}' rot=${placed.template.rotation} at ${placed.origin}, world now ${world.width}x${world.height}x${world.depth}")
+                println("[ProceduralMapManager] " + "Stamping '${placed.template.name}' rot=${placed.template.rotation} at ${placed.origin}, world now ${world.width}x${world.height}x${world.depth}")
                 stamper.stamp(placed, world)
 
                 // Open connections between connected sockets, seal dead ends
                 for (socket in placed.sockets) {
                     if (socket.state == SocketState.CONNECTED) {
                         stamper.openConnection(placed, socket, world)
-                        Gdx.app?.log("ProceduralMapManager", "  Opened connection at ${socket.localPosition} dir=${socket.direction}")
+                        println("[ProceduralMapManager] " + "  Opened connection at ${socket.localPosition} dir=${socket.direction}")
                     } else if (socket.state == SocketState.SEALED) {
                         stamper.sealConnection(placed, socket, world)
-                        Gdx.app?.log("ProceduralMapManager", "  Sealed socket at ${socket.localPosition} dir=${socket.direction}")
+                        println("[ProceduralMapManager] " + "  Sealed socket at ${socket.localPosition} dir=${socket.direction}")
                     }
                 }
             }

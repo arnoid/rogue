@@ -7,18 +7,10 @@ import com.roguelike.core.model.LightDirection
 import com.roguelike.core.model.LightShape
 
 /**
- * Loads `items.json` (libGDX JSON-flavored) into [ItemCatalog].
- *
- * Implementation note: uses [com.badlogic.gdx.utils.JsonReader] directly so we
- * support flexible/optional fields (model, unlitModel, litModel, light) without
- * having to wire up reflection-friendly POJOs.
+ * Loads items.json into [ItemCatalog] using standard Java I/O.
  */
 object ItemCatalogLoader {
 
-    /**
-     * Loads the catalog from a libGDX-internal resource path.
-     * Defaults to `items/items.json`.
-     */
     fun loadFromInternal(path: String = "items/items.json"): List<ItemDef> {
         val text = readInternal(path) ?: return emptyList()
         val defs = parse(text)
@@ -26,7 +18,6 @@ object ItemCatalogLoader {
         return defs
     }
 
-    /** Loads the catalog from a raw JSON string. */
     fun loadFromString(text: String): List<ItemDef> {
         val defs = parse(text)
         ItemCatalog.load(defs)
@@ -34,87 +25,114 @@ object ItemCatalogLoader {
     }
 
     private fun readInternal(path: String): String? {
-        return try {
-            // Prefer libGDX file handle (works when LWJGL3 working dir is set).
-            val handle = com.badlogic.gdx.Gdx.files?.internal(path)
-            if (handle != null && handle.exists()) {
-                handle.readString()
-            } else {
-                // Test/headless fallback: load via classpath.
-                ItemCatalogLoader::class.java.classLoader
-                    ?.getResourceAsStream(path)
-                    ?.bufferedReader()
-                    ?.use { it.readText() }
-            }
-        } catch (_: Throwable) {
-            // Last resort: classpath.
-            ItemCatalogLoader::class.java.classLoader
-                ?.getResourceAsStream(path)
-                ?.bufferedReader()
-                ?.use { it.readText() }
-        }
+        return ItemCatalogLoader::class.java.classLoader
+            ?.getResourceAsStream(path)
+            ?.bufferedReader()
+            ?.use { it.readText() }
     }
 
+    /**
+     * Minimal JSON array-of-objects parser for items.json.
+     */
     private fun parse(text: String): List<ItemDef> {
-        val reader = com.badlogic.gdx.utils.JsonReader()
-        val root = reader.parse(text) ?: return emptyList()
         val out = mutableListOf<ItemDef>()
-        var entry = root.child
-        while (entry != null) {
-            val type = entry.getString("type", "")
-            if (type.isNotBlank()) {
-                val name = entry.getString("name", type)
-                val colorHex = entry.getString("colorHex", "ffffffff")
-                val blocksLight = entry.getBoolean("blocksLight", true)
-                val tags = mutableSetOf<String>()
-                entry.get("tags")?.let { tagsNode ->
-                    var t = tagsNode.child
-                    while (t != null) {
-                        t.asString()?.let { tags.add(it) }
-                        t = t.next
+        // Simple approach: split by top-level objects in the array
+        val trimmed = text.trim()
+        if (!trimmed.startsWith("[")) return out
+
+        // Extract objects between { and }
+        var depth = 0
+        var objStart = -1
+        for (i in trimmed.indices) {
+            when (trimmed[i]) {
+                '{' -> { if (depth == 1) objStart = i; depth++ }
+                '}' -> {
+                    depth--
+                    if (depth == 1 && objStart >= 0) {
+                        val objStr = trimmed.substring(objStart, i + 1)
+                        parseObject(objStr)?.let { out.add(it) }
+                        objStart = -1
                     }
                 }
-                val model = entry.getString("model", null)
-                val unlitModel = entry.getString("unlitModel", null)
-                val litModel = entry.getString("litModel", null)
-                val light = entry.get("light")?.let { parseLight(it) }
-
-                out.add(
-                    ItemDef(
-                        type = type,
-                        name = name,
-                        colorHex = colorHex,
-                        tags = tags,
-                        model = model,
-                        unlitModel = unlitModel,
-                        litModel = litModel,
-                        blocksLight = blocksLight,
-                        light = light
-                    )
-                )
+                '[' -> if (depth == 0) depth = 1
             }
-            entry = entry.next
         }
         return out
     }
 
-    private fun parseLight(node: com.badlogic.gdx.utils.JsonValue): LightDef {
-        val shape = when (node.getString("shape", "sphere").lowercase()) {
-            "cone"   -> LightShape.CONE
-            else     -> LightShape.SPHERE
-        }
-        val direction = when (node.getString("direction", "omnidirectional").lowercase()) {
-            "owner_facing"    -> LightDirection.OWNER_FACING
-            else              -> LightDirection.OMNIDIRECTIONAL
-        }
-        return LightDef(
-            shape = shape,
-            direction = direction,
-            range = node.getFloat("range", 5f),
-            coneDegrees = node.getFloat("coneDegrees", 360f),
-            colorHex = node.getString("color", "ffffffff"),
-            intensity = node.getFloat("intensity", 1f)
+    private fun parseObject(json: String): ItemDef? {
+        val type = extractString(json, "type") ?: return null
+        if (type.isBlank()) return null
+
+        val name = extractString(json, "name") ?: type
+        val colorHex = extractString(json, "colorHex") ?: "ffffffff"
+        val blocksLight = extractBoolean(json, "blocksLight") ?: true
+        val tags = extractStringArray(json, "tags")
+        val model = extractString(json, "model")
+        val unlitModel = extractString(json, "unlitModel")
+        val litModel = extractString(json, "litModel")
+        val light = extractObject(json, "light")?.let { parseLightDef(it) }
+
+        return ItemDef(
+            type = type, name = name, colorHex = colorHex,
+            tags = tags.toMutableSet(), model = model,
+            unlitModel = unlitModel, litModel = litModel,
+            blocksLight = blocksLight, light = light
         )
     }
-}
 
+    private fun parseLightDef(json: String): LightDef {
+        val shape = when (extractString(json, "shape")?.lowercase()) {
+            "cone" -> LightShape.CONE
+            else -> LightShape.SPHERE
+        }
+        val direction = when (extractString(json, "direction")?.lowercase()) {
+            "owner_facing" -> LightDirection.OWNER_FACING
+            else -> LightDirection.OMNIDIRECTIONAL
+        }
+        return LightDef(
+            shape = shape, direction = direction,
+            range = extractFloat(json, "range") ?: 5f,
+            coneDegrees = extractFloat(json, "coneDegrees") ?: 360f,
+            colorHex = extractString(json, "color") ?: "ffffffff",
+            intensity = extractFloat(json, "intensity") ?: 1f
+        )
+    }
+
+    private fun extractString(json: String, key: String): String? {
+        val pattern = """"$key"\s*:\s*"([^"]*)"""".toRegex()
+        return pattern.find(json)?.groupValues?.get(1)
+    }
+
+    private fun extractFloat(json: String, key: String): Float? {
+        val pattern = """"$key"\s*:\s*([0-9.]+)""".toRegex()
+        return pattern.find(json)?.groupValues?.get(1)?.toFloatOrNull()
+    }
+
+    private fun extractBoolean(json: String, key: String): Boolean? {
+        val pattern = """"$key"\s*:\s*(true|false)""".toRegex()
+        return pattern.find(json)?.groupValues?.get(1)?.toBooleanStrictOrNull()
+    }
+
+    private fun extractStringArray(json: String, key: String): List<String> {
+        val pattern = """"$key"\s*:\s*\[([^\]]*)\]""".toRegex()
+        val match = pattern.find(json) ?: return emptyList()
+        val content = match.groupValues[1]
+        return """"([^"]*)"""".toRegex().findAll(content).map { it.groupValues[1] }.toList()
+    }
+
+    private fun extractObject(json: String, key: String): String? {
+        val start = json.indexOf("\"$key\"")
+        if (start < 0) return null
+        val braceStart = json.indexOf('{', start)
+        if (braceStart < 0) return null
+        var depth = 0
+        for (i in braceStart until json.length) {
+            when (json[i]) {
+                '{' -> depth++
+                '}' -> { depth--; if (depth == 0) return json.substring(braceStart, i + 1) }
+            }
+        }
+        return null
+    }
+}

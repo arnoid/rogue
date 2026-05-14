@@ -121,6 +121,14 @@ data class SubmapTemplate(
             ))
         }
 
+        // Rotate light sources: 90° CW: (x,y) -> (srcH-1-y, x)
+        for (ls in worldData.lightSources) {
+            rotatedWorld.lightSources.add(ls.copy(
+                x = srcH - 1 - ls.y,
+                y = ls.x
+            ))
+        }
+
         // Re-derive sockets from the rotated world's socket slots (which are correctly placed on outer boundaries)
         val newSockets = mutableListOf<Socket>()
         for (x in 0 until newW) {
