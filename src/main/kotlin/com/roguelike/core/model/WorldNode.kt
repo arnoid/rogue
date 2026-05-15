@@ -19,6 +19,7 @@ class WorldNode(val x: Int, val y: Int, val z: Int) {
         const val DOOR_MANUAL  = "door_manual"
         const val SOCKET = "socket"
         const val LADDER = "ladder"
+        const val STAIRS = "stairs"
     }
 
     // ── Tile storage (floor + 4 walls) ──────────────────────────────────

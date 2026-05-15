@@ -965,6 +965,22 @@ class SimpleUI(
         gpuVertexCount += 3
     }
 
+    /**
+     * Submit a triangle with per-vertex colors (e.g. from palette-textured models).
+     */
+    fun drawGpuTrianglePerVertexColor(
+        wx0: Float, wy0: Float, wz0: Float, nx0: Float, ny0: Float, nz0: Float, r0: Float, g0: Float, b0: Float, a0: Float,
+        wx1: Float, wy1: Float, wz1: Float, nx1: Float, ny1: Float, nz1: Float, r1: Float, g1: Float, b1: Float, a1: Float,
+        wx2: Float, wy2: Float, wz2: Float, nx2: Float, ny2: Float, nz2: Float, r2: Float, g2: Float, b2: Float, a2: Float
+    ) {
+        if (gpuVertexCount + 3 > maxGpuVertices) return
+        val offset = gpuVertexCount * gpuFloatsPerVertex
+        putGpuVertex(offset + 0,  wx0, wy0, wz0, r0, g0, b0, a0, nx0, ny0, nz0)
+        putGpuVertex(offset + 10, wx1, wy1, wz1, r1, g1, b1, a1, nx1, ny1, nz1)
+        putGpuVertex(offset + 20, wx2, wy2, wz2, r2, g2, b2, a2, nx2, ny2, nz2)
+        gpuVertexCount += 3
+    }
+
     private fun putGpuVertex(offset: Int, wx: Float, wy: Float, wz: Float,
                              r: Float, g: Float, b: Float, a: Float,
                              nx: Float, ny: Float, nz: Float) {

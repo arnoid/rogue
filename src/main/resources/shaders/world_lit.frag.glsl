@@ -17,6 +17,7 @@ layout(set = 0, binding = 0) uniform LightingUBO {
 
 // 3D occupancy grid as SSBO: 1 uint per cell
 // Bit flags: bit0=north(Y+), bit1=south(Y-), bit2=east(X+), bit3=west(X-)
+//            bit4=floor(Z-), bit5=ceiling(Z+)
 layout(set = 0, binding = 1) readonly buffer OccupancyGrid {
     uint cells[];
 } grid;
@@ -93,8 +94,18 @@ bool isOccluded(vec3 from, vec3 to) {
                 }
                 ix = nx; tMaxX += tDeltaX;
             } else {
-                // Crossing Z boundary — no vertical wall edges
-                iz += sz; tMaxZ += tDeltaZ;
+                // Crossing Z boundary (floor/ceiling)
+                uint curFlags = getWallFlags(ix, iy, iz);
+                int nz = iz + sz;
+                uint nextFlags = getWallFlags(ix, iy, nz);
+                if (sz > 0) {
+                    // Moving +Z: check ceiling of current cell or floor of next cell
+                    if ((curFlags & 32u) != 0u || (nextFlags & 16u) != 0u) return true;
+                } else {
+                    // Moving -Z: check floor of current cell or ceiling of next cell
+                    if ((curFlags & 16u) != 0u || (nextFlags & 32u) != 0u) return true;
+                }
+                iz = nz; tMaxZ += tDeltaZ;
             }
         } else {
             if (tMaxY < tMaxZ) {
@@ -111,8 +122,18 @@ bool isOccluded(vec3 from, vec3 to) {
                 }
                 iy = ny; tMaxY += tDeltaY;
             } else {
-                // Crossing Z boundary — no vertical wall edges
-                iz += sz; tMaxZ += tDeltaZ;
+                // Crossing Z boundary (floor/ceiling)
+                uint curFlags = getWallFlags(ix, iy, iz);
+                int nz = iz + sz;
+                uint nextFlags = getWallFlags(ix, iy, nz);
+                if (sz > 0) {
+                    // Moving +Z: check ceiling of current cell or floor of next cell
+                    if ((curFlags & 32u) != 0u || (nextFlags & 16u) != 0u) return true;
+                } else {
+                    // Moving -Z: check floor of current cell or ceiling of next cell
+                    if ((curFlags & 16u) != 0u || (nextFlags & 32u) != 0u) return true;
+                }
+                iz = nz; tMaxZ += tDeltaZ;
             }
         }
     }

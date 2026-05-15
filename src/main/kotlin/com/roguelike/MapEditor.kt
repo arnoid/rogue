@@ -2,6 +2,7 @@ package com.roguelike
 
 import com.roguelike.core.model.TileSlot
 import com.roguelike.core.model.World
+import com.roguelike.core.model.WorldNode
 import com.roguelike.input.InputSystem
 import com.roguelike.rendering.Camera
 import com.roguelike.rendering.DebugRenderer
@@ -29,10 +30,10 @@ private fun defaultTileFactory(type: String): com.roguelike.core.model.Tile? = w
  * World map editor with orbital camera and File menu bar.
  *
  * Controls:
- *  A/D – rotate map around Z axis (azimuth) around world centre
- *  Shift+A/D – strafe orbit centre left/right
- *  W/S – move camera closer / further from map (dolly)
- *  Q/E – rotate around camera-local X axis (elevation / pitch)
+ *  W/A/S/D – pan orbit centre (forward/left/back/right)
+ *  Shift+A/D – rotate map around Z axis (azimuth)
+ *  Shift+W/S – pitch camera (elevation)
+ *  Shift+Q/E – zoom in/out (dolly)
  *  1-6 – select tool   Ctrl+S – save   ESC – menu
  *
  * A gimbal orientation cube is drawn in the top-right corner to
@@ -97,6 +98,11 @@ class MapEditor(
     private var orbitCenterZ = 0f
     private var currentZ = 0
 
+    // Middle mouse drag for orbit (replicates Shift+WASD rotation)
+    private var middleDragging = false
+    private var middleDragLastX = 0f
+    private var middleDragLastY = 0f
+
     // Editor cursor (tile coordinates)
     private var cursorX = 0
     private var cursorY = 0
@@ -108,7 +114,7 @@ class MapEditor(
     enum class EditorTool { FLOOR, CEILING, WALL, LIGHT }
 
     /** Tools palette tab selection. */
-    private enum class PaletteTab { STRUCTURES, LIGHTS }
+    private enum class PaletteTab { STRUCTURES, LIGHTS, TAGS }
     private var selectedPaletteTab = PaletteTab.STRUCTURES
 
     /** Index of the currently selected light source in the world (for editing radius/intensity). */
@@ -129,6 +135,14 @@ class MapEditor(
     private var hoveredFace = HoveredFace.NONE
     private var hoveredNodeX = -1
     private var hoveredNodeY = -1
+
+    // --- Tooltip state ---
+    private var tooltipText: String? = null
+    private var tooltipX = 0f
+    private var tooltipY = 0f
+
+    // --- Tag editing state ---
+    private var selectedTag: String? = null
 
     fun show() {
         // Load structure model meshes
@@ -300,7 +314,7 @@ class MapEditor(
             val zoomSpeed = 15f * delta
             val shiftHeld = inputSystem.isKeyPressed(GLFW_KEY_LEFT_SHIFT) || inputSystem.isKeyPressed(GLFW_KEY_RIGHT_SHIFT)
 
-            if (shiftHeld) {
+            if (!shiftHeld) {
                 val azRad = Math.toRadians(azimuth.toDouble()).toFloat()
                 val panSpeed = 10f * delta
                 val rightX = -sin(azRad)
@@ -328,7 +342,7 @@ class MapEditor(
                 if (inputSystem.isKeyPressed(GLFW_KEY_D)) azimuth += rotSpeed
             }
 
-            if (!shiftHeld) {
+            if (shiftHeld) {
                 if (inputSystem.isKeyPressed(GLFW_KEY_Q)) distance = (distance - zoomSpeed).coerceAtLeast(3f)
                 if (inputSystem.isKeyPressed(GLFW_KEY_E)) distance = (distance + zoomSpeed).coerceAtMost(200f)
                 if (inputSystem.isKeyPressed(GLFW_KEY_W)) elevation = (elevation + rotSpeed).coerceAtMost(89f)
@@ -341,6 +355,26 @@ class MapEditor(
             val scroll = inputSystem.getScrollDelta()
             if (scroll != 0f) {
                 distance = (distance - scroll * 2f).coerceIn(3f, 200f)
+            }
+
+            // Middle mouse button drag → orbit rotation (same as Shift+A/D/W/S)
+            if (inputSystem.isMouseButtonJustPressed(2)) {
+                middleDragging = true
+                middleDragLastX = mx
+                middleDragLastY = my
+            }
+            if (middleDragging) {
+                if (inputSystem.isMouseButtonPressed(2)) {
+                    val dx = mx - middleDragLastX
+                    val dy = my - middleDragLastY
+                    val sensitivity = 0.3f
+                    azimuth -= dx * sensitivity
+                    elevation = (elevation + dy * sensitivity).coerceIn(5f, 89f)
+                    middleDragLastX = mx
+                    middleDragLastY = my
+                } else {
+                    middleDragging = false
+                }
             }
 
             // Tool selection via keyboard
@@ -382,6 +416,13 @@ class MapEditor(
                             w.lightSources.removeAt(clickedIdx)
                             if (selectedLightIndex == clickedIdx) selectedLightIndex = -1
                             else if (selectedLightIndex > clickedIdx) selectedLightIndex--
+                        }
+                    }
+                    PaletteTab.TAGS -> {
+                        // Ctrl+Click removes all tags from the node
+                        if (cursorX in 0 until w.width && cursorY in 0 until w.height) {
+                            val node = w.getNode(cursorX, cursorY, currentZ)
+                            node?.tags?.clear()
                         }
                     }
                 }
@@ -476,6 +517,9 @@ class MapEditor(
         // Render menu bar last so dropdowns appear on top of all content
         val menuAction = menuBar.render(inputSystem)
         if (menuAction != null) handleMenuAction(menuAction)
+
+        // Draw tooltip last (on top of everything)
+        drawTooltip()
 
         return true
     }
@@ -859,15 +903,32 @@ class MapEditor(
         // Submit triangles (original winding, normals handle lighting direction)
         var i = 0
         while (i < indices.size - 2) {
-            val v0 = xform(indices[i].toInt() and 0xFFFF)
-            val v1 = xform(indices[i + 1].toInt() and 0xFFFF)
-            val v2 = xform(indices[i + 2].toInt() and 0xFFFF)
-            ui.drawGpuTriangle(
-                v0[0], v0[1], v0[2], v0[3], v0[4], v0[5],
-                v1[0], v1[1], v1[2], v1[3], v1[4], v1[5],
-                v2[0], v2[1], v2[2], v2[3], v2[4], v2[5],
-                r, g, b, a
-            )
+            val idx0 = indices[i].toInt() and 0xFFFF
+            val idx1 = indices[i + 1].toInt() and 0xFFFF
+            val idx2 = indices[i + 2].toInt() and 0xFFFF
+            val v0 = xform(idx0)
+            val v1 = xform(idx1)
+            val v2 = xform(idx2)
+
+            // Use per-vertex colors from palette texture if available, otherwise use flat color
+            val colors = mesh.colors
+            if (colors != null) {
+                val cr0 = colors[idx0 * 3]; val cg0 = colors[idx0 * 3 + 1]; val cb0 = colors[idx0 * 3 + 2]
+                val cr1 = colors[idx1 * 3]; val cg1 = colors[idx1 * 3 + 1]; val cb1 = colors[idx1 * 3 + 2]
+                val cr2 = colors[idx2 * 3]; val cg2 = colors[idx2 * 3 + 1]; val cb2 = colors[idx2 * 3 + 2]
+                ui.drawGpuTrianglePerVertexColor(
+                    v0[0], v0[1], v0[2], v0[3], v0[4], v0[5], cr0, cg0, cb0, a,
+                    v1[0], v1[1], v1[2], v1[3], v1[4], v1[5], cr1, cg1, cb1, a,
+                    v2[0], v2[1], v2[2], v2[3], v2[4], v2[5], cr2, cg2, cb2, a
+                )
+            } else {
+                ui.drawGpuTriangle(
+                    v0[0], v0[1], v0[2], v0[3], v0[4], v0[5],
+                    v1[0], v1[1], v1[2], v1[3], v1[4], v1[5],
+                    v2[0], v2[1], v2[2], v2[3], v2[4], v2[5],
+                    r, g, b, a
+                )
+            }
             i += 3
         }
     }
@@ -901,13 +962,16 @@ class MapEditor(
                     for (y in 0 until gridH) {
                         for (x in 0 until gridW) {
                             val node = w.getNode(x, y, z) ?: continue
-                            // Encode wall edges as bit flags:
+                            // Encode structure as bit flags:
                             // bit 0 = north (Y+), bit 1 = south (Y-), bit 2 = east (X+), bit 3 = west (X-)
+                            // bit 4 = floor (Z-), bit 5 = ceiling (Z+)
                             var flags = 0
                             if (node.hasTile(TileSlot.WALL_NORTH)) flags = flags or 1
                             if (node.hasTile(TileSlot.WALL_SOUTH)) flags = flags or 2
                             if (node.hasTile(TileSlot.WALL_EAST))  flags = flags or 4
                             if (node.hasTile(TileSlot.WALL_WEST))  flags = flags or 8
+                            if (node.hasTile(TileSlot.FLOOR))      flags = flags or 16
+                            if (node.hasTile(TileSlot.CEILING))    flags = flags or 32
                             occupancy[z * gridW * gridH + y * gridW + x] = flags
                         }
                     }
@@ -1001,7 +1065,7 @@ class MapEditor(
             val viewportRight = sw - toolsPaletteWidth - 10f
             val toolName = currentTool?.name ?: "NONE"
             ui.drawText("Tool: $toolName  Layer: $currentZ  [GPU]", hudX, hudY, 0.7f, 0.7f, 0.8f, 1f, 1f)
-            val helpStr = "A/D: Rotate  W/S: Pitch  Q/E: Zoom  Shift: Pan  Z/X: Layer  Ctrl+Click: Erase  Ctrl+S: Save"
+            val helpStr = "WASD: Pan  Shift+A/D: Rotate  Shift+W/S: Pitch  Shift+Q/E: Zoom  Z/X: Layer  Ctrl+Click: Erase  Ctrl+S: Save"
             ui.drawText(helpStr, hudX, sh - 30f, 0.5f, 0.55f, 0.65f, 0.8f, 1f)
             val fileLabel = if (currentFilePath != null) File(currentFilePath!!).name else "[unsaved]"
             val azStr = "Az: ${azimuth.toInt()}  El: ${elevation.toInt()}  Dist: ${distance.toInt()}"
@@ -1101,7 +1165,7 @@ class MapEditor(
         val viewportRight = sw - toolsPaletteWidth - 10f
         val toolName = currentTool?.name ?: "NONE"
         ui.drawText("Tool: $toolName  Layer: $currentZ", hudX, hudY, 0.7f, 0.7f, 0.8f, 1f, 1f)
-        val helpStr = "A/D: Rotate  W/S: Pitch  Q/E: Zoom  Shift: Pan  Z/X: Layer  Ctrl+Click: Erase  Ctrl+S: Save"
+        val helpStr = "WASD: Pan  Shift+A/D: Rotate  Shift+W/S: Pitch  Shift+Q/E: Zoom  Z/X: Layer  Ctrl+Click: Erase  Ctrl+S: Save"
         ui.drawText(helpStr, hudX, sh - 30f, 0.5f, 0.55f, 0.65f, 0.8f, 1f)
         val fileLabel = if (currentFilePath != null) File(currentFilePath!!).name else "[unsaved]"
         val azStr = "Az: ${azimuth.toInt()}  El: ${elevation.toInt()}  Dist: ${distance.toInt()}"
@@ -1109,100 +1173,25 @@ class MapEditor(
         ui.drawText(coordStr, viewportRight - ui.textWidth(coordStr), hudY, 0.6f, 0.6f, 0.7f, 0.8f, 1f)
     }
 
-    /**
-     * Draw highlight for the hovered face or edge based on the current tool.
-     */
-    private fun drawFaceEdgeHighlight(w: World) {
-        if (hoveredFace == HoveredFace.NONE) return
-        if (cursorX !in 0 until w.width || cursorY !in 0 until w.height) return
+    // ---- Tooltip rendering ----
 
-        val bx = cursorX.toFloat()
-        val by = cursorY.toFloat()
-        val bz = currentZ.toFloat()
-        val highlightR = 0.2f; val highlightG = 0.8f; val highlightB = 1.0f; val highlightA = 0.4f
-
-        when (hoveredFace) {
-            HoveredFace.BOTTOM -> {
-                // Highlight bottom face (z = bz)
-                val p0 = proj(bx, by, bz)
-                val p1 = proj(bx + 1f, by, bz)
-                val p2 = proj(bx + 1f, by + 1f, bz)
-                val p3 = proj(bx, by + 1f, bz)
-                ui.drawQuad(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y,
-                    highlightR, highlightG, highlightB, highlightA)
-                // Draw border lines
-                debugRenderer.drawLine(p0.x, p0.y, p1.x, p1.y, highlightR, highlightG, highlightB, 0.8f, 2f)
-                debugRenderer.drawLine(p1.x, p1.y, p2.x, p2.y, highlightR, highlightG, highlightB, 0.8f, 2f)
-                debugRenderer.drawLine(p2.x, p2.y, p3.x, p3.y, highlightR, highlightG, highlightB, 0.8f, 2f)
-                debugRenderer.drawLine(p3.x, p3.y, p0.x, p0.y, highlightR, highlightG, highlightB, 0.8f, 2f)
-            }
-            HoveredFace.TOP -> {
-                // Highlight top face (z = bz + 1)
-                val p0 = proj(bx, by, bz + 1f)
-                val p1 = proj(bx + 1f, by, bz + 1f)
-                val p2 = proj(bx + 1f, by + 1f, bz + 1f)
-                val p3 = proj(bx, by + 1f, bz + 1f)
-                ui.drawQuad(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y,
-                    highlightR, highlightG, highlightB, highlightA)
-                debugRenderer.drawLine(p0.x, p0.y, p1.x, p1.y, highlightR, highlightG, highlightB, 0.8f, 2f)
-                debugRenderer.drawLine(p1.x, p1.y, p2.x, p2.y, highlightR, highlightG, highlightB, 0.8f, 2f)
-                debugRenderer.drawLine(p2.x, p2.y, p3.x, p3.y, highlightR, highlightG, highlightB, 0.8f, 2f)
-                debugRenderer.drawLine(p3.x, p3.y, p0.x, p0.y, highlightR, highlightG, highlightB, 0.8f, 2f)
-            }
-            HoveredFace.EDGE_NORTH -> {
-                // Highlight north face (y = by + 1)
-                val p0 = proj(bx, by + 1f, bz)
-                val p1 = proj(bx + 1f, by + 1f, bz)
-                val p2 = proj(bx + 1f, by + 1f, bz + 1f)
-                val p3 = proj(bx, by + 1f, bz + 1f)
-                ui.drawQuad(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y,
-                    highlightR, highlightG, highlightB, highlightA)
-                debugRenderer.drawLine(p0.x, p0.y, p1.x, p1.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
-                debugRenderer.drawLine(p1.x, p1.y, p2.x, p2.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
-                debugRenderer.drawLine(p2.x, p2.y, p3.x, p3.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
-                debugRenderer.drawLine(p3.x, p3.y, p0.x, p0.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
-            }
-            HoveredFace.EDGE_SOUTH -> {
-                val p0 = proj(bx, by, bz)
-                val p1 = proj(bx + 1f, by, bz)
-                val p2 = proj(bx + 1f, by, bz + 1f)
-                val p3 = proj(bx, by, bz + 1f)
-                ui.drawQuad(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y,
-                    highlightR, highlightG, highlightB, highlightA)
-                debugRenderer.drawLine(p0.x, p0.y, p1.x, p1.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
-                debugRenderer.drawLine(p1.x, p1.y, p2.x, p2.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
-                debugRenderer.drawLine(p2.x, p2.y, p3.x, p3.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
-                debugRenderer.drawLine(p3.x, p3.y, p0.x, p0.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
-            }
-            HoveredFace.EDGE_EAST -> {
-                val p0 = proj(bx + 1f, by, bz)
-                val p1 = proj(bx + 1f, by + 1f, bz)
-                val p2 = proj(bx + 1f, by + 1f, bz + 1f)
-                val p3 = proj(bx + 1f, by, bz + 1f)
-                ui.drawQuad(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y,
-                    highlightR, highlightG, highlightB, highlightA)
-                debugRenderer.drawLine(p0.x, p0.y, p1.x, p1.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
-                debugRenderer.drawLine(p1.x, p1.y, p2.x, p2.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
-                debugRenderer.drawLine(p2.x, p2.y, p3.x, p3.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
-                debugRenderer.drawLine(p3.x, p3.y, p0.x, p0.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
-            }
-            HoveredFace.EDGE_WEST -> {
-                val p0 = proj(bx, by, bz)
-                val p1 = proj(bx, by + 1f, bz)
-                val p2 = proj(bx, by + 1f, bz + 1f)
-                val p3 = proj(bx, by, bz + 1f)
-                ui.drawQuad(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y,
-                    highlightR, highlightG, highlightB, highlightA)
-                debugRenderer.drawLine(p0.x, p0.y, p1.x, p1.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
-                debugRenderer.drawLine(p1.x, p1.y, p2.x, p2.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
-                debugRenderer.drawLine(p2.x, p2.y, p3.x, p3.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
-                debugRenderer.drawLine(p3.x, p3.y, p0.x, p0.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
-            }
-            HoveredFace.NONE -> {}
-        }
+    private fun drawTooltip() {
+        val text = tooltipText ?: return
+        val tw = ui.textWidth(text) + 12f
+        val th = 22f
+        val tx = (tooltipX + 12f).coerceAtMost(ui.screenWidth - tw - 4f)
+        val ty = (tooltipY - 4f).coerceAtLeast(0f)
+        // Background
+        ui.drawRect(tx, ty, tw, th, 0.08f, 0.08f, 0.12f, 0.92f)
+        // Border
+        ui.drawRect(tx, ty, tw, 1f, 0.4f, 0.45f, 0.55f, 0.8f)
+        ui.drawRect(tx, ty + th - 1f, tw, 1f, 0.4f, 0.45f, 0.55f, 0.8f)
+        ui.drawRect(tx, ty, 1f, th, 0.4f, 0.45f, 0.55f, 0.8f)
+        ui.drawRect(tx + tw - 1f, ty, 1f, th, 0.4f, 0.45f, 0.55f, 0.8f)
+        // Text
+        ui.drawText(text, tx + 6f, ty + 4f, 0.9f, 0.9f, 0.95f, 1f, 1f)
+        tooltipText = null
     }
-
-
 
     // ---- Editor Modes (left side) ----
 
@@ -1224,6 +1213,7 @@ class MapEditor(
 
         // --- Normal / pointer mode (cursor-default-outline icon) ---
         drawModeButton(btnPad, by, btnSize, selectedEditorMode == EditorMode.NORMAL, mx, my,
+            tooltip = "Normal",
             iconDrawer = { x, y, s -> drawCursorIcon(x, y, s) }
         ) {
             selectedEditorMode = EditorMode.NORMAL
@@ -1232,6 +1222,7 @@ class MapEditor(
 
         // --- Show/hide grid wireframes (view-grid-outline icon) ---
         drawModeButton(btnPad, by, btnSize, selectedEditorMode == EditorMode.GRID_TOGGLE, mx, my,
+            tooltip = "Toggle Grid",
             iconDrawer = { x, y, s -> drawGridIcon(x, y, s, showWireframes) }
         ) {
             selectedEditorMode = EditorMode.GRID_TOGGLE
@@ -1241,6 +1232,7 @@ class MapEditor(
 
         // --- Lights mode (lightbulb-on-outline icon) ---
         drawModeButton(btnPad, by, btnSize, selectedEditorMode == EditorMode.LIGHTS, mx, my,
+            tooltip = "Lights Preview",
             iconDrawer = { x, y, s -> drawLightbulbIcon(x, y, s, selectedEditorMode == EditorMode.LIGHTS) }
         ) {
             selectedEditorMode = if (selectedEditorMode == EditorMode.LIGHTS) EditorMode.NORMAL else EditorMode.LIGHTS
@@ -1249,6 +1241,7 @@ class MapEditor(
 
         // --- GPU render mode (cube icon with "3D" label) ---
         drawModeButton(btnPad, by, btnSize, selectedEditorMode == EditorMode.GPU_RENDER, mx, my,
+            tooltip = "GPU Render",
             iconDrawer = { x, y, s -> drawGpuIcon(x, y, s) }
         ) {
             selectedEditorMode = if (selectedEditorMode == EditorMode.GPU_RENDER) EditorMode.NORMAL else EditorMode.GPU_RENDER
@@ -1257,6 +1250,7 @@ class MapEditor(
 
         // --- Show/hide ceilings toggle ---
         drawModeButton(btnPad, by, btnSize, showCeilings, mx, my,
+            tooltip = "Toggle Ceilings",
             iconDrawer = { x, y, s -> drawCeilingIcon(x, y, s, showCeilings) }
         ) {
             showCeilings = !showCeilings
@@ -1271,6 +1265,7 @@ class MapEditor(
         x: Float, y: Float, size: Float,
         active: Boolean,
         mx: Float, my: Float,
+        tooltip: String = "",
         iconDrawer: (Float, Float, Float) -> Unit,
         onClick: () -> Unit
     ) {
@@ -1292,8 +1287,15 @@ class MapEditor(
 
         iconDrawer(x + 4f, y + 4f, size - 8f)
 
-        if (hovered && inputSystem.isMouseButtonJustPressed(0)) {
-            onClick()
+        if (hovered) {
+            if (tooltip.isNotEmpty()) {
+                tooltipText = tooltip
+                tooltipX = x + size
+                tooltipY = y
+            }
+            if (inputSystem.isMouseButtonJustPressed(0)) {
+                onClick()
+            }
         }
     }
 
@@ -1440,9 +1442,9 @@ class MapEditor(
         val mx = inputSystem.getMouseX()
         val my = inputSystem.getMouseY()
 
-        // --- Tab bar ---
+        // --- Tab bar (3 tabs) ---
         var tabY = barH + 32f
-        val tabW = (toolsPaletteWidth - 16f) / 2f
+        val tabW = (toolsPaletteWidth - 16f) / 3f
         val tabH = 24f
 
         // Structures tab
@@ -1477,6 +1479,22 @@ class MapEditor(
             currentTool = EditorTool.LIGHT
         }
 
+        // Tags tab
+        val tagsActive = selectedPaletteTab == PaletteTab.TAGS
+        val tagsHovered = mx >= palX + 8f + tabW * 2f && mx < palX + 8f + tabW * 3f && my >= tabY && my < tabY + tabH
+        if (tagsActive) {
+            ui.drawRect(palX + 8f + tabW * 2f, tabY, tabW, tabH, 0.25f, 0.35f, 0.55f, 0.9f)
+        } else if (tagsHovered) {
+            ui.drawRect(palX + 8f + tabW * 2f, tabY, tabW, tabH, 0.2f, 0.26f, 0.38f, 0.7f)
+        } else {
+            ui.drawRect(palX + 8f + tabW * 2f, tabY, tabW, tabH, 0.15f, 0.17f, 0.22f, 0.6f)
+        }
+        ui.drawText("Tags", palX + 12f + tabW * 2f, tabY + 5f, 0.82f, 0.82f, 0.9f, 1f, 1f)
+        if (tagsHovered && inputSystem.isMouseButtonJustPressed(0)) {
+            selectedPaletteTab = PaletteTab.TAGS
+            currentTool = null
+        }
+
         // Tab underline
         ui.drawRect(palX + 8f, tabY + tabH, toolsPaletteWidth - 16f, 1f, 0.3f, 0.35f, 0.45f, 0.7f)
 
@@ -1484,13 +1502,17 @@ class MapEditor(
 
         when (selectedPaletteTab) {
             PaletteTab.STRUCTURES -> {
+                val previewSize = 64f
+                val previewPad = 8f
+
                 // --- Floor section ---
                 ui.drawText("Floor", palX + 10f, by, 0.6f, 0.65f, 0.8f, 0.9f, 1.1f)
                 by += 18f
 
-                // Floor model button (models\vox\floor\floor.obj)
-                drawToolButton(palX + 8f, by, btnW, btnH, "Floor Model", EditorTool.FLOOR, mx, my)
-                by += btnH + 8f
+                // Floor model preview button
+                drawModelPreviewButton(palX + 8f, by, btnW.coerceAtMost(previewSize + 16f), previewSize, floorMesh,
+                    EditorTool.FLOOR, "Floor", 0.25f, 0.30f, 0.40f, mx, my)
+                by += previewSize + previewPad
 
                 // Separator
                 ui.drawRect(palX + 8f, by, btnW, 1f, 0.3f, 0.35f, 0.45f, 0.4f)
@@ -1500,9 +1522,10 @@ class MapEditor(
                 ui.drawText("Ceiling", palX + 10f, by, 0.6f, 0.65f, 0.8f, 0.9f, 1.1f)
                 by += 18f
 
-                // Ceiling model button (models\vox\ceiling\ceiling.obj)
-                drawToolButton(palX + 8f, by, btnW, btnH, "Ceiling Model", EditorTool.CEILING, mx, my)
-                by += btnH + 8f
+                // Ceiling model preview button
+                drawModelPreviewButton(palX + 8f, by, btnW.coerceAtMost(previewSize + 16f), previewSize, ceilingMesh,
+                    EditorTool.CEILING, "Ceiling", 0.25f, 0.30f, 0.40f, mx, my)
+                by += previewSize + previewPad
 
                 // Separator
                 ui.drawRect(palX + 8f, by, btnW, 1f, 0.3f, 0.35f, 0.45f, 0.4f)
@@ -1512,9 +1535,10 @@ class MapEditor(
                 ui.drawText("Walls", palX + 10f, by, 0.6f, 0.65f, 0.8f, 0.9f, 1.1f)
                 by += 18f
 
-                // Wall model button (models\vox\wall\wall.obj)
-                drawToolButton(palX + 8f, by, btnW, btnH, "Wall Model", EditorTool.WALL, mx, my)
-                by += btnH + 8f
+                // Wall model preview button
+                drawModelPreviewButton(palX + 8f, by, btnW.coerceAtMost(previewSize + 16f), previewSize, wallMesh,
+                    EditorTool.WALL, "Wall", 0.55f, 0.42f, 0.30f, mx, my)
+                by += previewSize + previewPad
 
                 // Info text
                 by += 4f
@@ -1531,7 +1555,6 @@ class MapEditor(
                 ui.drawRect(palX + 8f, by, btnW, 1f, 0.3f, 0.35f, 0.45f, 0.5f)
                 by += 8f
 
-                // Determine the light source to edit: selected light or defaults
                 val editingLight = if (selectedLightIndex in 0 until w.lightSources.size) {
                     w.lightSources[selectedLightIndex]
                 } else null
@@ -1539,7 +1562,6 @@ class MapEditor(
                 val displayRadius = editingLight?.radius ?: defaultLightRadius
                 val displayIntensity = editingLight?.intensity ?: defaultLightIntensity
 
-                // Light Radius controls
                 ui.drawText("Radius: ${"%.1f".format(displayRadius)}", palX + 14f, by, 0.7f, 0.75f, 0.85f, 1f, 1.1f)
                 by += 20f
 
@@ -1547,7 +1569,6 @@ class MapEditor(
                 val ctrlBtnH = 22f
                 val ctrlSpacing = 4f
 
-                // [-] radius button
                 val rMinusX = palX + 14f
                 val rMinusHovered = mx >= rMinusX && mx < rMinusX + ctrlBtnW && my >= by && my < by + ctrlBtnH
                 if (rMinusHovered) {
@@ -1562,7 +1583,6 @@ class MapEditor(
                     defaultLightRadius = newVal
                 }
 
-                // [+] radius button
                 val rPlusX = rMinusX + ctrlBtnW + ctrlSpacing
                 val rPlusHovered = mx >= rPlusX && mx < rPlusX + ctrlBtnW && my >= by && my < by + ctrlBtnH
                 if (rPlusHovered) {
@@ -1578,11 +1598,9 @@ class MapEditor(
                 }
                 by += ctrlBtnH + 12f
 
-                // Light Intensity controls
                 ui.drawText("Intensity: ${"%.1f".format(displayIntensity)}", palX + 14f, by, 0.7f, 0.75f, 0.85f, 1f, 1.1f)
                 by += 20f
 
-                // [-] intensity button
                 val iMinusX = palX + 14f
                 val iMinusHovered = mx >= iMinusX && mx < iMinusX + ctrlBtnW && my >= by && my < by + ctrlBtnH
                 if (iMinusHovered) {
@@ -1597,7 +1615,6 @@ class MapEditor(
                     defaultLightIntensity = newVal
                 }
 
-                // [+] intensity button
                 val iPlusX = iMinusX + ctrlBtnW + ctrlSpacing
                 val iPlusHovered = mx >= iPlusX && mx < iPlusX + ctrlBtnW && my >= by && my < by + ctrlBtnH
                 if (iPlusHovered) {
@@ -1613,7 +1630,6 @@ class MapEditor(
                 }
                 by += ctrlBtnH + 12f
 
-                // Show selected light info
                 if (editingLight != null) {
                     ui.drawText("Selected: Light #${selectedLightIndex + 1}", palX + 14f, by, 0.55f, 0.6f, 0.7f, 0.8f, 1f)
                 } else {
@@ -1621,18 +1637,99 @@ class MapEditor(
                 }
                 by += 20f
 
-                // Light count
                 ui.drawText("Lights: ${w.lightSources.size}", palX + 14f, by, 0.55f, 0.6f, 0.7f, 0.8f, 1f)
                 by += 20f
 
-                // Info text
                 ui.drawText("Ctrl+Click to remove", palX + 10f, by, 0.45f, 0.5f, 0.6f, 0.7f, 0.9f)
                 by += 16f
+            }
+
+            PaletteTab.TAGS -> {
+                renderTagsTab(w, palX, by, btnW, btnH, mx, my)
+                return@renderToolsPalette  // layer info handled inside
             }
         }
 
         // Layer info
         by += 12f
+        ui.drawText("Layer: $currentZ / ${w.depth - 1}", palX + 8f, by, 0.6f, 0.65f, 0.75f, 1f, 1.1f)
+        by += 20f
+        ui.drawText("Z/X to change layer", palX + 8f, by, 0.45f, 0.5f, 0.6f, 0.7f, 1f)
+    }
+
+    /**
+     * Render the Tags tab content showing all WorldNode.Tags as toggle buttons.
+     * Clicking a tag with a node selected adds/removes the tag from that node.
+     */
+    private fun renderTagsTab(w: World, palX: Float, startY: Float, btnW: Float, btnH: Float, mx: Float, my: Float) {
+        var by = startY
+
+        ui.drawText("Node Tags", palX + 10f, by, 0.6f, 0.65f, 0.8f, 0.9f, 1.1f)
+        by += 20f
+
+        // Get current node
+        val currentNode = if (cursorX in 0 until w.width && cursorY in 0 until w.height) {
+            w.getNode(cursorX, cursorY, currentZ)
+        } else null
+
+        // List all available tags from WorldNode.Tags
+        val allTags = listOf(
+            WorldNode.Tags.PLAYER_SPAWN,
+            WorldNode.Tags.ENEMY_SPAWN,
+            WorldNode.Tags.ITEM_SPAWN,
+            WorldNode.Tags.EXIT,
+            WorldNode.Tags.DOOR_MANUAL,
+            WorldNode.Tags.SOCKET,
+            WorldNode.Tags.LADDER
+        )
+
+        for (tag in allTags) {
+            val nodeHasTag = currentNode?.tags?.contains(tag) == true
+            val hovered = mx >= palX + 8f && mx < palX + 8f + btnW && my >= by && my < by + btnH
+
+            // Draw tag button
+            if (nodeHasTag) {
+                ui.drawRect(palX + 8f, by, btnW, btnH, 0.3f, 0.50f, 0.35f, 0.9f)
+            } else if (hovered) {
+                ui.drawRect(palX + 8f, by, btnW, btnH, 0.2f, 0.26f, 0.38f, 0.7f)
+            } else {
+                ui.drawRect(palX + 8f, by, btnW, btnH, 0.15f, 0.17f, 0.22f, 0.6f)
+            }
+
+            // Display name: convert "player_spawn" → "Player Spawn"
+            val displayName = tag.replace('_', ' ').split(' ').joinToString(" ") {
+                it.replaceFirstChar { c -> c.uppercaseChar() }
+            }
+            val checkmark = if (nodeHasTag) "✓ " else "  "
+            ui.drawText("$checkmark$displayName", palX + 12f, by + 5f, 0.82f, 0.82f, 0.9f, 1f, 1f)
+
+            if (hovered && inputSystem.isMouseButtonJustPressed(0) && currentNode != null) {
+                if (nodeHasTag) {
+                    currentNode.tags.remove(tag)
+                } else {
+                    currentNode.tags.add(tag)
+                }
+            }
+
+            by += btnH + 4f
+        }
+
+        by += 8f
+        // Show current node info
+        if (currentNode != null) {
+            val tagCount = currentNode.tags.size
+            ui.drawText("Node ($cursorX, $cursorY, $currentZ)", palX + 10f, by, 0.55f, 0.6f, 0.7f, 0.8f, 1f)
+            by += 16f
+            ui.drawText("Active tags: $tagCount", palX + 10f, by, 0.45f, 0.5f, 0.6f, 0.7f, 1f)
+        } else {
+            ui.drawText("No node selected", palX + 10f, by, 0.45f, 0.5f, 0.6f, 0.6f, 1f)
+        }
+        by += 20f
+
+        ui.drawText("Click tag to toggle", palX + 10f, by, 0.45f, 0.5f, 0.6f, 0.7f, 0.9f)
+        by += 24f
+
+        // Layer info
         ui.drawText("Layer: $currentZ / ${w.depth - 1}", palX + 8f, by, 0.6f, 0.65f, 0.75f, 1f, 1.1f)
         by += 20f
         ui.drawText("Z/X to change layer", palX + 8f, by, 0.45f, 0.5f, 0.6f, 0.7f, 1f)
@@ -1660,8 +1757,207 @@ class MapEditor(
         ui.drawText(label, x + 6f, y + 5f, 0.82f, 0.82f, 0.9f, 1f, 1.1f)
 
         if (hovered && inputSystem.isMouseButtonJustPressed(0)) {
-            // Toggle: clicking selected tool deselects it
             currentTool = if (selected) null else tool
+        }
+    }
+
+    /**
+     * Draw a model preview button in the palette. Renders a small 3D preview of the mesh
+     * using projected wireframe within the button bounds.
+     */
+    private fun drawModelPreviewButton(
+        x: Float, y: Float, w: Float, h: Float,
+        mesh: MeshData?, tool: EditorTool, label: String,
+        colorR: Float, colorG: Float, colorB: Float,
+        mx: Float, my: Float
+    ) {
+        val selected = currentTool == tool
+        val hovered = mx >= x && mx < x + w && my >= y && my < y + h
+
+        // Background
+        if (selected) {
+            ui.drawRect(x, y, w, h, 0.3f, 0.42f, 0.65f, 0.9f)
+        } else if (hovered) {
+            ui.drawRect(x, y, w, h, 0.2f, 0.26f, 0.38f, 0.7f)
+        } else {
+            ui.drawRect(x, y, w, h, 0.15f, 0.17f, 0.22f, 0.6f)
+        }
+
+        // Border
+        val bc = if (selected) 0.55f else 0.25f
+        ui.drawRect(x, y, w, 1f, bc, bc + 0.1f, bc + 0.15f, 0.8f)
+        ui.drawRect(x, y + h - 1f, w, 1f, bc, bc + 0.1f, bc + 0.15f, 0.8f)
+        ui.drawRect(x, y, 1f, h, bc, bc + 0.1f, bc + 0.15f, 0.8f)
+        ui.drawRect(x + w - 1f, y, 1f, h, bc, bc + 0.1f, bc + 0.15f, 0.8f)
+
+        if (mesh != null) {
+            // Draw a small wireframe preview of the model
+            drawMeshPreview(mesh, x + 4f, y + 4f, w - 8f, h - 20f, colorR, colorG, colorB)
+        }
+
+        // Label below the preview
+        ui.drawText(label, x + 6f, y + h - 16f, 0.75f, 0.75f, 0.85f, 0.9f, 0.9f)
+
+        if (hovered && inputSystem.isMouseButtonJustPressed(0)) {
+            currentTool = if (selected) null else tool
+        }
+    }
+
+    /**
+     * Render a small wireframe preview of a MeshData within the given screen rectangle.
+     * Uses a fixed isometric-like projection to show the model shape.
+     */
+    private fun drawMeshPreview(
+        mesh: MeshData,
+        px: Float, py: Float, pw: Float, ph: Float,
+        r: Float, g: Float, b: Float
+    ) {
+        val verts = mesh.vertices
+        val indices = mesh.indices
+        val scale = mesh.scale
+        val cx = mesh.center.x
+        val cy = mesh.center.y
+        val cz = mesh.center.z
+
+        // Fixed preview rotation angles
+        val azRad = Math.toRadians(35.0).toFloat()
+        val elRad = Math.toRadians(30.0).toFloat()
+        val cosA = cos(azRad); val sinA = sin(azRad)
+        val cosE = cos(elRad); val sinE = sin(elRad)
+
+        // Project model vertex to 2D preview space
+        fun projectVert(idx: Int): Pair<Float, Float> {
+            val vi = idx * 6
+            val mx2 = (verts[vi] - cx) * scale
+            val my2 = (verts[vi + 1] - cy) * scale
+            val mz = (verts[vi + 2] - cz) * scale
+            // Swap Y↔Z (model Y-up → world Z-up)
+            val wx = mx2; val wy = mz; val wz = my2
+            // Rotate
+            val rx = wx * cosA + wy * sinA
+            val ry = -wx * sinA + wy * cosA
+            val fz = ry * sinE + wz * cosE
+            // Map to preview rect (centered)
+            val screenX = px + pw / 2f + rx * pw * 0.7f
+            val screenY = py + ph / 2f - fz * ph * 0.7f
+            return screenX to screenY
+        }
+
+        // Draw triangles as wireframe edges
+        val meshColors = mesh.colors
+        val drawnEdges = mutableSetOf<Long>()
+        var i = 0
+        while (i < indices.size - 2) {
+            val i0 = indices[i].toInt() and 0xFFFF
+            val i1 = indices[i + 1].toInt() and 0xFFFF
+            val i2 = indices[i + 2].toInt() and 0xFFFF
+
+            for ((a, b2) in listOf(i0 to i1, i1 to i2, i2 to i0)) {
+                val edgeKey = if (a < b2) a.toLong() shl 32 or b2.toLong() else b2.toLong() shl 32 or a.toLong()
+                if (drawnEdges.add(edgeKey)) {
+                    val (x1, y1) = projectVert(a)
+                    val (x2, y2) = projectVert(b2)
+                    // Use palette color of first vertex if available
+                    val er = if (meshColors != null) meshColors[a * 3] else r + 0.2f
+                    val eg = if (meshColors != null) meshColors[a * 3 + 1] else g + 0.2f
+                    val eb = if (meshColors != null) meshColors[a * 3 + 2] else b + 0.2f
+                    debugRenderer.drawLine(x1, y1, x2, y2, er, eg, eb, 0.7f, 1f)
+                }
+            }
+            i += 3
+        }
+    }
+
+    /**
+     * Draw highlight for the hovered face or edge based on the current tool.
+     */
+    private fun drawFaceEdgeHighlight(w: World) {
+        if (hoveredFace == HoveredFace.NONE) return
+        if (cursorX !in 0 until w.width || cursorY !in 0 until w.height) return
+
+        val bx = cursorX.toFloat()
+        val by = cursorY.toFloat()
+        val bz = currentZ.toFloat()
+        val highlightR = 0.2f; val highlightG = 0.8f; val highlightB = 1.0f; val highlightA = 0.4f
+
+        when (hoveredFace) {
+            HoveredFace.BOTTOM -> {
+                // Highlight bottom face (z = bz)
+                val p0 = proj(bx, by, bz)
+                val p1 = proj(bx + 1f, by, bz)
+                val p2 = proj(bx + 1f, by + 1f, bz)
+                val p3 = proj(bx, by + 1f, bz)
+                ui.drawQuad(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y,
+                    highlightR, highlightG, highlightB, highlightA)
+                // Draw border lines
+                debugRenderer.drawLine(p0.x, p0.y, p1.x, p1.y, highlightR, highlightG, highlightB, 0.8f, 2f)
+                debugRenderer.drawLine(p1.x, p1.y, p2.x, p2.y, highlightR, highlightG, highlightB, 0.8f, 2f)
+                debugRenderer.drawLine(p2.x, p2.y, p3.x, p3.y, highlightR, highlightG, highlightB, 0.8f, 2f)
+                debugRenderer.drawLine(p3.x, p3.y, p0.x, p0.y, highlightR, highlightG, highlightB, 0.8f, 2f)
+            }
+            HoveredFace.TOP -> {
+                // Highlight top face (z = bz + 1)
+                val p0 = proj(bx, by, bz + 1f)
+                val p1 = proj(bx + 1f, by, bz + 1f)
+                val p2 = proj(bx + 1f, by + 1f, bz + 1f)
+                val p3 = proj(bx, by + 1f, bz + 1f)
+                ui.drawQuad(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y,
+                    highlightR, highlightG, highlightB, highlightA)
+                debugRenderer.drawLine(p0.x, p0.y, p1.x, p1.y, highlightR, highlightG, highlightB, 0.8f, 2f)
+                debugRenderer.drawLine(p1.x, p1.y, p2.x, p2.y, highlightR, highlightG, highlightB, 0.8f, 2f)
+                debugRenderer.drawLine(p2.x, p2.y, p3.x, p3.y, highlightR, highlightG, highlightB, 0.8f, 2f)
+                debugRenderer.drawLine(p3.x, p3.y, p0.x, p0.y, highlightR, highlightG, highlightB, 0.8f, 2f)
+            }
+            HoveredFace.EDGE_NORTH -> {
+                // Highlight north face (y = by + 1)
+                val p0 = proj(bx, by + 1f, bz)
+                val p1 = proj(bx + 1f, by + 1f, bz)
+                val p2 = proj(bx + 1f, by + 1f, bz + 1f)
+                val p3 = proj(bx, by + 1f, bz + 1f)
+                ui.drawQuad(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y,
+                    highlightR, highlightG, highlightB, highlightA)
+                debugRenderer.drawLine(p0.x, p0.y, p1.x, p1.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p1.x, p1.y, p2.x, p2.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p2.x, p2.y, p3.x, p3.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p3.x, p3.y, p0.x, p0.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+            }
+            HoveredFace.EDGE_SOUTH -> {
+                val p0 = proj(bx, by, bz)
+                val p1 = proj(bx + 1f, by, bz)
+                val p2 = proj(bx + 1f, by, bz + 1f)
+                val p3 = proj(bx, by, bz + 1f)
+                ui.drawQuad(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y,
+                    highlightR, highlightG, highlightB, highlightA)
+                debugRenderer.drawLine(p0.x, p0.y, p1.x, p1.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p1.x, p1.y, p2.x, p2.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p2.x, p2.y, p3.x, p3.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p3.x, p3.y, p0.x, p0.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+            }
+            HoveredFace.EDGE_EAST -> {
+                val p0 = proj(bx + 1f, by, bz)
+                val p1 = proj(bx + 1f, by + 1f, bz)
+                val p2 = proj(bx + 1f, by + 1f, bz + 1f)
+                val p3 = proj(bx + 1f, by, bz + 1f)
+                ui.drawQuad(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y,
+                    highlightR, highlightG, highlightB, highlightA)
+                debugRenderer.drawLine(p0.x, p0.y, p1.x, p1.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p1.x, p1.y, p2.x, p2.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p2.x, p2.y, p3.x, p3.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p3.x, p3.y, p0.x, p0.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+            }
+            HoveredFace.EDGE_WEST -> {
+                val p0 = proj(bx, by, bz)
+                val p1 = proj(bx, by + 1f, bz)
+                val p2 = proj(bx, by + 1f, bz + 1f)
+                val p3 = proj(bx, by, bz + 1f)
+                ui.drawQuad(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y,
+                    highlightR, highlightG, highlightB, highlightA)
+                debugRenderer.drawLine(p0.x, p0.y, p1.x, p1.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p1.x, p1.y, p2.x, p2.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p2.x, p2.y, p3.x, p3.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p3.x, p3.y, p0.x, p0.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+            }
+            HoveredFace.NONE -> {}
         }
     }
 
