@@ -18,23 +18,78 @@ layout(set = 0, binding = 0) uniform LightingUBO {
 // 3D occupancy grid as SSBO: 1 uint per cell
 // Bit flags: bit0=north(Y+), bit1=south(Y-), bit2=east(X+), bit3=west(X-)
 //            bit4=floor(Z-), bit5=ceiling(Z+)
+// bits 7-15: shadow triangle count for this cell (0-511)
+// bits 16-31: shadow triangle start index in shadow SSBO
 layout(set = 0, binding = 1) readonly buffer OccupancyGrid {
     uint cells[];
 } grid;
 
+// Shadow mesh triangles SSBO: packed as vec4 triplets per triangle
+// Each triangle = 3 consecutive vec4s: (v0.xyz, 0), (v1.xyz, 0), (v2.xyz, 0)
+layout(set = 0, binding = 2) readonly buffer ShadowTriangles {
+    vec4 tris[];
+} shadowTris;
+
 layout(location = 0) out vec4 outColor;
 
-/// Get wall flags for grid cell (ix,iy,iz)
+/// Get wall flags for grid cell (ix,iy,iz) — returns lower 7 bits only
 uint getWallFlags(int ix, int iy, int iz) {
     if (ix < 0 || ix >= lighting.gridW ||
         iy < 0 || iy >= lighting.gridH ||
         iz < 0 || iz >= lighting.gridD) return 0u;
     uint idx = uint(iz * lighting.gridW * lighting.gridH + iy * lighting.gridW + ix);
-    return grid.cells[idx];
+    return grid.cells[idx] & 0x7Fu;
+}
+
+/// Get shadow triangle range for a grid cell.
+/// Returns (startIndex, count) packed from bits 16-31 and 7-15.
+void getShadowTriRange(int ix, int iy, int iz, out int start, out int count) {
+    if (ix < 0 || ix >= lighting.gridW ||
+        iy < 0 || iy >= lighting.gridH ||
+        iz < 0 || iz >= lighting.gridD) {
+        start = 0; count = 0; return;
+    }
+    uint idx = uint(iz * lighting.gridW * lighting.gridH + iy * lighting.gridW + ix);
+    uint cell = grid.cells[idx];
+    start = int((cell >> 16u) & 0xFFFFu);
+    count = int((cell >> 7u) & 0x1FFu);
+}
+
+/// Möller–Trumbore ray-triangle intersection.
+/// Returns true if ray (orig, dir) hits triangle (v0,v1,v2) at t in (0, maxT).
+bool rayTriangleIntersect(vec3 orig, vec3 dir, vec3 v0, vec3 v1, vec3 v2, float maxT) {
+    vec3 e1 = v1 - v0;
+    vec3 e2 = v2 - v0;
+    vec3 h = cross(dir, e2);
+    float a = dot(e1, h);
+    if (abs(a) < 1e-6) return false;
+    float f = 1.0 / a;
+    vec3 s = orig - v0;
+    float u = f * dot(s, h);
+    if (u < 0.0 || u > 1.0) return false;
+    vec3 q = cross(s, e1);
+    float v = f * dot(dir, q);
+    if (v < 0.0 || u + v > 1.0) return false;
+    float t = f * dot(e2, q);
+    return t > 0.001 && t < maxT;
+}
+
+/// Test ray against all shadow triangles in a given cell.
+bool hitsShadowMesh(vec3 orig, vec3 dir, float maxT, int cellX, int cellY, int cellZ) {
+    int start, count;
+    getShadowTriRange(cellX, cellY, cellZ, start, count);
+    for (int i = 0; i < count && i < 256; i++) {
+        int base = (start + i) * 3; // 3 vec4s per triangle
+        vec3 v0 = shadowTris.tris[base + 0].xyz;
+        vec3 v1 = shadowTris.tris[base + 1].xyz;
+        vec3 v2 = shadowTris.tris[base + 2].xyz;
+        if (rayTriangleIntersect(orig, dir, v0, v1, v2, maxT)) return true;
+    }
+    return false;
 }
 
 /// Ray-march through the voxel grid from 'from' to 'to' using 3D DDA.
-/// Checks wall edges (thin planes on cell boundaries) instead of full cell occupancy.
+/// Tests wall flags at cell boundaries and shadow mesh triangles within cells.
 bool isOccluded(vec3 from, vec3 to) {
     vec3 d = to - from;
     float dist = length(d);
@@ -77,6 +132,9 @@ bool isOccluded(vec3 from, vec3 to) {
     for (int step = 0; step < 64; step++) {
         // Reached the target voxel — no occlusion
         if (ix == ex && iy == ey && iz == ez) return false;
+
+        // Shadow mesh intersection: test ray against mesh triangles in this cell.
+        if (hitsShadowMesh(from, dir, dist, ix, iy, iz)) return true;
 
         // Determine which axis boundary to cross next and check for wall edges
         if (tMaxX < tMaxY) {
@@ -152,9 +210,10 @@ void main() {
     }
 
     // Offset world position along normal to avoid self-shadowing.
-    // Surface pixels sit exactly on the boundary of an occupied cell,
-    // so we push the shadow ray origin slightly outward.
-    vec3 surfacePos = v_worldPos + N * 0.05;
+    // A generous offset pushes the ray origin well past the fragment's own
+    // surface so that ray-triangle intersection min_t can reject nearby
+    // self-hits while still catching occluder geometry.
+    vec3 surfacePos = v_worldPos + N * 0.15;
 
     // Ambient minimum
     float ambient = 0.15;

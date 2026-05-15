@@ -43,6 +43,9 @@ class SimpleUI(
     private var occupancySsboBuffer: Long = VK_NULL_HANDLE
     private var occupancySsboAlloc: Long = VK_NULL_HANDLE
     private var occupancySsboSize: Long = 0
+    private var shadowTriSsboBuffer: Long = VK_NULL_HANDLE
+    private var shadowTriSsboAlloc: Long = VK_NULL_HANDLE
+    private var shadowTriSsboSize: Long = 0
 
     // --- GPU-rasterized 3D pipeline (depth-buffered, VP transform on GPU) ---
     private var gpuPipeline: Long = VK_NULL_HANDLE
@@ -551,9 +554,10 @@ class SimpleUI(
     private fun createLitDescriptors() {
         MemoryStack.stackPush().use { stack ->
             // Layout: binding 0 = UBO (lighting data), binding 1 = SSBO (occupancy grid)
-            val bindings = VkDescriptorSetLayoutBinding.calloc(2, stack)
+            val bindings = VkDescriptorSetLayoutBinding.calloc(3, stack)
             bindings.get(0).binding(0).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT)
             bindings.get(1).binding(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT)
+            bindings.get(2).binding(2).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT)
 
             val layoutCI = VkDescriptorSetLayoutCreateInfo.calloc(stack)
                 .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO)
@@ -565,7 +569,7 @@ class SimpleUI(
             // Pool
             val poolSizes = VkDescriptorPoolSize.calloc(2, stack)
             poolSizes.get(0).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1)
-            poolSizes.get(1).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1)
+            poolSizes.get(1).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(2)
             val poolCI = VkDescriptorPoolCreateInfo.calloc(stack)
                 .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO)
                 .maxSets(1)
@@ -612,13 +616,24 @@ class SimpleUI(
             occupancySsboBuffer = pBuf.get(0)
             occupancySsboAlloc = pAlloc.get(0)
 
+            // Shadow triangle SSBO: initial size = 16 bytes (empty)
+            shadowTriSsboSize = 16
+            val shadowCI = VkBufferCreateInfo.calloc(stack)
+                .sType(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO)
+                .size(shadowTriSsboSize)
+                .usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)
+                .sharingMode(VK_SHARING_MODE_EXCLUSIVE)
+            check(vmaCreateBuffer(context.allocator, shadowCI, allocCI, pBuf, pAlloc, null) == VK_SUCCESS)
+            shadowTriSsboBuffer = pBuf.get(0)
+            shadowTriSsboAlloc = pAlloc.get(0)
+
             updateLitDescriptorSet(uboSize.toLong())
         }
     }
 
     private fun updateLitDescriptorSet(uboSize: Long) {
         MemoryStack.stackPush().use { stack ->
-            val writes = VkWriteDescriptorSet.calloc(2, stack)
+            val writes = VkWriteDescriptorSet.calloc(3, stack)
 
             val uboBI = VkDescriptorBufferInfo.calloc(1, stack)
             uboBI.get(0).buffer(lightingUboBuffer).offset(0).range(uboSize)
@@ -639,6 +654,16 @@ class SimpleUI(
                 .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
                 .descriptorCount(1)
                 .pBufferInfo(ssboBI)
+
+            val shadowBI = VkDescriptorBufferInfo.calloc(1, stack)
+            shadowBI.get(0).buffer(shadowTriSsboBuffer).offset(0).range(shadowTriSsboSize)
+            writes.get(2)
+                .sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
+                .dstSet(litDescriptorSet)
+                .dstBinding(2)
+                .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+                .descriptorCount(1)
+                .pBufferInfo(shadowBI)
 
             vkUpdateDescriptorSets(context.vkDevice, writes, null)
         }
@@ -759,6 +784,63 @@ class SimpleUI(
             val count = minOf(occupancyGrid.size, gridW * gridH * gridD)
             buf.put(occupancyGrid, 0, count)
             vmaUnmapMemory(context.allocator, occupancySsboAlloc)
+        }
+    }
+
+    /**
+     * Upload shadow mesh triangles for mesh-accurate shadow casting.
+     * Each triangle is 9 floats (3 vertices × 3 components: x, y, z).
+     * The occupancy grid encodes per-cell triangle ranges:
+     *   bits 0-6: existing occupancy flags
+     *   bits 16-31: start index into this triangle array
+     *   bits 7-15: triangle count for this cell (max 511)
+     *
+     * @param triangles Flat array of triangle vertex data [v0x, v0y, v0z, v1x, v1y, v1z, v2x, v2y, v2z, ...]
+     */
+    fun updateShadowTriangles(triangles: FloatArray) {
+        // Each triangle = 9 floats = 36 bytes. Pad to vec4 alignment: 3 vec4s = 48 bytes per triangle
+        // Layout: vec4(v0.xyz, 0), vec4(v1.xyz, 0), vec4(v2.xyz, 0) per triangle
+        val triCount = triangles.size / 9
+        val requiredSize = (triCount * 3 * 16).toLong().coerceAtLeast(16L) // 3 vec4s per triangle, 16 bytes each
+        if (requiredSize != shadowTriSsboSize) {
+            if (shadowTriSsboBuffer != VK_NULL_HANDLE) {
+                vmaDestroyBuffer(context.allocator, shadowTriSsboBuffer, shadowTriSsboAlloc)
+            }
+            shadowTriSsboSize = requiredSize
+            MemoryStack.stackPush().use { stack ->
+                val ssboCI = VkBufferCreateInfo.calloc(stack)
+                    .sType(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO)
+                    .size(shadowTriSsboSize)
+                    .usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)
+                    .sharingMode(VK_SHARING_MODE_EXCLUSIVE)
+                val allocCI = VmaAllocationCreateInfo.calloc(stack).usage(VMA_MEMORY_USAGE_CPU_TO_GPU)
+                val pBuf = stack.mallocLong(1)
+                val pAlloc = stack.mallocPointer(1)
+                check(vmaCreateBuffer(context.allocator, ssboCI, allocCI, pBuf, pAlloc, null) == VK_SUCCESS)
+                shadowTriSsboBuffer = pBuf.get(0)
+                shadowTriSsboAlloc = pAlloc.get(0)
+            }
+            val uboSize = (16 + 32 * 16 + 32 * 16).toLong()
+            updateLitDescriptorSet(uboSize)
+        }
+
+        // Upload triangle data as vec4 array
+        if (triCount > 0) {
+            MemoryStack.stackPush().use { stack ->
+                val ppData = stack.mallocPointer(1)
+                vmaMapMemory(context.allocator, shadowTriSsboAlloc, ppData)
+                val buf = ppData.getByteBuffer(0, shadowTriSsboSize.toInt()).asFloatBuffer()
+                for (t in 0 until triCount) {
+                    val base = t * 9
+                    // vec4(v0.xyz, 0)
+                    buf.put(triangles[base + 0]); buf.put(triangles[base + 1]); buf.put(triangles[base + 2]); buf.put(0f)
+                    // vec4(v1.xyz, 0)
+                    buf.put(triangles[base + 3]); buf.put(triangles[base + 4]); buf.put(triangles[base + 5]); buf.put(0f)
+                    // vec4(v2.xyz, 0)
+                    buf.put(triangles[base + 6]); buf.put(triangles[base + 7]); buf.put(triangles[base + 8]); buf.put(0f)
+                }
+                vmaUnmapMemory(context.allocator, shadowTriSsboAlloc)
+            }
         }
     }
 
@@ -1230,6 +1312,7 @@ class SimpleUI(
         if (litVertexBuffer != VK_NULL_HANDLE) vmaDestroyBuffer(context.allocator, litVertexBuffer, litVertexAllocation)
         if (lightingUboBuffer != VK_NULL_HANDLE) vmaDestroyBuffer(context.allocator, lightingUboBuffer, lightingUboAlloc)
         if (occupancySsboBuffer != VK_NULL_HANDLE) vmaDestroyBuffer(context.allocator, occupancySsboBuffer, occupancySsboAlloc)
+        if (shadowTriSsboBuffer != VK_NULL_HANDLE) vmaDestroyBuffer(context.allocator, shadowTriSsboBuffer, shadowTriSsboAlloc)
         if (litDescriptorPool != VK_NULL_HANDLE) vkDestroyDescriptorPool(context.vkDevice, litDescriptorPool, null)
         if (litDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(context.vkDevice, litDescriptorSetLayout, null)
         if (litPipeline != VK_NULL_HANDLE) vkDestroyPipeline(context.vkDevice, litPipeline, null)

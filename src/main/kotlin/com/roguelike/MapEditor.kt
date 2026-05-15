@@ -23,6 +23,8 @@ private fun defaultTileFactory(type: String): com.roguelike.core.model.Tile? = w
     WallSouthTile.TYPE -> WallSouthTile()
     WallEastTile.TYPE -> WallEastTile()
     WallWestTile.TYPE -> WallWestTile()
+    StairsTile.TYPE -> StairsTile()
+    LadderTile.TYPE -> LadderTile()
     else -> null
 }
 
@@ -54,6 +56,8 @@ class MapEditor(
     private var floorMesh: MeshData? = null
     private var ceilingMesh: MeshData? = null
     private var wallMesh: MeshData? = null
+    private var ladderMesh: MeshData? = null
+    private var stairsMesh: MeshData? = null
 
     // Menu bar & file management
     private val menuBar = MenuBar(ui)
@@ -111,7 +115,11 @@ class MapEditor(
     private var currentTool: EditorTool? = EditorTool.FLOOR
     private var lastFrameTime: Long = System.nanoTime()
 
-    enum class EditorTool { FLOOR, CEILING, WALL, LIGHT }
+    enum class EditorTool { FLOOR, CEILING, WALL, LADDER, STAIRS, LIGHT }
+
+    /** Current stairs rotation in degrees (0=N, 90=E, 180=S, 270=W). */
+    private var stairsRotation = 0f
+    private var ladderRotation = 0f
 
     /** Tools palette tab selection. */
     private enum class PaletteTab { STRUCTURES, LIGHTS, TAGS }
@@ -158,6 +166,14 @@ class MapEditor(
             wallMesh = assetLoader.loadModel("wall", "models/vox/wall/wall.obj")
             println("[MapEditor] Loaded wall model: ${wallMesh!!.vertices.size / 6} verts, ${wallMesh!!.indices.size} indices, scale=${wallMesh!!.scale}, center=${wallMesh!!.center}")
         } catch (e: Exception) { println("[MapEditor] Failed to load wall model: ${e.message}"); e.printStackTrace() }
+        try {
+            ladderMesh = assetLoader.loadModel("ladder", "models/vox/stairs/ladder_vertical_n.obj")
+            println("[MapEditor] Loaded ladder model: ${ladderMesh!!.vertices.size / 6} verts")
+        } catch (e: Exception) { println("[MapEditor] Failed to load ladder model: ${e.message}"); e.printStackTrace() }
+        try {
+            stairsMesh = assetLoader.loadModel("stairs", "models/vox/stairs/stairs_n.obj")
+            println("[MapEditor] Loaded stairs model: ${stairsMesh!!.vertices.size / 6} verts")
+        } catch (e: Exception) { println("[MapEditor] Failed to load stairs model: ${e.message}"); e.printStackTrace() }
 
         // Create or load a world
         val saveFile = File("saved-worlds/world.wld")
@@ -382,6 +398,14 @@ class MapEditor(
             if (inputSystem.isKeyJustPressed(GLFW_KEY_2)) currentTool = EditorTool.CEILING
             if (inputSystem.isKeyJustPressed(GLFW_KEY_3)) currentTool = EditorTool.WALL
             if (inputSystem.isKeyJustPressed(GLFW_KEY_4)) currentTool = EditorTool.LIGHT
+            if (inputSystem.isKeyJustPressed(GLFW_KEY_5)) currentTool = EditorTool.LADDER
+            if (inputSystem.isKeyJustPressed(GLFW_KEY_6)) currentTool = EditorTool.STAIRS
+            if (currentTool == EditorTool.STAIRS && inputSystem.isKeyJustPressed(GLFW_KEY_R)) {
+                stairsRotation = (stairsRotation + 90f) % 360f
+            }
+            if (currentTool == EditorTool.LADDER && inputSystem.isKeyJustPressed(GLFW_KEY_R)) {
+                ladderRotation = (ladderRotation + 90f) % 360f
+            }
 
             // Cursor
             updateCursorFromMouse(w)
@@ -393,18 +417,20 @@ class MapEditor(
             if (ctrlHeld && inputSystem.isMouseButtonJustPressed(0)) {
                 when (selectedPaletteTab) {
                     PaletteTab.STRUCTURES -> {
-                        // Remove structure at cursor based on hovered face
                         if (cursorX in 0 until w.width && cursorY in 0 until w.height) {
                             val node = w.getNode(cursorX, cursorY, currentZ)
                             if (node != null) {
-                                when (hoveredFace) {
-                                    HoveredFace.BOTTOM -> node.removeTile(TileSlot.FLOOR)
-                                    HoveredFace.TOP -> node.removeTile(TileSlot.CEILING)
-                                    HoveredFace.EDGE_NORTH -> node.removeTile(TileSlot.WALL_NORTH)
-                                    HoveredFace.EDGE_SOUTH -> node.removeTile(TileSlot.WALL_SOUTH)
-                                    HoveredFace.EDGE_EAST -> node.removeTile(TileSlot.WALL_EAST)
-                                    HoveredFace.EDGE_WEST -> node.removeTile(TileSlot.WALL_WEST)
-                                    HoveredFace.NONE -> node.clear()
+                                when (currentTool) {
+                                    EditorTool.LADDER, EditorTool.STAIRS -> node.removeTile(TileSlot.STAIRS)
+                                    else -> when (hoveredFace) {
+                                        HoveredFace.BOTTOM -> node.removeTile(TileSlot.FLOOR)
+                                        HoveredFace.TOP -> node.removeTile(TileSlot.CEILING)
+                                        HoveredFace.EDGE_NORTH -> node.removeTile(TileSlot.WALL_NORTH)
+                                        HoveredFace.EDGE_SOUTH -> node.removeTile(TileSlot.WALL_SOUTH)
+                                        HoveredFace.EDGE_EAST -> node.removeTile(TileSlot.WALL_EAST)
+                                        HoveredFace.EDGE_WEST -> node.removeTile(TileSlot.WALL_WEST)
+                                        HoveredFace.NONE -> node.clear()
+                                    }
                                 }
                             }
                         }
@@ -419,10 +445,16 @@ class MapEditor(
                         }
                     }
                     PaletteTab.TAGS -> {
-                        // Ctrl+Click removes all tags from the node
+                        // Ctrl+Click removes the selected tag (or all tags if none selected)
                         if (cursorX in 0 until w.width && cursorY in 0 until w.height) {
                             val node = w.getNode(cursorX, cursorY, currentZ)
-                            node?.tags?.clear()
+                            if (node != null) {
+                                if (selectedTag != null) {
+                                    node.tags.remove(selectedTag)
+                                } else {
+                                    node.tags.clear()
+                                }
+                            }
                         }
                     }
                 }
@@ -433,6 +465,13 @@ class MapEditor(
                 if (cursorX in 0 until w.width && cursorY in 0 until w.height) {
                     val node = w.getNode(cursorX, cursorY, currentZ)
                     if (node != null) {
+                        // Tag placement when Tags tab is active
+                        if (selectedPaletteTab == PaletteTab.TAGS && selectedTag != null && inputSystem.isMouseButtonJustPressed(0)) {
+                            val tag = selectedTag!!
+                            if (!node.tags.contains(tag)) {
+                                node.tags.add(tag)
+                            }
+                        }
                         when (currentTool) {
                             EditorTool.FLOOR -> node.setTile(FloorTile())
                             EditorTool.CEILING -> node.setTile(CeilingTile())
@@ -443,8 +482,14 @@ class MapEditor(
                                     HoveredFace.EDGE_SOUTH -> node.setTile(WallSouthTile())
                                     HoveredFace.EDGE_EAST -> node.setTile(WallEastTile())
                                     HoveredFace.EDGE_WEST -> node.setTile(WallWestTile())
-                                    else -> {} // No edge hovered, do nothing
+                                    else -> {}
                                 }
+                            }
+                            EditorTool.LADDER -> {
+                                val t = LadderTile(); t.rotationY = ladderRotation; node.setTile(t)
+                            }
+                            EditorTool.STAIRS -> {
+                                val t = StairsTile(); t.rotationY = stairsRotation; node.setTile(t)
                             }
                             EditorTool.LIGHT -> {} // handled below
                             null -> {} // no tool selected
@@ -677,7 +722,7 @@ class MapEditor(
                     }
                 }
             }
-            EditorTool.WALL -> {
+            EditorTool.WALL, EditorTool.LADDER -> {
                 // Find closest edge of the cube the ray is near
                 // Test all 4 face planes and find the closest hit
                 data class FaceHit(val face: HoveredFace, val t: Float)
@@ -832,13 +877,156 @@ class MapEditor(
     }
 
     /**
-     * Render a MeshData model at a given world position using GPU triangles.
+     * Collect world-space shadow triangles from a mesh at a given node position.
+     * Applies the same transform as drawModelAtNode (center, scale, Y↔Z swap, rotation, translate).
+     * Appends 9 floats per triangle (v0xyz, v1xyz, v2xyz) to the output list.
+     * Returns the number of triangles appended.
+     */
+    private fun collectShadowTriangles(
+        mesh: MeshData, nodeX: Float, nodeY: Float, nodeZ: Float,
+        offsetX: Float, offsetY: Float, offsetZ: Float,
+        rotationYDeg: Float, out: MutableList<Float>
+    ): Int {
+        val verts = mesh.vertices
+        val indices = mesh.indices
+        val scale = mesh.scale
+        val cx = mesh.center.x; val cy = mesh.center.y; val cz = mesh.center.z
+        val radY = Math.toRadians(rotationYDeg.toDouble()).toFloat()
+        val cosY = cos(radY); val sinY = sin(radY)
+
+        fun xformPos(idx: Int): FloatArray {
+            val vi = idx * 6
+            val mx = (verts[vi] - cx) * scale
+            val my = (verts[vi + 1] - cy) * scale
+            val mz = (verts[vi + 2] - cz) * scale
+            var px = mx; var py = mz; var pz = my
+            if (rotationYDeg != 0f) {
+                val rpx = px * cosY - py * sinY
+                val rpy = px * sinY + py * cosY
+                px = rpx; py = rpy
+            }
+            px += nodeX + 0.5f + offsetX
+            py += nodeY + 0.5f + offsetY
+            pz += nodeZ + 0.5f + offsetZ
+            return floatArrayOf(px, py, pz)
+        }
+
+        var triCount = 0
+        var i = 0
+        while (i < indices.size - 2) {
+            val v0 = xformPos(indices[i].toInt() and 0xFFFF)
+            val v1 = xformPos(indices[i + 1].toInt() and 0xFFFF)
+            val v2 = xformPos(indices[i + 2].toInt() and 0xFFFF)
+            out.add(v0[0]); out.add(v0[1]); out.add(v0[2])
+            out.add(v1[0]); out.add(v1[1]); out.add(v1[2])
+            out.add(v2[0]); out.add(v2[1]); out.add(v2[2])
+            triCount++
+            i += 3
+        }
+        return triCount
+    }
+
+    /**
+     * Add a synthetic shadow occluder for stairs.
+     *
+     * Add a synthetic shadow occluder box for stairs.
+     *
+     * Creates a full box enclosing the staircase cell (all 4 sides + top cap).
+     * The bottom is omitted because the floor covers it.
+     *
+     * This works because the origin-cell skip is disabled in the shader:
+     * fragments on stair surfaces have a normal offset (0.15) that pushes
+     * the ray origin past the thin model geometry, so self-intersection
+     * doesn't occur.  Fragments near the cell boundary (e.g., bottom step
+     * with offset along +Y) get pushed into the adjacent cell, so the DDA
+     * starts there and tests the stairs cell's shadow mesh normally.
+     */
+    private fun addStairsBackWall(
+        nodeX: Float, nodeY: Float, nodeZ: Float,
+        @Suppress("UNUSED_PARAMETER") rotationYDeg: Float,
+        out: MutableList<Float>
+    ): Int {
+        val x0 = nodeX;       val y0 = nodeY
+        val x1 = nodeX + 1f;  val y1 = nodeY + 1f
+        val zBot = nodeZ
+        val zTop = nodeZ + 1f
+
+        fun quad(ax: Float, ay: Float, az: Float,
+                 bx: Float, by: Float, bz: Float,
+                 cx: Float, cy: Float, cz: Float,
+                 dx: Float, dy: Float, dz: Float) {
+            out.add(ax); out.add(ay); out.add(az)
+            out.add(bx); out.add(by); out.add(bz)
+            out.add(cx); out.add(cy); out.add(cz)
+            out.add(ax); out.add(ay); out.add(az)
+            out.add(cx); out.add(cy); out.add(cz)
+            out.add(dx); out.add(dy); out.add(dz)
+        }
+
+        // North wall (Y+ face)
+        quad(x0, y1, zBot, x1, y1, zBot, x1, y1, zTop, x0, y1, zTop)
+        // South wall (Y- face)
+        quad(x0, y0, zBot, x1, y0, zBot, x1, y0, zTop, x0, y0, zTop)
+        // East wall (X+ face)
+        quad(x1, y0, zBot, x1, y1, zBot, x1, y1, zTop, x1, y0, zTop)
+        // West wall (X- face)
+        quad(x0, y0, zBot, x0, y1, zBot, x0, y1, zTop, x0, y0, zTop)
+        // Top cap (Z+ face)
+        quad(x0, y0, zTop, x1, y0, zTop, x1, y1, zTop, x0, y1, zTop)
+
+        return 10 // 5 quads × 2 triangles each
+    }
+
+    /**
+     * Draw a loaded mesh model at a specific grid node position using GPU triangles.
      * The model is scaled to fit within a 1x1x1 node and centered, then translated
      * to the node position with the given offsets.
      * @param rotationYDeg rotation around the Y axis in degrees (for wall orientation)
      */
     private var modelDrawLogCount = 0
     private var renderLogFrames = 0
+
+    /**
+     * Draw a 3D direction arrow on top of a stair/ladder tile.
+     * The arrow points in the facing direction (north = +Y at rotation 0°).
+     * Rendered as a projected line with an arrowhead.
+     */
+    private fun drawDirectionArrow(nodeX: Float, nodeY: Float, nodeZ: Float, rotationYDeg: Float) {
+        val sw = ui.screenWidth
+        val sh = ui.screenHeight
+        val cx = nodeX + 0.5f
+        val cy = nodeY + 0.5f
+        val cz = nodeZ + 1.05f // slightly above the cell top
+
+        // Direction vector based on rotation (matches facingDirection mapping)
+        val normalized = ((rotationYDeg % 360f) + 360f) % 360f
+        val dx: Float; val dy: Float
+        when {
+            normalized < 45f || normalized >= 315f -> { dx = 0f; dy = 0.35f }   // North (+Y)
+            normalized < 135f                      -> { dx = 0.35f; dy = 0f }   // East (+X)
+            normalized < 225f                      -> { dx = 0f; dy = -0.35f }  // South (-Y)
+            else                                   -> { dx = -0.35f; dy = 0f }  // West (-X)
+        }
+
+        // Arrow shaft: from center-back to center-front
+        val tailX = cx - dx * 0.8f; val tailY = cy - dy * 0.8f
+        val tipX = cx + dx * 0.8f;  val tipY = cy + dy * 0.8f
+
+        val pTail = camera.project(org.joml.Vector3f(tailX, tailY, cz), sw, sh)
+        val pTip  = camera.project(org.joml.Vector3f(tipX, tipY, cz), sw, sh)
+
+        // Arrowhead wings (perpendicular to direction)
+        val backX = tipX - dx * 0.6f; val backY = tipY - dy * 0.6f
+        // Perpendicular: rotate (dx,dy) by 90°
+        val perpX = -dy; val perpY = dx
+        val pWing1 = camera.project(org.joml.Vector3f(backX + perpX * 0.4f, backY + perpY * 0.4f, cz), sw, sh)
+        val pWing2 = camera.project(org.joml.Vector3f(backX - perpX * 0.4f, backY - perpY * 0.4f, cz), sw, sh)
+
+        val r = 1f; val g = 1f; val b = 0f; val a = 0.9f; val t = 2.5f
+        debugRenderer.drawLine(pTail.x, pTail.y, pTip.x, pTip.y, r, g, b, a, t)
+        debugRenderer.drawLine(pTip.x, pTip.y, pWing1.x, pWing1.y, r, g, b, a, t)
+        debugRenderer.drawLine(pTip.x, pTip.y, pWing2.x, pWing2.y, r, g, b, a, t)
+    }
 
     private fun drawModelAtNode(
         mesh: MeshData, nodeX: Float, nodeY: Float, nodeZ: Float,
@@ -958,13 +1146,17 @@ class MapEditor(
         if (lightPreviewEnabled && w.lightSources.isNotEmpty()) {
             val gridW = w.width; val gridH = w.height; val gridD = w.depth
             val occupancy = IntArray(gridW * gridH * gridD)
+            // Collect shadow mesh triangles for stairs/ladders
+            val shadowTriangles = mutableListOf<Float>()
                 for (z in 0 until gridD) {
                     for (y in 0 until gridH) {
                         for (x in 0 until gridW) {
                             val node = w.getNode(x, y, z) ?: continue
-                            // Encode structure as bit flags:
-                            // bit 0 = north (Y+), bit 1 = south (Y-), bit 2 = east (X+), bit 3 = west (X-)
-                            // bit 4 = floor (Z-), bit 5 = ceiling (Z+)
+                            // Hybrid shadow occlusion:
+                            // - Walls/floors/ceilings use boundary flags (bits 0-5) checked
+                            //   at DDA cell crossings — accurate for planar structures.
+                            // - Stairs/ladders use model-based shadow triangles (bits 7-31)
+                            //   tested via ray-triangle intersection within cells.
                             var flags = 0
                             if (node.hasTile(TileSlot.WALL_NORTH)) flags = flags or 1
                             if (node.hasTile(TileSlot.WALL_SOUTH)) flags = flags or 2
@@ -972,6 +1164,29 @@ class MapEditor(
                             if (node.hasTile(TileSlot.WALL_WEST))  flags = flags or 8
                             if (node.hasTile(TileSlot.FLOOR))      flags = flags or 16
                             if (node.hasTile(TileSlot.CEILING))    flags = flags or 32
+
+                            var cellTriStart = shadowTriangles.size / 9
+                            var cellTriCount = 0
+
+                            // Collect shadow triangles for stairs/ladders
+                            if (node.hasTile(TileSlot.STAIRS)) {
+                                val tile = node.getTile(TileSlot.STAIRS)
+                                if (tile is StairsTile) {
+                                    stairsMesh?.let { cellTriCount += collectShadowTriangles(it, x.toFloat(), y.toFloat(), z.toFloat(), 0f, 0f, 0f, tile.rotationY, shadowTriangles) }
+                                } else if (tile is LadderTile) {
+                                    val rotY = tile.rotationY
+                                    val offX = when (rotY) { 90f -> 0.5f; 270f -> -0.5f; else -> 0f }
+                                    val offY = when (rotY) { 0f -> 0.5f; 180f -> -0.5f; else -> 0f }
+                                    ladderMesh?.let { cellTriCount += collectShadowTriangles(it, x.toFloat(), y.toFloat(), z.toFloat(), offX, offY, 0f, rotY, shadowTriangles) }
+                                }
+                            }
+
+                            // Encode shadow triangle range into flags
+                            if (cellTriCount > 0) {
+                                flags = flags or ((cellTriCount and 0x1FF) shl 7)
+                                flags = flags or ((cellTriStart and 0xFFFF) shl 16)
+                            }
+
                             occupancy[z * gridW * gridH + y * gridW + x] = flags
                         }
                     }
@@ -980,8 +1195,13 @@ class MapEditor(
                 SimpleUI.LightData(ls.x, ls.y, ls.z, ls.intensity, ls.colorR(), ls.colorG(), ls.colorB(), ls.radius)
             }
             ui.updateLighting(lights, occupancy, gridW, gridH, gridD)
+            // Upload shadow triangles
+            val triArray = FloatArray(shadowTriangles.size)
+            for (i in shadowTriangles.indices) triArray[i] = shadowTriangles[i]
+            ui.updateShadowTriangles(triArray)
         } else {
             ui.updateLighting(emptyList(), IntArray(1), 1, 1, 1)
+            ui.updateShadowTriangles(FloatArray(0))
         }
 
         // Always set up VP matrix for GPU model rendering
@@ -1002,7 +1222,8 @@ class MapEditor(
                     val hasWallS = node.hasTile(TileSlot.WALL_SOUTH)
                     val hasWallE = node.hasTile(TileSlot.WALL_EAST)
                     val hasWallW = node.hasTile(TileSlot.WALL_WEST)
-                    if (!(hasFloor || hasCeiling || hasWallN || hasWallS || hasWallE || hasWallW)) continue
+                    val hasStairs = node.hasTile(TileSlot.STAIRS)
+                    if (!(hasFloor || hasCeiling || hasWallN || hasWallS || hasWallE || hasWallW || hasStairs)) continue
                     modelNodeCount++
 
                     val tbx = x.toFloat()
@@ -1027,6 +1248,19 @@ class MapEditor(
                     if (hasWallW) {
                         wallMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = -0.5f, rotationYDeg = 90f, r = wallR, g = wallG, b = wallB) }
                     }
+                    if (hasStairs) {
+                        val tile = node.getTile(TileSlot.STAIRS)
+                        if (tile is StairsTile) {
+                            stairsMesh?.let { drawModelAtNode(it, tbx, tby, tbz, rotationYDeg = tile.rotationY, r = 0.45f, g = 0.40f, b = 0.35f) }
+                            drawDirectionArrow(tbx, tby, tbz, tile.rotationY)
+                        } else if (tile is LadderTile) {
+                            val rot = tile.rotationY
+                            val offX = when (rot) { 90f -> 0.5f; 270f -> -0.5f; else -> 0f }
+                            val offY = when (rot) { 0f -> 0.5f; 180f -> -0.5f; else -> 0f }
+                            ladderMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = offX, offsetY = offY, rotationYDeg = rot, r = 0.50f, g = 0.38f, b = 0.25f) }
+                            drawDirectionArrow(tbx, tby, tbz, rot)
+                        }
+                    }
                 }
             }
         }
@@ -1035,6 +1269,35 @@ class MapEditor(
             renderLogFrames++
             println("[MapEditor] renderGrid: modelNodeCount=$modelNodeCount floorMesh=${floorMesh != null} ceilingMesh=${ceilingMesh != null} wallMesh=${wallMesh != null} gpuRenderingEnabled=$gpuRenderingEnabled")
         }
+        // Draw tag indicators on nodes (small spheres + labels) — always visible
+        for (z in 0..currentZ) {
+            for (x in 0 until w.width) {
+                for (y in 0 until w.height) {
+                    val node = w.getNode(x, y, z) ?: continue
+                    if (node.tags.isEmpty()) continue
+                    var offsetZ = 0f
+                    for (tag in node.tags) {
+                        val wx = x + 0.5f
+                        val wy = y + 0.5f
+                        val wz = z + 0.85f + offsetZ
+                        // Draw small sphere at tag position
+                        debugRenderer.drawFilledSphere(wx, wy, wz, 0.12f, camera, 0.9f, 0.8f, 0.2f, 0.85f)
+                        debugRenderer.drawWireframeSphere(wx, wy, wz, 0.12f, camera, 1f, 1f, 0.4f, 0.9f, 8, 1.5f)
+                        // Draw tag name as text above the sphere
+                        val worldPos = org.joml.Vector3f(wx, wy, wz + 0.15f)
+                        val screenPos = camera.project(worldPos, sw, sh)
+                        if (screenPos.z in 0f..1f) {
+                            val label = tag.replace('_', ' ').uppercase()
+                            val tw = ui.textWidth(label) * 1.2f
+                            ui.drawRect(screenPos.x - tw / 2f - 3f, screenPos.y - 2f, tw + 6f, 17f, 0f, 0f, 0f, 0.6f)
+                            ui.drawText(label, screenPos.x - tw / 2f, screenPos.y, 1f, 0.95f, 0.3f, 1f, 1.2f)
+                        }
+                        offsetZ += 0.3f
+                    }
+                }
+            }
+        }
+
         // GPU rendering path: models already rendered above, just add overlays
         if (gpuRenderingEnabled) {            // Draw face/edge highlight
             drawFaceEdgeHighlight(w)
@@ -1063,7 +1326,7 @@ class MapEditor(
             val hudX = editorModesWidth + 6f
             val hudY = menuBar.barHeight + 4f
             val viewportRight = sw - toolsPaletteWidth - 10f
-            val toolName = currentTool?.name ?: "NONE"
+            val toolName = if (selectedPaletteTab == PaletteTab.TAGS) "TAG: ${selectedTag ?: "none"}" else (currentTool?.name ?: "NONE")
             ui.drawText("Tool: $toolName  Layer: $currentZ  [GPU]", hudX, hudY, 0.7f, 0.7f, 0.8f, 1f, 1f)
             val helpStr = "WASD: Pan  Shift+A/D: Rotate  Shift+W/S: Pitch  Shift+Q/E: Zoom  Z/X: Layer  Ctrl+Click: Erase  Ctrl+S: Save"
             ui.drawText(helpStr, hudX, sh - 30f, 0.5f, 0.55f, 0.65f, 0.8f, 1f)
@@ -1540,6 +1803,84 @@ class MapEditor(
                     EditorTool.WALL, "Wall", 0.55f, 0.42f, 0.30f, mx, my)
                 by += previewSize + previewPad
 
+                // Separator
+                ui.drawRect(palX + 8f, by, btnW, 1f, 0.3f, 0.35f, 0.45f, 0.4f)
+                by += 8f
+
+                // --- Ladder section ---
+                ui.drawText("Ladder", palX + 10f, by, 0.6f, 0.65f, 0.8f, 0.9f, 1.1f)
+                by += 18f
+
+                drawModelPreviewButton(palX + 8f, by, btnW.coerceAtMost(previewSize + 16f), previewSize, ladderMesh,
+                    EditorTool.LADDER, "Ladder", 0.50f, 0.38f, 0.25f, mx, my)
+                by += previewSize + previewPad
+
+                // Ladder rotation control (only when ladder tool is selected)
+                if (currentTool == EditorTool.LADDER) {
+                    val rotLabel = when (ladderRotation) {
+                        0f -> "North"; 90f -> "East"; 180f -> "South"; 270f -> "West"; else -> "${ladderRotation.toInt()}°"
+                    }
+                    ui.drawText("Facing: $rotLabel", palX + 14f, by, 0.7f, 0.75f, 0.85f, 1f, 1f)
+                    by += 18f
+
+                    val rotBtnW = 50f
+                    val rotBtnH = 22f
+                    val rotBtnX = palX + 14f
+                    val rotHovered = mx >= rotBtnX && mx < rotBtnX + rotBtnW && my >= by && my < by + rotBtnH
+                    if (rotHovered) {
+                        ui.drawRect(rotBtnX, by, rotBtnW, rotBtnH, 0.25f, 0.28f, 0.4f, 0.8f)
+                    } else {
+                        ui.drawRect(rotBtnX, by, rotBtnW, rotBtnH, 0.18f, 0.2f, 0.28f, 0.7f)
+                    }
+                    ui.drawText("Rotate", rotBtnX + 4f, by + 4f, 0.9f, 0.9f, 0.95f, 1f, 1f)
+                    if (rotHovered && inputSystem.isMouseButtonJustPressed(0)) {
+                        ladderRotation = (ladderRotation + 90f) % 360f
+                    }
+                    by += rotBtnH + 4f
+
+                    ui.drawText("R key to rotate", palX + 14f, by, 0.45f, 0.5f, 0.6f, 0.6f, 0.9f)
+                    by += 16f
+                }
+
+                // Separator
+                ui.drawRect(palX + 8f, by, btnW, 1f, 0.3f, 0.35f, 0.45f, 0.4f)
+                by += 8f
+
+                // --- Stairs section ---
+                ui.drawText("Stairs", palX + 10f, by, 0.6f, 0.65f, 0.8f, 0.9f, 1.1f)
+                by += 18f
+
+                drawModelPreviewButton(palX + 8f, by, btnW.coerceAtMost(previewSize + 16f), previewSize, stairsMesh,
+                    EditorTool.STAIRS, "Stairs", 0.45f, 0.40f, 0.35f, mx, my)
+                by += previewSize + previewPad
+
+                // Stairs rotation control (only when stairs tool is selected)
+                if (currentTool == EditorTool.STAIRS) {
+                    val rotLabel = when (stairsRotation) {
+                        0f -> "North"; 90f -> "East"; 180f -> "South"; 270f -> "West"; else -> "${stairsRotation.toInt()}°"
+                    }
+                    ui.drawText("Facing: $rotLabel", palX + 14f, by, 0.7f, 0.75f, 0.85f, 1f, 1f)
+                    by += 18f
+
+                    val rotBtnW = 50f
+                    val rotBtnH = 22f
+                    val rotBtnX = palX + 14f
+                    val rotHovered = mx >= rotBtnX && mx < rotBtnX + rotBtnW && my >= by && my < by + rotBtnH
+                    if (rotHovered) {
+                        ui.drawRect(rotBtnX, by, rotBtnW, rotBtnH, 0.25f, 0.28f, 0.4f, 0.8f)
+                    } else {
+                        ui.drawRect(rotBtnX, by, rotBtnW, rotBtnH, 0.18f, 0.2f, 0.28f, 0.7f)
+                    }
+                    ui.drawText("Rotate", rotBtnX + 4f, by + 4f, 0.9f, 0.9f, 0.95f, 1f, 1f)
+                    if (rotHovered && inputSystem.isMouseButtonJustPressed(0)) {
+                        stairsRotation = (stairsRotation + 90f) % 360f
+                    }
+                    by += rotBtnH + 4f
+
+                    ui.drawText("R key to rotate", palX + 14f, by, 0.45f, 0.5f, 0.6f, 0.6f, 0.9f)
+                    by += 16f
+                }
+
                 // Info text
                 by += 4f
                 ui.drawText("Ctrl+Click to erase", palX + 10f, by, 0.45f, 0.5f, 0.6f, 0.7f, 0.9f)
@@ -1680,16 +2021,21 @@ class MapEditor(
             WorldNode.Tags.EXIT,
             WorldNode.Tags.DOOR_MANUAL,
             WorldNode.Tags.SOCKET,
-            WorldNode.Tags.LADDER
+            WorldNode.Tags.LADDER,
+            WorldNode.Tags.STAIRS
         )
 
+        ui.drawText("Select tag to place:", palX + 10f, by, 0.5f, 0.55f, 0.65f, 0.8f, 0.9f)
+        by += 16f
+
         for (tag in allTags) {
+            val isSelected = selectedTag == tag
             val nodeHasTag = currentNode?.tags?.contains(tag) == true
             val hovered = mx >= palX + 8f && mx < palX + 8f + btnW && my >= by && my < by + btnH
 
-            // Draw tag button
-            if (nodeHasTag) {
-                ui.drawRect(palX + 8f, by, btnW, btnH, 0.3f, 0.50f, 0.35f, 0.9f)
+            // Draw tag button — highlight if selected as active brush
+            if (isSelected) {
+                ui.drawRect(palX + 8f, by, btnW, btnH, 0.25f, 0.40f, 0.60f, 0.9f)
             } else if (hovered) {
                 ui.drawRect(palX + 8f, by, btnW, btnH, 0.2f, 0.26f, 0.38f, 0.7f)
             } else {
@@ -1700,15 +2046,12 @@ class MapEditor(
             val displayName = tag.replace('_', ' ').split(' ').joinToString(" ") {
                 it.replaceFirstChar { c -> c.uppercaseChar() }
             }
-            val checkmark = if (nodeHasTag) "✓ " else "  "
-            ui.drawText("$checkmark$displayName", palX + 12f, by + 5f, 0.82f, 0.82f, 0.9f, 1f, 1f)
+            val marker = if (nodeHasTag) "● " else "  "
+            val selMarker = if (isSelected) "▸" else " "
+            ui.drawText("$selMarker$marker$displayName", palX + 12f, by + 5f, 0.82f, 0.82f, 0.9f, 1f, 1f)
 
-            if (hovered && inputSystem.isMouseButtonJustPressed(0) && currentNode != null) {
-                if (nodeHasTag) {
-                    currentNode.tags.remove(tag)
-                } else {
-                    currentNode.tags.add(tag)
-                }
+            if (hovered && inputSystem.isMouseButtonJustPressed(0)) {
+                selectedTag = if (isSelected) null else tag
             }
 
             by += btnH + 4f
@@ -1822,8 +2165,10 @@ class MapEditor(
         // Fixed preview rotation angles
         val azRad = Math.toRadians(35.0).toFloat()
         val elRad = Math.toRadians(30.0).toFloat()
-        val cosA = cos(azRad); val sinA = sin(azRad)
-        val cosE = cos(elRad); val sinE = sin(elRad)
+        val cosA = cos(azRad).toFloat()
+        val sinA = sin(azRad).toFloat()
+        val cosE = cos(elRad).toFloat()
+        val sinE = sin(elRad).toFloat()
 
         // Project model vertex to 2D preview space
         fun projectVert(idx: Int): Pair<Float, Float> {

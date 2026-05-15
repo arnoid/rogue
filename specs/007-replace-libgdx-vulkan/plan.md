@@ -146,9 +146,8 @@ The SimpleUI class contains three separate Vulkan graphics pipelines:
 
 2. **Lit-World Pipeline** — CPU-projected with per-pixel lighting
    - Vertex: pos2 + color4 + worldPos3 + normal3 = 48 bytes
-   - No depth test (CPU sorts back-to-front)
-   - Descriptor set: LightingUBO (binding 0) + OccupancyGrid SSBO (binding 1)
-   - Fragment shader: DDA ray-march through voxel grid
+   - No depth test (CPU sorts back-to-front)  Descriptor set: LightingUBO (binding 0) + OccupancyGrid SSBO (binding 1) + ShadowTriangles SSBO (binding 2)
+   - Fragment shader: hybrid DDA ray-march (wall flags at boundaries) + Möller–Trumbore ray-triangle intersection (mesh triangles within cells)
    - Used for: editor in LIGHTS mode (CPU projection)
 
 3. **GPU 3D Pipeline** — Depth-buffered world rendering
@@ -160,16 +159,128 @@ The SimpleUI class contains three separate Vulkan graphics pipelines:
 
 ### Shadow/Lighting Approaches
 
-**Approach A: Per-Pixel DDA Ray-Marching** (active in editor)
-- Fragment shader (`world_lit.frag.glsl`) receives interpolated world position + normal
-- UBO stores up to 32 lights (position, intensity, color, radius)
-- SSBO stores 3D occupancy grid (uint per cell, only walls are occluders)
-- Per pixel, per light: DDA ray-march from surface to light, checking voxel occupancy
-- Self-occlusion prevention: skip starting voxel in ray-march
-- Ambient minimum: 0.15 base illumination
-- Attenuation: intensity / (1 + dist² × 0.1)
+**Approach A: Hybrid DDA Ray-Marching + Mesh Shadow Triangles** (active in editor)
 
-**Approach B: Stencil Shadow Volumes** (ShadowVolumeRenderer)
+This is the primary lighting system. It combines two occlusion techniques in a single
+fragment shader pass:
+
+1. **Planar structures (walls, floors, ceilings)** use boundary flags checked at DDA
+   cell crossings. These are encoded in bits 0–5 of the occupancy grid cell.
+2. **Complex structures (stairs, ladders)** use ray-triangle intersection
+   (Möller–Trumbore) against their actual mesh geometry, uploaded as a separate SSBO.
+   Triangle ranges are encoded in bits 7–31 of the occupancy grid cell.
+
+#### GPU Data Layout
+
+Three buffers are bound to descriptor set 0:
+
+| Binding | Type | Content |
+|---------|------|---------|
+| 0 | UBO (`LightingUBO`) | `lightCount`, `gridW/H/D`, up to 32 lights × 2 vec4s each (pos+intensity, color+radius) |
+| 1 | SSBO (`OccupancyGrid`) | `uint[]` — one uint per grid cell, bit-packed (see below) |
+| 2 | SSBO (`ShadowTriangles`) | `vec4[]` — packed triangle vertices, 3 vec4s per triangle (xyz + padding) |
+
+#### Occupancy Grid Bit Layout (per cell uint)
+
+| Bits | Meaning |
+|------|---------|
+| 0 | North wall (Y+) |
+| 1 | South wall (Y−) |
+| 2 | East wall (X+) |
+| 3 | West wall (X−) |
+| 4 | Floor (Z−) |
+| 5 | Ceiling (Z+) |
+| 6 | Reserved |
+| 7–15 | Shadow triangle count for this cell (0–511) |
+| 16–31 | Shadow triangle start index in SSBO (0–65535) |
+
+#### CPU-Side Shadow Triangle Collection (MapEditor.kt)
+
+For each grid cell that contains a stairs or ladder structure:
+
+- **Stairs**: The actual stair mesh triangles are transformed to world space using
+  `collectShadowTriangles()` with the same transform as rendering (center, scale,
+  Y↔Z swap, rotation). No synthetic occluder geometry is used — the mesh itself
+  serves as the shadow caster, matching its visual appearance exactly.
+- **Ladders**: Same approach — `collectShadowTriangles()` extracts the ladder mesh
+  triangles with wall-offset positioning (±0.5 on the facing axis).
+
+The `collectShadowTriangles()` function:
+1. Iterates over the mesh's index buffer in groups of 3 (triangle list).
+2. For each vertex: subtracts mesh center, applies scale, swaps Y↔Z (model space to
+   world space), applies Y-axis rotation, then translates to node position + offset.
+3. Appends 9 floats per triangle (v0.xyz, v1.xyz, v2.xyz) to a flat list.
+4. Returns the triangle count for encoding into the occupancy grid.
+
+The flat float list is uploaded to a VMA-backed SSBO at binding 2. Each triangle
+occupies 3 vec4s (12 floats with w=0 padding) in the GPU buffer.
+
+#### Fragment Shader Algorithm (world_lit.frag.glsl)
+
+```
+main():
+  N = normalize(v_normal)
+  surfacePos = v_worldPos + N * 0.15          // normal offset to avoid self-shadowing
+  totalLight = vec3(0.15)                      // ambient minimum
+
+  for each light:
+    skip if NdotL <= 0 (back-face)
+    skip if distance > radius
+    skip if isOccluded(surfacePos, lightPos)
+    totalLight += lightColor * attenuation * NdotL
+
+  outColor = baseColor * clamp(totalLight, 0, 1)
+```
+
+`isOccluded(from, to)` — 3D DDA ray-march (max 64 steps):
+```
+  for each step:
+    if current cell == target cell: return false (reached light)
+
+    // Test mesh-based shadow triangles in current cell
+    if hitsShadowMesh(from, dir, dist, cell): return true
+
+    // Advance to next cell boundary (smallest tMax axis)
+    // At each boundary crossing, check wall flags:
+    //   - Current cell's exit-side flag OR next cell's entry-side flag
+    //   - If either is set, the ray hits a wall → return true
+    advance along smallest-tMax axis
+```
+
+`hitsShadowMesh(orig, dir, maxT, cell)`:
+```
+  decode (start, count) from occupancy grid bits 7-31
+  for i in 0..count:
+    read 3 vec4s from shadowTris SSBO at (start + i) * 3
+    if rayTriangleIntersect(orig, dir, v0, v1, v2, maxT): return true
+  return false
+```
+
+`rayTriangleIntersect()` — Möller–Trumbore algorithm:
+- Returns true if ray hits triangle at parameter t ∈ (0.001, maxT)
+- The 0.001 minimum prevents self-intersection from numerical noise
+
+#### Self-Shadowing Prevention
+
+Two mechanisms prevent fragments from incorrectly self-occluding:
+
+1. **Normal offset (0.15 units)**: The shadow ray origin is pushed 0.15 units along the
+   surface normal away from the geometry. This moves the ray start past the fragment's
+   own surface so thin model faces don't block their own light.
+2. **NdotL check**: Back-facing fragments (normal pointing away from light) are skipped
+   entirely before any shadow ray is cast, so they receive no light contribution
+   regardless of occlusion.
+
+The DDA does NOT skip the origin cell — this allows structures to cast shadows on their
+own surfaces (e.g., the vertical part of stairs blocking light on the horizontal steps).
+
+#### Light Attenuation
+
+`attenuation = intensity / (1.0 + dist² × 0.1)`
+
+Combined with radius cutoff and Lambertian NdotL.
+
+**Approach B: Stencil Shadow Volumes** (ShadowVolumeRenderer — legacy/alternative)
 - 4-pass per-light rendering: ambient → stencil-front → stencil-back → lit
 - UBOs: SceneUBO, LightUBO, MaterialUBO + OccluderSSBO
 - Stencil: depth-fail method (Carmack's Reverse)
@@ -183,7 +294,7 @@ The SimpleUI class contains three separate Vulkan graphics pipelines:
 | `ui.vert/frag.glsl` | SimpleUI 2D overlay | Font atlas sampling, solid color fallback |
 | `world_gpu.vert.glsl` | GPU 3D vertex transform | VP matrix push constant, passes worldPos/normal |
 | `world_lit.vert.glsl` | CPU-projected lit world | NDC screen positions, passes worldPos/normal |
-| `world_lit.frag.glsl` | Per-pixel DDA lighting | 32 lights, 3D occupancy SSBO, shadow ray-march |
+| `world_lit.frag.glsl` | Hybrid DDA + mesh-triangle lighting | 32 lights, occupancy SSBO (wall flags + tri ranges), shadow triangles SSBO, Möller–Trumbore intersection |
 | `ambient_pass.vert/frag.glsl` | Stencil shadow ambient | SceneUBO + MaterialUBO, ambient * diffuse |
 | `lit_pass.vert/frag.glsl` | Stencil shadow lit | LightUBO + MaterialUBO, diffuse lighting |
 | `shadow_volume.vert/frag.glsl` | Shadow volume geometry | Position-only, no color output |
@@ -205,8 +316,9 @@ The SimpleUI class contains three separate Vulkan graphics pipelines:
 - **State**: `selectedLightIndex`, `draggingLight`, `defaultLightRadius`, `defaultLightIntensity`
 
 ### Occupancy Grid Rules
-- Only wall tiles (`WALL_NORTH`, `WALL_SOUTH`, `WALL_EAST`, `WALL_WEST`) are marked as occupied
-- Floor tiles are NOT occluders (they are horizontal surfaces that don't block same-level light rays)
+- Walls (`WALL_NORTH/SOUTH/EAST/WEST`), floors, and ceilings use boundary flags (bits 0–5) for DDA cell-crossing occlusion
+- Stairs and ladders use mesh-based shadow triangles (bits 7–31) for ray-triangle occlusion within cells
+- Both mechanisms are tested during the same DDA ray-march pass
 - Grid indexed as `[z * gridW * gridH + y * gridW + x]`
 
 ## Dependencies (build.gradle.kts)
