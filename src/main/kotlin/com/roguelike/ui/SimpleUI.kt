@@ -64,8 +64,9 @@ class SimpleUI(
     private val vertexData = FloatArray(maxQuads * verticesPerQuad * floatsPerVertex)
     private var quadCount = 0
 
-    private val gpuVertexData = FloatArray(maxGpuQuads * verticesPerQuad * gpuFloatsPerVertex)
-    private var gpuQuadCount = 0
+    private val maxGpuVertices = maxGpuQuads * verticesPerQuad
+    private val gpuVertexData = FloatArray(maxGpuVertices * gpuFloatsPerVertex)
+    private var gpuVertexCount = 0
 
     // Lit quad vertex: pos2 + color4 + worldPos3 + normal3 = 12 floats
     private val litFloatsPerVertex = 12
@@ -745,11 +746,16 @@ class SimpleUI(
             updateLitDescriptorSet(uboSize)
         }
 
-        // Upload occupancy data
+        // Upload occupancy data — clear entire buffer first, then write
         MemoryStack.stackPush().use { stack ->
             val ppData = stack.mallocPointer(1)
             vmaMapMemory(context.allocator, occupancySsboAlloc, ppData)
-            val buf = ppData.getByteBuffer(0, occupancySsboSize.toInt()).asIntBuffer()
+            val byteBuffer = ppData.getByteBuffer(0, occupancySsboSize.toInt())
+            // Zero entire buffer to clear stale data
+            for (i in 0 until occupancySsboSize.toInt()) {
+                byteBuffer.put(i, 0)
+            }
+            val buf = byteBuffer.asIntBuffer()
             val count = minOf(occupancyGrid.size, gridW * gridH * gridD)
             buf.put(occupancyGrid, 0, count)
             vmaUnmapMemory(context.allocator, occupancySsboAlloc)
@@ -853,7 +859,7 @@ class SimpleUI(
             val inputAssembly = VkPipelineInputAssemblyStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO).topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST).primitiveRestartEnable(false)
             val viewportState = VkPipelineViewportStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO).viewportCount(1).scissorCount(1)
             // Back-face culling on GPU
-            val rasterizer = VkPipelineRasterizationStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO).polygonMode(VK_POLYGON_MODE_FILL).lineWidth(1f).cullMode(VK_CULL_MODE_BACK_BIT).frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE)
+            val rasterizer = VkPipelineRasterizationStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO).polygonMode(VK_POLYGON_MODE_FILL).lineWidth(1f).cullMode(VK_CULL_MODE_NONE).frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE)
             val multisampling = VkPipelineMultisampleStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO).rasterizationSamples(VK_SAMPLE_COUNT_1_BIT)
             // Depth test ENABLED for GPU rendering
             val depthStencil = VkPipelineDepthStencilStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO).depthTestEnable(true).depthWriteEnable(true).depthCompareOp(VK_COMPARE_OP_LESS).stencilTestEnable(false)
@@ -892,7 +898,7 @@ class SimpleUI(
 
     private fun createGpuVertexBuffer() {
         MemoryStack.stackPush().use { stack ->
-            val bufferSize = (maxGpuQuads * verticesPerQuad * gpuFloatsPerVertex * 4).toLong()
+            val bufferSize = (maxGpuVertices * gpuFloatsPerVertex * 4).toLong()
             val bufferCI = VkBufferCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO).size(bufferSize).usage(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT).sharingMode(VK_SHARING_MODE_EXCLUSIVE)
             val allocCI = VmaAllocationCreateInfo.calloc(stack).usage(VMA_MEMORY_USAGE_CPU_TO_GPU)
             val pBuffer = stack.mallocLong(1)
@@ -927,8 +933,8 @@ class SimpleUI(
         nx: Float, ny: Float, nz: Float,
         r: Float, g: Float, b: Float, a: Float = 1f
     ) {
-        if (gpuQuadCount >= maxGpuQuads) return
-        val offset = gpuQuadCount * verticesPerQuad * gpuFloatsPerVertex
+        if (gpuVertexCount + 6 > maxGpuVertices) return
+        val offset = gpuVertexCount * gpuFloatsPerVertex
 
         // Two triangles: (0,1,2) and (0,2,3) — CCW winding
         putGpuVertex(offset + 0,  wx0, wy0, wz0, r, g, b, a, nx, ny, nz)
@@ -938,7 +944,25 @@ class SimpleUI(
         putGpuVertex(offset + 40, wx2, wy2, wz2, r, g, b, a, nx, ny, nz)
         putGpuVertex(offset + 50, wx3, wy3, wz3, r, g, b, a, nx, ny, nz)
 
-        gpuQuadCount++
+        gpuVertexCount += 6
+    }
+
+    /**
+     * Submit a single triangle in world space for GPU depth-buffered rendering.
+     * Used for rendering model mesh triangles.
+     */
+    fun drawGpuTriangle(
+        wx0: Float, wy0: Float, wz0: Float, nx0: Float, ny0: Float, nz0: Float,
+        wx1: Float, wy1: Float, wz1: Float, nx1: Float, ny1: Float, nz1: Float,
+        wx2: Float, wy2: Float, wz2: Float, nx2: Float, ny2: Float, nz2: Float,
+        r: Float, g: Float, b: Float, a: Float = 1f
+    ) {
+        if (gpuVertexCount + 3 > maxGpuVertices) return
+        val offset = gpuVertexCount * gpuFloatsPerVertex
+        putGpuVertex(offset + 0,  wx0, wy0, wz0, r, g, b, a, nx0, ny0, nz0)
+        putGpuVertex(offset + 10, wx1, wy1, wz1, r, g, b, a, nx1, ny1, nz1)
+        putGpuVertex(offset + 20, wx2, wy2, wz2, r, g, b, a, nx2, ny2, nz2)
+        gpuVertexCount += 3
     }
 
     private fun putGpuVertex(offset: Int, wx: Float, wy: Float, wz: Float,
@@ -961,7 +985,7 @@ class SimpleUI(
     fun beginFrame() {
         quadCount = 0
         litQuadCount = 0
-        gpuQuadCount = 0
+        gpuVertexCount = 0
         buttons.clear()
     }
 
@@ -1123,12 +1147,12 @@ class SimpleUI(
 
     fun render(commandBuffer: VkCommandBuffer) {
         // Render GPU-rasterized quads first (depth-buffered, no sorting needed)
-        if (gpuQuadCount > 0) {
+        if (gpuVertexCount > 0) {
             MemoryStack.stackPush().use { stack ->
                 val ppData = stack.mallocPointer(1)
                 vmaMapMemory(context.allocator, gpuVertexAllocation, ppData)
                 val mapped = ppData.getByteBuffer(0, gpuVertexData.size * 4)
-                mapped.asFloatBuffer().put(gpuVertexData, 0, gpuQuadCount * verticesPerQuad * gpuFloatsPerVertex)
+                mapped.asFloatBuffer().put(gpuVertexData, 0, gpuVertexCount * gpuFloatsPerVertex)
                 vmaUnmapMemory(context.allocator, gpuVertexAllocation)
 
                 vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, gpuPipeline)
@@ -1138,7 +1162,7 @@ class SimpleUI(
                 vpBuf.put(vpMatrix).flip()
                 vkCmdPushConstants(commandBuffer, gpuPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, vpBuf)
                 vkCmdBindVertexBuffers(commandBuffer, 0, stack.longs(gpuVertexBuffer), stack.longs(0L))
-                vkCmdDraw(commandBuffer, gpuQuadCount * verticesPerQuad, 1, 0, 0)
+                vkCmdDraw(commandBuffer, gpuVertexCount, 1, 0, 0)
             }
         }
 

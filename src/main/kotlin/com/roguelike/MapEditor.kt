@@ -8,6 +8,8 @@ import com.roguelike.rendering.DebugRenderer
 import com.roguelike.serialization.WorldIO
 import com.roguelike.ui.*
 import com.roguelike.ui.SimpleUI
+import com.roguelike.utils.AssetLoader
+import com.roguelike.utils.MeshData
 import com.roguelike.world.*
 import org.lwjgl.glfw.GLFW.*
 import java.io.File
@@ -15,6 +17,7 @@ import kotlin.math.*
 
 private fun defaultTileFactory(type: String): com.roguelike.core.model.Tile? = when (type) {
     FloorTile.TYPE -> FloorTile()
+    CeilingTile.TYPE -> CeilingTile()
     WallNorthTile.TYPE -> WallNorthTile()
     WallSouthTile.TYPE -> WallSouthTile()
     WallEastTile.TYPE -> WallEastTile()
@@ -45,6 +48,12 @@ class MapEditor(
     // Debug rendering for wireframe overlays on empty cubes, models, etc.
     private val debugRenderer = DebugRenderer(ui)
 
+    // Asset loader for structure models
+    private val assetLoader = AssetLoader()
+    private var floorMesh: MeshData? = null
+    private var ceilingMesh: MeshData? = null
+    private var wallMesh: MeshData? = null
+
     // Menu bar & file management
     private val menuBar = MenuBar(ui)
     private val fileDialog = FileDialog(ui, inputSystem)
@@ -63,6 +72,7 @@ class MapEditor(
 
     // --- Tool toggles ---
     private var showWireframes = true        // grid wireframe visibility
+    private var showCeilings = true          // ceiling visibility toggle
 
     /** Editor modes selection group — only one can be active at a time. */
     private enum class EditorMode { NORMAL, GRID_TOGGLE, LIGHTS, GPU_RENDER }
@@ -92,10 +102,10 @@ class MapEditor(
     private var cursorY = 0
 
     // Current tool (selected from the tools palette)
-    private var currentTool = EditorTool.FLOOR
+    private var currentTool: EditorTool? = EditorTool.FLOOR
     private var lastFrameTime: Long = System.nanoTime()
 
-    enum class EditorTool { FLOOR, WALL_N, WALL_S, WALL_E, WALL_W, ERASE, LIGHT }
+    enum class EditorTool { FLOOR, CEILING, WALL, LIGHT }
 
     /** Tools palette tab selection. */
     private enum class PaletteTab { STRUCTURES, LIGHTS }
@@ -112,7 +122,29 @@ class MapEditor(
     /** Default intensity for newly placed lights. */
     private var defaultLightIntensity = 5f
 
+    // --- Face/Edge highlighting ---
+
+    /** Which face of a cube the mouse is hovering over. */
+    private enum class HoveredFace { NONE, BOTTOM, TOP, EDGE_NORTH, EDGE_SOUTH, EDGE_EAST, EDGE_WEST }
+    private var hoveredFace = HoveredFace.NONE
+    private var hoveredNodeX = -1
+    private var hoveredNodeY = -1
+
     fun show() {
+        // Load structure model meshes
+         try {
+            floorMesh = assetLoader.loadModel("floor", "models/vox/floor/floor.obj")
+            println("[MapEditor] Loaded floor model: ${floorMesh!!.vertices.size / 6} verts, ${floorMesh!!.indices.size} indices, scale=${floorMesh!!.scale}, center=${floorMesh!!.center}")
+        } catch (e: Exception) { println("[MapEditor] Failed to load floor model: ${e.message}"); e.printStackTrace() }
+        try {
+            ceilingMesh = assetLoader.loadModel("ceiling", "models/vox/ceiling/ceiling.obj")
+            println("[MapEditor] Loaded ceiling model: ${ceilingMesh!!.vertices.size / 6} verts, ${ceilingMesh!!.indices.size} indices, scale=${ceilingMesh!!.scale}, center=${ceilingMesh!!.center}")
+        } catch (e: Exception) { println("[MapEditor] Failed to load ceiling model: ${e.message}"); e.printStackTrace() }
+        try {
+            wallMesh = assetLoader.loadModel("wall", "models/vox/wall/wall.obj")
+            println("[MapEditor] Loaded wall model: ${wallMesh!!.vertices.size / 6} verts, ${wallMesh!!.indices.size} indices, scale=${wallMesh!!.scale}, center=${wallMesh!!.center}")
+        } catch (e: Exception) { println("[MapEditor] Failed to load wall model: ${e.message}"); e.printStackTrace() }
+
         // Create or load a world
         val saveFile = File("saved-worlds/world.wld")
         if (saveFile.exists()) {
@@ -260,6 +292,8 @@ class MapEditor(
         lightPreviewEnabled = selectedEditorMode == EditorMode.LIGHTS || selectedEditorMode == EditorMode.GPU_RENDER
         gpuRenderingEnabled = selectedEditorMode == EditorMode.GPU_RENDER
 
+        val ctrlHeld = inputSystem.isKeyPressed(GLFW_KEY_LEFT_CONTROL) || inputSystem.isKeyPressed(GLFW_KEY_RIGHT_CONTROL)
+
         // --- Camera controls (only when mouse not over UI panels) ---
         if (!uiBlocking) {
             val rotSpeed = 90f * delta
@@ -309,38 +343,77 @@ class MapEditor(
                 distance = (distance - scroll * 2f).coerceIn(3f, 200f)
             }
 
-            // Tool selection
+            // Tool selection via keyboard
             if (inputSystem.isKeyJustPressed(GLFW_KEY_1)) currentTool = EditorTool.FLOOR
-            if (inputSystem.isKeyJustPressed(GLFW_KEY_2)) currentTool = EditorTool.WALL_N
-            if (inputSystem.isKeyJustPressed(GLFW_KEY_3)) currentTool = EditorTool.WALL_S
-            if (inputSystem.isKeyJustPressed(GLFW_KEY_4)) currentTool = EditorTool.WALL_E
-            if (inputSystem.isKeyJustPressed(GLFW_KEY_5)) currentTool = EditorTool.WALL_W
-            if (inputSystem.isKeyJustPressed(GLFW_KEY_6)) currentTool = EditorTool.ERASE
-            if (inputSystem.isKeyJustPressed(GLFW_KEY_7)) currentTool = EditorTool.LIGHT
+            if (inputSystem.isKeyJustPressed(GLFW_KEY_2)) currentTool = EditorTool.CEILING
+            if (inputSystem.isKeyJustPressed(GLFW_KEY_3)) currentTool = EditorTool.WALL
+            if (inputSystem.isKeyJustPressed(GLFW_KEY_4)) currentTool = EditorTool.LIGHT
 
             // Cursor
             updateCursorFromMouse(w)
 
-            // Place/erase with left mouse
-            if (inputSystem.isMouseButtonPressed(0)) {
+            // Update face/edge highlighting based on current tool
+            updateHoveredFace(w)
+
+            // Handle Ctrl+Click deletion
+            if (ctrlHeld && inputSystem.isMouseButtonJustPressed(0)) {
+                when (selectedPaletteTab) {
+                    PaletteTab.STRUCTURES -> {
+                        // Remove structure at cursor based on hovered face
+                        if (cursorX in 0 until w.width && cursorY in 0 until w.height) {
+                            val node = w.getNode(cursorX, cursorY, currentZ)
+                            if (node != null) {
+                                when (hoveredFace) {
+                                    HoveredFace.BOTTOM -> node.removeTile(TileSlot.FLOOR)
+                                    HoveredFace.TOP -> node.removeTile(TileSlot.CEILING)
+                                    HoveredFace.EDGE_NORTH -> node.removeTile(TileSlot.WALL_NORTH)
+                                    HoveredFace.EDGE_SOUTH -> node.removeTile(TileSlot.WALL_SOUTH)
+                                    HoveredFace.EDGE_EAST -> node.removeTile(TileSlot.WALL_EAST)
+                                    HoveredFace.EDGE_WEST -> node.removeTile(TileSlot.WALL_WEST)
+                                    HoveredFace.NONE -> node.clear()
+                                }
+                            }
+                        }
+                    }
+                    PaletteTab.LIGHTS -> {
+                        // Remove selected/closest light
+                        val clickedIdx = findLightAtMouse(w)
+                        if (clickedIdx >= 0) {
+                            w.lightSources.removeAt(clickedIdx)
+                            if (selectedLightIndex == clickedIdx) selectedLightIndex = -1
+                            else if (selectedLightIndex > clickedIdx) selectedLightIndex--
+                        }
+                    }
+                }
+            }
+
+            // Place with left mouse (non-Ctrl)
+            if (!ctrlHeld && inputSystem.isMouseButtonPressed(0)) {
                 if (cursorX in 0 until w.width && cursorY in 0 until w.height) {
                     val node = w.getNode(cursorX, cursorY, currentZ)
                     if (node != null) {
                         when (currentTool) {
                             EditorTool.FLOOR -> node.setTile(FloorTile())
-                            EditorTool.WALL_N -> node.setTile(WallNorthTile())
-                            EditorTool.WALL_S -> node.setTile(WallSouthTile())
-                            EditorTool.WALL_E -> node.setTile(WallEastTile())
-                            EditorTool.WALL_W -> node.setTile(WallWestTile())
-                            EditorTool.ERASE -> node.clear()
+                            EditorTool.CEILING -> node.setTile(CeilingTile())
+                            EditorTool.WALL -> {
+                                // Place wall along the hovered edge
+                                when (hoveredFace) {
+                                    HoveredFace.EDGE_NORTH -> node.setTile(WallNorthTile())
+                                    HoveredFace.EDGE_SOUTH -> node.setTile(WallSouthTile())
+                                    HoveredFace.EDGE_EAST -> node.setTile(WallEastTile())
+                                    HoveredFace.EDGE_WEST -> node.setTile(WallWestTile())
+                                    else -> {} // No edge hovered, do nothing
+                                }
+                            }
                             EditorTool.LIGHT -> {} // handled below
+                            null -> {} // no tool selected
                         }
                     }
                 }
             }
 
             // Light selection, dragging, and placement
-            if (currentTool == EditorTool.LIGHT && inputSystem.isMouseButtonJustPressed(0)) {
+            if (currentTool == EditorTool.LIGHT && !ctrlHeld && inputSystem.isMouseButtonJustPressed(0)) {
                 // Try to select an existing light first (check proximity in screen space)
                 val clickedLightIdx = findLightAtMouse(w)
                 if (clickedLightIdx >= 0) {
@@ -510,6 +583,118 @@ class MapEditor(
     }
 
     /**
+     * Update which face/edge of the hovered node cube is being pointed at,
+     * based on the current tool.
+     */
+    private fun updateHoveredFace(w: World) {
+        hoveredFace = HoveredFace.NONE
+        hoveredNodeX = cursorX
+        hoveredNodeY = cursorY
+
+        if (cursorX !in 0 until w.width || cursorY !in 0 until w.height) return
+
+        val mx = inputSystem.getMouseX()
+        val my = inputSystem.getMouseY()
+        val sw = ui.screenWidth
+        val sh = ui.screenHeight
+
+        val nearWorld = camera.unproject(org.joml.Vector3f(mx, my, 0f), sw, sh)
+        val farWorld = camera.unproject(org.joml.Vector3f(mx, my, 1f), sw, sh)
+        val dir = org.joml.Vector3f(farWorld).sub(nearWorld)
+
+        val bx = cursorX.toFloat()
+        val by = cursorY.toFloat()
+        val bz = currentZ.toFloat()
+
+        when (currentTool) {
+            EditorTool.FLOOR -> {
+                // Highlight bottom face (z = bz plane)
+                if (abs(dir.z) > 1e-6f) {
+                    val t = (bz - nearWorld.z) / dir.z
+                    if (t > 0) {
+                        val hx = nearWorld.x + dir.x * t
+                        val hy = nearWorld.y + dir.y * t
+                        if (hx >= bx && hx <= bx + 1f && hy >= by && hy <= by + 1f) {
+                            hoveredFace = HoveredFace.BOTTOM
+                        }
+                    }
+                }
+            }
+            EditorTool.CEILING -> {
+                // Highlight top face (z = bz + 1 plane)
+                if (abs(dir.z) > 1e-6f) {
+                    val t = (bz + 1f - nearWorld.z) / dir.z
+                    if (t > 0) {
+                        val hx = nearWorld.x + dir.x * t
+                        val hy = nearWorld.y + dir.y * t
+                        if (hx >= bx && hx <= bx + 1f && hy >= by && hy <= by + 1f) {
+                            hoveredFace = HoveredFace.TOP
+                        }
+                    }
+                }
+            }
+            EditorTool.WALL -> {
+                // Find closest edge of the cube the ray is near
+                // Test all 4 face planes and find the closest hit
+                data class FaceHit(val face: HoveredFace, val t: Float)
+                val hits = mutableListOf<FaceHit>()
+
+                // North face (y = by + 1)
+                if (abs(dir.y) > 1e-6f) {
+                    val t = (by + 1f - nearWorld.y) / dir.y
+                    if (t > 0) {
+                        val hx = nearWorld.x + dir.x * t
+                        val hz = nearWorld.z + dir.z * t
+                        if (hx >= bx && hx <= bx + 1f && hz >= bz && hz <= bz + 1f) {
+                            hits.add(FaceHit(HoveredFace.EDGE_NORTH, t))
+                        }
+                    }
+                }
+                // South face (y = by)
+                if (abs(dir.y) > 1e-6f) {
+                    val t = (by - nearWorld.y) / dir.y
+                    if (t > 0) {
+                        val hx = nearWorld.x + dir.x * t
+                        val hz = nearWorld.z + dir.z * t
+                        if (hx >= bx && hx <= bx + 1f && hz >= bz && hz <= bz + 1f) {
+                            hits.add(FaceHit(HoveredFace.EDGE_SOUTH, t))
+                        }
+                    }
+                }
+                // East face (x = bx + 1)
+                if (abs(dir.x) > 1e-6f) {
+                    val t = (bx + 1f - nearWorld.x) / dir.x
+                    if (t > 0) {
+                        val hy = nearWorld.y + dir.y * t
+                        val hz = nearWorld.z + dir.z * t
+                        if (hy >= by && hy <= by + 1f && hz >= bz && hz <= bz + 1f) {
+                            hits.add(FaceHit(HoveredFace.EDGE_EAST, t))
+                        }
+                    }
+                }
+                // West face (x = bx)
+                if (abs(dir.x) > 1e-6f) {
+                    val t = (bx - nearWorld.x) / dir.x
+                    if (t > 0) {
+                        val hy = nearWorld.y + dir.y * t
+                        val hz = nearWorld.z + dir.z * t
+                        if (hy >= by && hy <= by + 1f && hz >= bz && hz <= bz + 1f) {
+                            hits.add(FaceHit(HoveredFace.EDGE_WEST, t))
+                        }
+                    }
+                }
+
+                if (hits.isNotEmpty()) {
+                    hoveredFace = hits.minByOrNull { it.t }!!.face
+                }
+            }
+            else -> {
+                hoveredFace = HoveredFace.NONE
+            }
+        }
+    }
+
+    /**
      * Ray-cast from mouse position to a given Z plane. Returns (x, y) hit or null.
      */
     private fun raycastXYPlane(planeZ: Float): Pair<Float, Float>? {
@@ -563,21 +748,136 @@ class MapEditor(
         return camera.project(org.joml.Vector3f(x, y, z), ui.screenWidth, ui.screenHeight)
     }
 
+    private data class Face(
+        val c0: Triple<Float,Float,Float>,
+        val c1: Triple<Float,Float,Float>,
+        val c2: Triple<Float,Float,Float>,
+        val c3: Triple<Float,Float,Float>,
+        val nx: Float, val ny: Float, val nz: Float,
+        val shade: Float
+    )
+
+    /**
+     * Returns only the faces that correspond to actual structure types present in the node.
+     * Floor → horizontal face at bottom facing up, Ceiling → horizontal face at top facing down,
+     * Walls → corresponding side faces.
+     */
+    private fun buildNodeFaces(
+        hasFloor: Boolean, hasCeiling: Boolean,
+        hasWallN: Boolean, hasWallS: Boolean, hasWallE: Boolean, hasWallW: Boolean,
+        allFaces: Array<Face>
+    ): List<Face> {
+        val result = mutableListOf<Face>()
+        // Floor: vertices at z=0, normal pointing UP so visible from above
+        if (hasFloor) result.add(Face(
+            Triple(0f,0f,0f), Triple(1f,0f,0f), Triple(1f,1f,0f), Triple(0f,1f,0f),
+            0f, 0f, 1f, 0.85f
+        ))
+        // Ceiling: vertices at z=1, normal pointing DOWN so visible from below
+        if (hasCeiling) result.add(Face(
+            Triple(0f,1f,1f), Triple(1f,1f,1f), Triple(1f,0f,1f), Triple(0f,0f,1f),
+            0f, 0f, -1f, 0.75f
+        ))
+        // Walls use existing side faces
+        // allFaces[2] = north (y+), [3] = south (y-), [4] = east (x+), [5] = west (x-)
+        if (hasWallN) result.add(allFaces[2])
+        if (hasWallS) result.add(allFaces[3])
+        if (hasWallE) result.add(allFaces[4])
+        if (hasWallW) result.add(allFaces[5])
+        return result
+    }
+
+    /**
+     * Render a MeshData model at a given world position using GPU triangles.
+     * The model is scaled to fit within a 1x1x1 node and centered, then translated
+     * to the node position with the given offsets.
+     * @param rotationYDeg rotation around the Y axis in degrees (for wall orientation)
+     */
+    private var modelDrawLogCount = 0
+    private var renderLogFrames = 0
+
+    private fun drawModelAtNode(
+        mesh: MeshData, nodeX: Float, nodeY: Float, nodeZ: Float,
+        offsetX: Float = 0f, offsetY: Float = 0f, offsetZ: Float = 0f,
+        rotationYDeg: Float = 0f,
+        r: Float, g: Float, b: Float, a: Float = 1f
+    ) {
+        val verts = mesh.vertices   // 6 floats per vertex: px, py, pz, nx, ny, nz
+        val indices = mesh.indices
+        val scale = mesh.scale
+        val cx = mesh.center.x
+        val cy = mesh.center.y
+        val cz = mesh.center.z
+
+        if (modelDrawLogCount < 5) {
+            modelDrawLogCount++
+            println("[MapEditor] drawModelAtNode: node=($nodeX,$nodeY,$nodeZ) offset=($offsetX,$offsetY,$offsetZ) rot=$rotationYDeg scale=$scale center=($cx,$cy,$cz) verts=${verts.size/6} indices=${indices.size} triCount=${indices.size/3} color=($r,$g,$b,$a)")
+            if (indices.isNotEmpty()) {
+                val vi0 = (indices[0].toInt() and 0xFFFF) * 6
+                println("[MapEditor]   first vertex raw: pos=(${verts[vi0]},${verts[vi0+1]},${verts[vi0+2]}) normal=(${verts[vi0+3]},${verts[vi0+4]},${verts[vi0+5]})")
+            }
+        }
+
+        // Precompute rotation
+        val radY = Math.toRadians(rotationYDeg.toDouble()).toFloat()
+        val cosY = cos(radY)
+        val sinY = sin(radY)
+
+        // Transform vertex: center, scale, swap Y↔Z (model Y-up → world Z-up), rotate, translate
+        fun xform(idx: Int): FloatArray {
+            val vi = idx * 6
+            // Center and scale
+            val mx = (verts[vi] - cx) * scale
+            val my = (verts[vi + 1] - cy) * scale
+            val mz = (verts[vi + 2] - cz) * scale
+            val mnx = verts[vi + 3]
+            val mny = verts[vi + 4]
+            val mnz = verts[vi + 5]
+            // Swap Y↔Z: model Y-up → world Z-up
+            var px = mx
+            var py = mz
+            var pz = my
+            var nx = mnx
+            var ny = mnz
+            var nz = mny
+            // Rotate around world Z axis (vertical)
+            if (rotationYDeg != 0f) {
+                val rpx = px * cosY - py * sinY
+                val rpy = px * sinY + py * cosY
+                px = rpx; py = rpy
+                val rnx = nx * cosY - ny * sinY
+                val rny = nx * sinY + ny * cosY
+                nx = rnx; ny = rny
+            }
+            // Translate to node center + offset
+            px += nodeX + 0.5f + offsetX
+            py += nodeY + 0.5f + offsetY
+            pz += nodeZ + 0.5f + offsetZ
+            return floatArrayOf(px, py, pz, nx, ny, nz)
+        }
+
+        // Submit triangles (original winding, normals handle lighting direction)
+        var i = 0
+        while (i < indices.size - 2) {
+            val v0 = xform(indices[i].toInt() and 0xFFFF)
+            val v1 = xform(indices[i + 1].toInt() and 0xFFFF)
+            val v2 = xform(indices[i + 2].toInt() and 0xFFFF)
+            ui.drawGpuTriangle(
+                v0[0], v0[1], v0[2], v0[3], v0[4], v0[5],
+                v1[0], v1[1], v1[2], v1[3], v1[4], v1[5],
+                v2[0], v2[1], v2[2], v2[3], v2[4], v2[5],
+                r, g, b, a
+            )
+            i += 3
+        }
+    }
+
     /**
      * Render the world as actual 3D cubes.
      */
     private fun renderGrid(w: World) {
         val sw = ui.screenWidth
         val sh = ui.screenHeight
-
-        data class Face(
-            val c0: Triple<Float,Float,Float>,
-            val c1: Triple<Float,Float,Float>,
-            val c2: Triple<Float,Float,Float>,
-            val c3: Triple<Float,Float,Float>,
-            val nx: Float, val ny: Float, val nz: Float,
-            val shade: Float
-        )
 
         val faces = arrayOf(
             Face(Triple(0f,0f,1f), Triple(1f,0f,1f), Triple(1f,1f,1f), Triple(0f,1f,1f), 0f,0f,1f, 1.0f),
@@ -597,18 +897,21 @@ class MapEditor(
         if (lightPreviewEnabled && w.lightSources.isNotEmpty()) {
             val gridW = w.width; val gridH = w.height; val gridD = w.depth
             val occupancy = IntArray(gridW * gridH * gridD)
-            for (z in 0 until gridD) {
-                for (y in 0 until gridH) {
-                    for (x in 0 until gridW) {
-                        val node = w.getNode(x, y, z)
-                        if (node != null && (
-                                    node.hasTile(TileSlot.WALL_NORTH) || node.hasTile(TileSlot.WALL_SOUTH) ||
-                                    node.hasTile(TileSlot.WALL_EAST) || node.hasTile(TileSlot.WALL_WEST))) {
-                            occupancy[z * gridW * gridH + y * gridW + x] = 1
+                for (z in 0 until gridD) {
+                    for (y in 0 until gridH) {
+                        for (x in 0 until gridW) {
+                            val node = w.getNode(x, y, z) ?: continue
+                            // Encode wall edges as bit flags:
+                            // bit 0 = north (Y+), bit 1 = south (Y-), bit 2 = east (X+), bit 3 = west (X-)
+                            var flags = 0
+                            if (node.hasTile(TileSlot.WALL_NORTH)) flags = flags or 1
+                            if (node.hasTile(TileSlot.WALL_SOUTH)) flags = flags or 2
+                            if (node.hasTile(TileSlot.WALL_EAST))  flags = flags or 4
+                            if (node.hasTile(TileSlot.WALL_WEST))  flags = flags or 8
+                            occupancy[z * gridW * gridH + y * gridW + x] = flags
                         }
                     }
                 }
-            }
             val lights = w.lightSources.map { ls ->
                 SimpleUI.LightData(ls.x, ls.y, ls.z, ls.intensity, ls.colorR(), ls.colorG(), ls.colorB(), ls.radius)
             }
@@ -617,53 +920,60 @@ class MapEditor(
             ui.updateLighting(emptyList(), IntArray(1), 1, 1, 1)
         }
 
-        // GPU rendering path: no sorting needed, depth buffer handles ordering
-        if (gpuRenderingEnabled) {
-            // Upload VP matrix to GPU
-            val vpFloats = FloatArray(16)
-            camera.viewProjection.get(vpFloats)
-            ui.setViewProjection(vpFloats)
+        // Always set up VP matrix for GPU model rendering
+        val vpFloats = FloatArray(16)
+        camera.viewProjection.get(vpFloats)
+        ui.setViewProjection(vpFloats)
 
-            for (z in 0..currentZ) {
-                for (x in 0 until w.width) {
-                    for (y in 0 until w.height) {
-                        val node = w.getNode(x, y, z) ?: continue
-                        val hasFloor = node.hasTile(TileSlot.FLOOR)
-                        val hasWallN = node.hasTile(TileSlot.WALL_NORTH)
-                        val hasWallS = node.hasTile(TileSlot.WALL_SOUTH)
-                        val hasWallE = node.hasTile(TileSlot.WALL_EAST)
-                        val hasWallW = node.hasTile(TileSlot.WALL_WEST)
-                        val hasAnyContent = hasFloor || hasWallN || hasWallS || hasWallE || hasWallW
-                        if (!hasAnyContent) continue
+        // Render structure models via GPU triangles (all modes)
+        modelDrawLogCount = 0
+        var modelNodeCount = 0
+        for (z in 0..currentZ) {
+            for (x in 0 until w.width) {
+                for (y in 0 until w.height) {
+                    val node = w.getNode(x, y, z) ?: continue
+                    val hasFloor = node.hasTile(TileSlot.FLOOR)
+                    val hasCeiling = showCeilings && node.hasTile(TileSlot.CEILING)
+                    val hasWallN = node.hasTile(TileSlot.WALL_NORTH)
+                    val hasWallS = node.hasTile(TileSlot.WALL_SOUTH)
+                    val hasWallE = node.hasTile(TileSlot.WALL_EAST)
+                    val hasWallW = node.hasTile(TileSlot.WALL_WEST)
+                    if (!(hasFloor || hasCeiling || hasWallN || hasWallS || hasWallE || hasWallW)) continue
+                    modelNodeCount++
 
-                        val tbx = x.toFloat()
-                        val tby = y.toFloat()
-                        val tbz = z.toFloat()
-                        val isActiveLayer = z == currentZ
-                        val layerDim = if (isActiveLayer) 1f else 0.45f
+                    val tbx = x.toFloat()
+                    val tby = y.toFloat()
+                    val tbz = z.toFloat()
 
-                        val baseR: Float; val baseG: Float; val baseB: Float
-                        if (hasWallN || hasWallS || hasWallE || hasWallW) {
-                            baseR = wallR * layerDim; baseG = wallG * layerDim; baseB = wallB * layerDim
-                        } else {
-                            baseR = floorR * layerDim; baseG = floorG * layerDim; baseB = floorB * layerDim
-                        }
-
-                        for (face in faces) {
-                            val s = face.shade
-                            // GPU pipeline uses CCW winding + back-face culling — no CPU cull needed
-                            ui.drawGpuQuad(
-                                tbx + face.c0.first, tby + face.c0.second, tbz + face.c0.third,
-                                tbx + face.c1.first, tby + face.c1.second, tbz + face.c1.third,
-                                tbx + face.c2.first, tby + face.c2.second, tbz + face.c2.third,
-                                tbx + face.c3.first, tby + face.c3.second, tbz + face.c3.third,
-                                face.nx, face.ny, face.nz,
-                                baseR * s, baseG * s, baseB * s, 1f
-                            )
-                        }
+                    if (hasFloor) {
+                        floorMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetZ = -0.5f, r = floorR, g = floorG, b = floorB) }
+                    }
+                    if (hasCeiling) {
+                        ceilingMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetZ = 0.5f, r = floorR, g = floorG, b = floorB) }
+                    }
+                    if (hasWallN) {
+                        wallMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetY = 0.5f, rotationYDeg = 0f, r = wallR, g = wallG, b = wallB) }
+                    }
+                    if (hasWallS) {
+                        wallMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetY = -0.5f, rotationYDeg = 0f, r = wallR, g = wallG, b = wallB) }
+                    }
+                    if (hasWallE) {
+                        wallMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = 0.5f, rotationYDeg = 90f, r = wallR, g = wallG, b = wallB) }
+                    }
+                    if (hasWallW) {
+                        wallMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = -0.5f, rotationYDeg = 90f, r = wallR, g = wallG, b = wallB) }
                     }
                 }
             }
+        }
+
+        if (renderLogFrames < 3) {
+            renderLogFrames++
+            println("[MapEditor] renderGrid: modelNodeCount=$modelNodeCount floorMesh=${floorMesh != null} ceilingMesh=${ceilingMesh != null} wallMesh=${wallMesh != null} gpuRenderingEnabled=$gpuRenderingEnabled")
+        }
+        // GPU rendering path: models already rendered above, just add overlays
+        if (gpuRenderingEnabled) {            // Draw face/edge highlight
+            drawFaceEdgeHighlight(w)
 
             // Draw cursor highlight (still CPU-projected wireframe on top)
             if (cursorX in 0 until w.width && cursorY in 0 until w.height) {
@@ -689,8 +999,9 @@ class MapEditor(
             val hudX = editorModesWidth + 6f
             val hudY = menuBar.barHeight + 4f
             val viewportRight = sw - toolsPaletteWidth - 10f
-            ui.drawText("Tool: ${currentTool.name}  Layer: $currentZ  [GPU]", hudX, hudY, 0.7f, 0.7f, 0.8f, 1f, 1f)
-            val helpStr = "A/D: Rotate  W/S: Pitch  Q/E: Zoom  Shift: Pan  Z/X: Layer  Ctrl+S: Save"
+            val toolName = currentTool?.name ?: "NONE"
+            ui.drawText("Tool: $toolName  Layer: $currentZ  [GPU]", hudX, hudY, 0.7f, 0.7f, 0.8f, 1f, 1f)
+            val helpStr = "A/D: Rotate  W/S: Pitch  Q/E: Zoom  Shift: Pan  Z/X: Layer  Ctrl+Click: Erase  Ctrl+S: Save"
             ui.drawText(helpStr, hudX, sh - 30f, 0.5f, 0.55f, 0.65f, 0.8f, 1f)
             val fileLabel = if (currentFilePath != null) File(currentFilePath!!).name else "[unsaved]"
             val azStr = "Az: ${azimuth.toInt()}  El: ${elevation.toInt()}  Dist: ${distance.toInt()}"
@@ -722,17 +1033,19 @@ class MapEditor(
         for (tile in tiles) {
             val node = w.getNode(tile.x, tile.y, tile.z) ?: continue
             val hasFloor = node.hasTile(TileSlot.FLOOR)
+            val hasCeiling = showCeilings && node.hasTile(TileSlot.CEILING)
             val hasWallN = node.hasTile(TileSlot.WALL_NORTH)
             val hasWallS = node.hasTile(TileSlot.WALL_SOUTH)
             val hasWallE = node.hasTile(TileSlot.WALL_EAST)
             val hasWallW = node.hasTile(TileSlot.WALL_WEST)
-            val hasAnyContent = hasFloor || hasWallN || hasWallS || hasWallE || hasWallW
+            val hasAnyContent = hasFloor || hasCeiling || hasWallN || hasWallS || hasWallE || hasWallW
 
             val tbx = tile.x.toFloat()
             val tby = tile.y.toFloat()
             val tbz = tile.z.toFloat()
             val isActiveLayer = tile.z == currentZ
-            val layerDim = if (isActiveLayer) 1f else 0.45f
+            // No artificial darkening — all Z levels render the same
+            val layerDim = 1f
 
             if (!hasAnyContent) {
                 if (showWireframes) {
@@ -743,50 +1056,7 @@ class MapEditor(
                 continue
             }
 
-            val viewDirX = camPos.x - (tbx + 0.5f)
-            val viewDirY = camPos.y - (tby + 0.5f)
-            val viewDirZ = camPos.z - (tbz + 0.5f)
-
-            val baseR: Float; val baseG: Float; val baseB: Float
-            if (hasWallN || hasWallS || hasWallE || hasWallW) {
-                baseR = wallR * layerDim; baseG = wallG * layerDim; baseB = wallB * layerDim
-            } else {
-                baseR = floorR * layerDim; baseG = floorG * layerDim; baseB = floorB * layerDim
-            }
-
-            // Draw solid faces with back-face culling
-            for (face in faces) {
-                val dot = face.nx * viewDirX + face.ny * viewDirY + face.nz * viewDirZ
-                if (dot < 0f) continue
-
-                val p0 = proj(tbx + face.c0.first, tby + face.c0.second, tbz + face.c0.third)
-                val p1 = proj(tbx + face.c1.first, tby + face.c1.second, tbz + face.c1.third)
-                val p2 = proj(tbx + face.c2.first, tby + face.c2.second, tbz + face.c2.third)
-                val p3 = proj(tbx + face.c3.first, tby + face.c3.second, tbz + face.c3.third)
-
-                val s = face.shade
-
-                if (lightPreviewEnabled && w.lightSources.isNotEmpty()) {
-                    // Per-pixel lighting via GPU shader with shadow raymarching
-                    ui.drawLitQuad(
-                        p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y,
-                        tbx + face.c0.first, tby + face.c0.second, tbz + face.c0.third,
-                        tbx + face.c1.first, tby + face.c1.second, tbz + face.c1.third,
-                        tbx + face.c2.first, tby + face.c2.second, tbz + face.c2.third,
-                        tbx + face.c3.first, tby + face.c3.second, tbz + face.c3.third,
-                        face.nx, face.ny, face.nz,
-                        baseR * s, baseG * s, baseB * s, 1f
-                    )
-                } else {
-                    // Environment lighting: flat shading per face
-                    ui.drawQuad(
-                        p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y,
-                        baseR * s, baseG * s, baseB * s, 1f
-                    )
-                }
-            }
-
-            // Draw wireframe edges on top of faces
+            // Draw wireframe edges on top of model faces
             if (lightPreviewEnabled && w.lightSources.isNotEmpty()) {
                 debugRenderer.drawLitWireframeCube(
                     tbx, tby, tbz, 1f, camera,
@@ -799,6 +1069,9 @@ class MapEditor(
                 )
             }
         }
+
+        // Draw face/edge highlight
+        drawFaceEdgeHighlight(w)
 
         // Draw cursor highlight
         if (cursorX in 0 until w.width && cursorY in 0 until w.height) {
@@ -826,13 +1099,107 @@ class MapEditor(
         val hudX = editorModesWidth + 6f
         val hudY = menuBar.barHeight + 4f
         val viewportRight = sw - toolsPaletteWidth - 10f
-        ui.drawText("Tool: ${currentTool.name}  Layer: $currentZ", hudX, hudY, 0.7f, 0.7f, 0.8f, 1f, 1f)
-        val helpStr = "A/D: Rotate  W/S: Pitch  Q/E: Zoom  Shift: Pan  Z/X: Layer  Ctrl+S: Save"
+        val toolName = currentTool?.name ?: "NONE"
+        ui.drawText("Tool: $toolName  Layer: $currentZ", hudX, hudY, 0.7f, 0.7f, 0.8f, 1f, 1f)
+        val helpStr = "A/D: Rotate  W/S: Pitch  Q/E: Zoom  Shift: Pan  Z/X: Layer  Ctrl+Click: Erase  Ctrl+S: Save"
         ui.drawText(helpStr, hudX, sh - 30f, 0.5f, 0.55f, 0.65f, 0.8f, 1f)
         val fileLabel = if (currentFilePath != null) File(currentFilePath!!).name else "[unsaved]"
         val azStr = "Az: ${azimuth.toInt()}  El: ${elevation.toInt()}  Dist: ${distance.toInt()}"
         val coordStr = "$fileLabel  Cursor: $cursorX, $cursorY  ${w.width}x${w.height}x${w.depth}  $azStr"
         ui.drawText(coordStr, viewportRight - ui.textWidth(coordStr), hudY, 0.6f, 0.6f, 0.7f, 0.8f, 1f)
+    }
+
+    /**
+     * Draw highlight for the hovered face or edge based on the current tool.
+     */
+    private fun drawFaceEdgeHighlight(w: World) {
+        if (hoveredFace == HoveredFace.NONE) return
+        if (cursorX !in 0 until w.width || cursorY !in 0 until w.height) return
+
+        val bx = cursorX.toFloat()
+        val by = cursorY.toFloat()
+        val bz = currentZ.toFloat()
+        val highlightR = 0.2f; val highlightG = 0.8f; val highlightB = 1.0f; val highlightA = 0.4f
+
+        when (hoveredFace) {
+            HoveredFace.BOTTOM -> {
+                // Highlight bottom face (z = bz)
+                val p0 = proj(bx, by, bz)
+                val p1 = proj(bx + 1f, by, bz)
+                val p2 = proj(bx + 1f, by + 1f, bz)
+                val p3 = proj(bx, by + 1f, bz)
+                ui.drawQuad(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y,
+                    highlightR, highlightG, highlightB, highlightA)
+                // Draw border lines
+                debugRenderer.drawLine(p0.x, p0.y, p1.x, p1.y, highlightR, highlightG, highlightB, 0.8f, 2f)
+                debugRenderer.drawLine(p1.x, p1.y, p2.x, p2.y, highlightR, highlightG, highlightB, 0.8f, 2f)
+                debugRenderer.drawLine(p2.x, p2.y, p3.x, p3.y, highlightR, highlightG, highlightB, 0.8f, 2f)
+                debugRenderer.drawLine(p3.x, p3.y, p0.x, p0.y, highlightR, highlightG, highlightB, 0.8f, 2f)
+            }
+            HoveredFace.TOP -> {
+                // Highlight top face (z = bz + 1)
+                val p0 = proj(bx, by, bz + 1f)
+                val p1 = proj(bx + 1f, by, bz + 1f)
+                val p2 = proj(bx + 1f, by + 1f, bz + 1f)
+                val p3 = proj(bx, by + 1f, bz + 1f)
+                ui.drawQuad(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y,
+                    highlightR, highlightG, highlightB, highlightA)
+                debugRenderer.drawLine(p0.x, p0.y, p1.x, p1.y, highlightR, highlightG, highlightB, 0.8f, 2f)
+                debugRenderer.drawLine(p1.x, p1.y, p2.x, p2.y, highlightR, highlightG, highlightB, 0.8f, 2f)
+                debugRenderer.drawLine(p2.x, p2.y, p3.x, p3.y, highlightR, highlightG, highlightB, 0.8f, 2f)
+                debugRenderer.drawLine(p3.x, p3.y, p0.x, p0.y, highlightR, highlightG, highlightB, 0.8f, 2f)
+            }
+            HoveredFace.EDGE_NORTH -> {
+                // Highlight north face (y = by + 1)
+                val p0 = proj(bx, by + 1f, bz)
+                val p1 = proj(bx + 1f, by + 1f, bz)
+                val p2 = proj(bx + 1f, by + 1f, bz + 1f)
+                val p3 = proj(bx, by + 1f, bz + 1f)
+                ui.drawQuad(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y,
+                    highlightR, highlightG, highlightB, highlightA)
+                debugRenderer.drawLine(p0.x, p0.y, p1.x, p1.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p1.x, p1.y, p2.x, p2.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p2.x, p2.y, p3.x, p3.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p3.x, p3.y, p0.x, p0.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+            }
+            HoveredFace.EDGE_SOUTH -> {
+                val p0 = proj(bx, by, bz)
+                val p1 = proj(bx + 1f, by, bz)
+                val p2 = proj(bx + 1f, by, bz + 1f)
+                val p3 = proj(bx, by, bz + 1f)
+                ui.drawQuad(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y,
+                    highlightR, highlightG, highlightB, highlightA)
+                debugRenderer.drawLine(p0.x, p0.y, p1.x, p1.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p1.x, p1.y, p2.x, p2.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p2.x, p2.y, p3.x, p3.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p3.x, p3.y, p0.x, p0.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+            }
+            HoveredFace.EDGE_EAST -> {
+                val p0 = proj(bx + 1f, by, bz)
+                val p1 = proj(bx + 1f, by + 1f, bz)
+                val p2 = proj(bx + 1f, by + 1f, bz + 1f)
+                val p3 = proj(bx + 1f, by, bz + 1f)
+                ui.drawQuad(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y,
+                    highlightR, highlightG, highlightB, highlightA)
+                debugRenderer.drawLine(p0.x, p0.y, p1.x, p1.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p1.x, p1.y, p2.x, p2.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p2.x, p2.y, p3.x, p3.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p3.x, p3.y, p0.x, p0.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+            }
+            HoveredFace.EDGE_WEST -> {
+                val p0 = proj(bx, by, bz)
+                val p1 = proj(bx, by + 1f, bz)
+                val p2 = proj(bx, by + 1f, bz + 1f)
+                val p3 = proj(bx, by, bz + 1f)
+                ui.drawQuad(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y,
+                    highlightR, highlightG, highlightB, highlightA)
+                debugRenderer.drawLine(p0.x, p0.y, p1.x, p1.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p1.x, p1.y, p2.x, p2.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p2.x, p2.y, p3.x, p3.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+                debugRenderer.drawLine(p3.x, p3.y, p0.x, p0.y, highlightR, highlightG, highlightB, 0.8f, 2.5f)
+            }
+            HoveredFace.NONE -> {}
+        }
     }
 
 
@@ -885,6 +1252,14 @@ class MapEditor(
             iconDrawer = { x, y, s -> drawGpuIcon(x, y, s) }
         ) {
             selectedEditorMode = if (selectedEditorMode == EditorMode.GPU_RENDER) EditorMode.NORMAL else EditorMode.GPU_RENDER
+        }
+        by += btnSize + btnPad
+
+        // --- Show/hide ceilings toggle ---
+        drawModeButton(btnPad, by, btnSize, showCeilings, mx, my,
+            iconDrawer = { x, y, s -> drawCeilingIcon(x, y, s, showCeilings) }
+        ) {
+            showCeilings = !showCeilings
         }
         by += btnSize + btnPad
     }
@@ -1014,6 +1389,30 @@ class MapEditor(
         debugRenderer.drawLine(cx - hs, cy - hs, cx - hs + ox, cy - hs - oy, col * 0.6f, col * 0.5f, col * 0.2f, a * 0.7f, 1f)
     }
 
+    /** Draw a ceiling toggle icon (horizontal line with downward-facing surface). */
+    private fun drawCeilingIcon(x: Float, y: Float, s: Float, enabled: Boolean) {
+        val col = if (enabled) 0.85f else 0.45f
+        val a = if (enabled) 0.9f else 0.5f
+
+        // Draw a flat rectangle representing a ceiling panel
+        val pad = s * 0.15f
+        debugRenderer.drawLine(x + pad, y + pad, x + s - pad, y + pad, col, col * 0.8f, col * 0.5f, a, 2f)
+        debugRenderer.drawLine(x + s - pad, y + pad, x + s - pad, y + s * 0.45f, col, col * 0.8f, col * 0.5f, a, 2f)
+        debugRenderer.drawLine(x + s - pad, y + s * 0.45f, x + pad, y + s * 0.45f, col, col * 0.8f, col * 0.5f, a, 2f)
+        debugRenderer.drawLine(x + pad, y + s * 0.45f, x + pad, y + pad, col, col * 0.8f, col * 0.5f, a, 2f)
+
+        // Hatching lines inside to suggest a surface
+        debugRenderer.drawLine(x + pad + 2f, y + s * 0.45f, x + pad + s * 0.2f, y + pad, col * 0.6f, col * 0.5f, col * 0.3f, a * 0.6f, 1f)
+        debugRenderer.drawLine(x + pad + s * 0.3f, y + s * 0.45f, x + pad + s * 0.5f, y + pad, col * 0.6f, col * 0.5f, col * 0.3f, a * 0.6f, 1f)
+
+        // "C" label below
+        ui.drawText("C", x + s * 0.35f, y + s * 0.55f, col, col * 0.8f, col * 0.5f, a, 0.9f)
+
+        if (!enabled) {
+            debugRenderer.drawLine(x, y, x + s, y + s, 0.8f, 0.3f, 0.3f, 0.7f, 2f)
+        }
+    }
+
     // ---- Tools Palette (right side) ----
 
     private fun renderToolsPalette(w: World) {
@@ -1085,54 +1484,47 @@ class MapEditor(
 
         when (selectedPaletteTab) {
             PaletteTab.STRUCTURES -> {
-                // Structure tools (walls, floors, erase)
-                val structureTools = arrayOf(
-                    "Floor" to EditorTool.FLOOR,
-                    "Wall N" to EditorTool.WALL_N,
-                    "Wall S" to EditorTool.WALL_S,
-                    "Wall E" to EditorTool.WALL_E,
-                    "Wall W" to EditorTool.WALL_W,
-                    "Erase" to EditorTool.ERASE
-                )
+                // --- Floor section ---
+                ui.drawText("Floor", palX + 10f, by, 0.6f, 0.65f, 0.8f, 0.9f, 1.1f)
+                by += 18f
 
-                for ((label, tool) in structureTools) {
-                    val selected = currentTool == tool
-                    val hovered = mx >= palX + 8f && mx < palX + 8f + btnW && my >= by && my < by + btnH
+                // Floor model button (models\vox\floor\floor.obj)
+                drawToolButton(palX + 8f, by, btnW, btnH, "Floor Model", EditorTool.FLOOR, mx, my)
+                by += btnH + 8f
 
-                    if (selected) {
-                        ui.drawRect(palX + 8f, by, btnW, btnH, 0.3f, 0.42f, 0.65f, 0.9f)
-                    } else if (hovered) {
-                        ui.drawRect(palX + 8f, by, btnW, btnH, 0.2f, 0.26f, 0.38f, 0.7f)
-                    } else {
-                        ui.drawRect(palX + 8f, by, btnW, btnH, 0.15f, 0.17f, 0.22f, 0.6f)
-                    }
+                // Separator
+                ui.drawRect(palX + 8f, by, btnW, 1f, 0.3f, 0.35f, 0.45f, 0.4f)
+                by += 8f
 
-                    ui.drawText(label, palX + 14f, by + 5f, 0.82f, 0.82f, 0.9f, 1f, 1.1f)
+                // --- Ceiling section ---
+                ui.drawText("Ceiling", palX + 10f, by, 0.6f, 0.65f, 0.8f, 0.9f, 1.1f)
+                by += 18f
 
-                    if (hovered && inputSystem.isMouseButtonJustPressed(0)) {
-                        currentTool = tool
-                    }
+                // Ceiling model button (models\vox\ceiling\ceiling.obj)
+                drawToolButton(palX + 8f, by, btnW, btnH, "Ceiling Model", EditorTool.CEILING, mx, my)
+                by += btnH + 8f
 
-                    by += btnH + 4f
-                }
+                // Separator
+                ui.drawRect(palX + 8f, by, btnW, 1f, 0.3f, 0.35f, 0.45f, 0.4f)
+                by += 8f
+
+                // --- Walls section ---
+                ui.drawText("Walls", palX + 10f, by, 0.6f, 0.65f, 0.8f, 0.9f, 1.1f)
+                by += 18f
+
+                // Wall model button (models\vox\wall\wall.obj)
+                drawToolButton(palX + 8f, by, btnW, btnH, "Wall Model", EditorTool.WALL, mx, my)
+                by += btnH + 8f
+
+                // Info text
+                by += 4f
+                ui.drawText("Ctrl+Click to erase", palX + 10f, by, 0.45f, 0.5f, 0.6f, 0.7f, 0.9f)
+                by += 16f
             }
 
             PaletteTab.LIGHTS -> {
                 // Light tool button
-                val lightSelected = currentTool == EditorTool.LIGHT
-                val lightHovered = mx >= palX + 8f && mx < palX + 8f + btnW && my >= by && my < by + btnH
-
-                if (lightSelected) {
-                    ui.drawRect(palX + 8f, by, btnW, btnH, 0.3f, 0.42f, 0.65f, 0.9f)
-                } else if (lightHovered) {
-                    ui.drawRect(palX + 8f, by, btnW, btnH, 0.2f, 0.26f, 0.38f, 0.7f)
-                } else {
-                    ui.drawRect(palX + 8f, by, btnW, btnH, 0.15f, 0.17f, 0.22f, 0.6f)
-                }
-                ui.drawText("Place Light", palX + 14f, by + 5f, 0.82f, 0.82f, 0.9f, 1f, 1.1f)
-                if (lightHovered && inputSystem.isMouseButtonJustPressed(0)) {
-                    currentTool = EditorTool.LIGHT
-                }
+                drawToolButton(palX + 8f, by, btnW, btnH, "Place Light", EditorTool.LIGHT, mx, my)
                 by += btnH + 12f
 
                 // --- Light property controls ---
@@ -1232,6 +1624,10 @@ class MapEditor(
                 // Light count
                 ui.drawText("Lights: ${w.lightSources.size}", palX + 14f, by, 0.55f, 0.6f, 0.7f, 0.8f, 1f)
                 by += 20f
+
+                // Info text
+                ui.drawText("Ctrl+Click to remove", palX + 10f, by, 0.45f, 0.5f, 0.6f, 0.7f, 0.9f)
+                by += 16f
             }
         }
 
@@ -1240,6 +1636,33 @@ class MapEditor(
         ui.drawText("Layer: $currentZ / ${w.depth - 1}", palX + 8f, by, 0.6f, 0.65f, 0.75f, 1f, 1.1f)
         by += 20f
         ui.drawText("Z/X to change layer", palX + 8f, by, 0.45f, 0.5f, 0.6f, 0.7f, 1f)
+    }
+
+    /**
+     * Draw a tool button that can be deselected (clicking a selected tool deselects it).
+     */
+    private fun drawToolButton(
+        x: Float, y: Float, w: Float, h: Float,
+        label: String, tool: EditorTool,
+        mx: Float, my: Float
+    ) {
+        val selected = currentTool == tool
+        val hovered = mx >= x && mx < x + w && my >= y && my < y + h
+
+        if (selected) {
+            ui.drawRect(x, y, w, h, 0.3f, 0.42f, 0.65f, 0.9f)
+        } else if (hovered) {
+            ui.drawRect(x, y, w, h, 0.2f, 0.26f, 0.38f, 0.7f)
+        } else {
+            ui.drawRect(x, y, w, h, 0.15f, 0.17f, 0.22f, 0.6f)
+        }
+
+        ui.drawText(label, x + 6f, y + 5f, 0.82f, 0.82f, 0.9f, 1f, 1.1f)
+
+        if (hovered && inputSystem.isMouseButtonJustPressed(0)) {
+            // Toggle: clicking selected tool deselects it
+            currentTool = if (selected) null else tool
+        }
     }
 
     // ---- Gimbal Orientation Cube ----

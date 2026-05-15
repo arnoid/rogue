@@ -26,6 +26,16 @@ class FloorTile : BaseTile() {
     init { zOffset = -0.45f }
 }
 
+// ── Ceiling ──────────────────────────────────────────────────────────────
+
+class CeilingTile : BaseTile() {
+    companion object { const val TYPE = "CeilingTile" }
+    override val type: String get() = TYPE
+    override val slot: TileSlot get() = TileSlot.CEILING
+
+    init { zOffset = 0.45f }
+}
+
 // ── Walls (one class per cardinal direction) ─────────────────────────────
 
 class WallNorthTile : BaseTile() {

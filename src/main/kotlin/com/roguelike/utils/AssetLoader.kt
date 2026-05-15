@@ -29,7 +29,14 @@ class AssetLoader {
         else {
             // Try classpath resource
             val url = javaClass.classLoader.getResource(path)
-            url?.toURI()?.path ?: path
+            if (url != null) {
+                var p = url.toURI().path
+                // On Windows, URI path starts with /C:/ — strip leading slash for Assimp
+                if (p.length >= 3 && p[0] == '/' && p[2] == ':') {
+                    p = p.substring(1)
+                }
+                p
+            } else path
         }
 
         val scene = aiImportFile(resolvedPath,

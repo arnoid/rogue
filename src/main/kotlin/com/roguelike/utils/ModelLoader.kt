@@ -14,6 +14,7 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
 
     init {
         register(FloorTile.TYPE)         { createFloorTile() }
+        register(CeilingTile.TYPE)       { createCeilingTile() }
         register(WallNorthTile.TYPE)     { createWallNorthTile() }
         register(WallSouthTile.TYPE)     { createWallSouthTile() }
         register(WallEastTile.TYPE)      { createWallEastTile() }
@@ -36,6 +37,14 @@ class ModelLoader(val assetLoader: AssetLoader, val renderRegistry: TileRenderRe
         val data = assetLoader.loadModel("floor", "models/vox/floor/floor.obj")
         val (scale, center) = getModelData(data)
         val tile = FloorTile().also { it.zOffset = -0.5f }
+        renderRegistry.register(tile, TileRenderData(data, scale, center))
+        return tile
+    }
+
+    fun createCeilingTile(): CeilingTile {
+        val data = assetLoader.loadModel("ceiling", "models/vox/ceiling/ceiling.obj")
+        val (scale, center) = getModelData(data)
+        val tile = CeilingTile().also { it.zOffset = 0.5f }
         renderRegistry.register(tile, TileRenderData(data, scale, center))
         return tile
     }

@@ -15,24 +15,25 @@ layout(set = 0, binding = 0) uniform LightingUBO {
     vec4 lightColorRadius[32];    // rgb = color, a = radius
 } lighting;
 
-// 3D occupancy grid as SSBO: 1 uint per cell, non-zero = occupied
+// 3D occupancy grid as SSBO: 1 uint per cell
+// Bit flags: bit0=north(Y+), bit1=south(Y-), bit2=east(X+), bit3=west(X-)
 layout(set = 0, binding = 1) readonly buffer OccupancyGrid {
     uint cells[];
 } grid;
 
 layout(location = 0) out vec4 outColor;
 
-/// Check if grid cell (ix,iy,iz) is occupied
-bool isOccupied(int ix, int iy, int iz) {
+/// Get wall flags for grid cell (ix,iy,iz)
+uint getWallFlags(int ix, int iy, int iz) {
     if (ix < 0 || ix >= lighting.gridW ||
         iy < 0 || iy >= lighting.gridH ||
-        iz < 0 || iz >= lighting.gridD) return false;
+        iz < 0 || iz >= lighting.gridD) return 0u;
     uint idx = uint(iz * lighting.gridW * lighting.gridH + iy * lighting.gridW + ix);
-    return grid.cells[idx] != 0u;
+    return grid.cells[idx];
 }
 
 /// Ray-march through the voxel grid from 'from' to 'to' using 3D DDA.
-/// Returns true if any occupied cell is hit along the ray.
+/// Checks wall edges (thin planes on cell boundaries) instead of full cell occupancy.
 bool isOccluded(vec3 from, vec3 to) {
     vec3 d = to - from;
     float dist = length(d);
@@ -71,31 +72,46 @@ bool isOccluded(vec3 from, vec3 to) {
     float tDeltaY = abs(dir.y) > 1e-6 ? float(sy) / dir.y : 1e30;
     float tDeltaZ = abs(dir.z) > 1e-6 ? float(sz) / dir.z : 1e30;
 
-    // Starting voxel (skip self-occlusion)
-    int startX = ix;
-    int startY = iy;
-    int startZ = iz;
-
     // March through voxels (max 64 steps to avoid infinite loops)
     for (int step = 0; step < 64; step++) {
-        // Check current voxel for occlusion (skip the starting voxel to avoid self-shadowing)
-        bool isStart = (ix == startX && iy == startY && iz == startZ);
-        if (!isStart && isOccupied(ix, iy, iz)) return true;
-
         // Reached the target voxel — no occlusion
         if (ix == ex && iy == ey && iz == ez) return false;
 
-        // Advance to next voxel boundary
+        // Determine which axis boundary to cross next and check for wall edges
         if (tMaxX < tMaxY) {
             if (tMaxX < tMaxZ) {
-                ix += sx; tMaxX += tDeltaX;
+                // Crossing X boundary (east/west wall edge)
+                uint curFlags = getWallFlags(ix, iy, iz);
+                int nx = ix + sx;
+                uint nextFlags = getWallFlags(nx, iy, iz);
+                if (sx > 0) {
+                    // Moving +X: check east wall of current cell or west wall of next cell
+                    if ((curFlags & 4u) != 0u || (nextFlags & 8u) != 0u) return true;
+                } else {
+                    // Moving -X: check west wall of current cell or east wall of next cell
+                    if ((curFlags & 8u) != 0u || (nextFlags & 4u) != 0u) return true;
+                }
+                ix = nx; tMaxX += tDeltaX;
             } else {
+                // Crossing Z boundary — no vertical wall edges
                 iz += sz; tMaxZ += tDeltaZ;
             }
         } else {
             if (tMaxY < tMaxZ) {
-                iy += sy; tMaxY += tDeltaY;
+                // Crossing Y boundary (north/south wall edge)
+                uint curFlags = getWallFlags(ix, iy, iz);
+                int ny = iy + sy;
+                uint nextFlags = getWallFlags(ix, ny, iz);
+                if (sy > 0) {
+                    // Moving +Y: check north wall of current cell or south wall of next cell
+                    if ((curFlags & 1u) != 0u || (nextFlags & 2u) != 0u) return true;
+                } else {
+                    // Moving -Y: check south wall of current cell or north wall of next cell
+                    if ((curFlags & 2u) != 0u || (nextFlags & 1u) != 0u) return true;
+                }
+                iy = ny; tMaxY += tDeltaY;
             } else {
+                // Crossing Z boundary — no vertical wall edges
                 iz += sz; tMaxZ += tDeltaZ;
             }
         }
@@ -151,4 +167,3 @@ void main() {
     totalLight = clamp(totalLight, vec3(0.0), vec3(1.0));
     outColor = vec4(baseColor * totalLight, v_color.a);
 }
-
