@@ -1,4 +1,4 @@
-package com.roguelike.core.systems
+﻿package com.roguelike.core.systems
 
 import com.roguelike.core.math.Vec3
 import com.roguelike.core.model.*
@@ -35,8 +35,8 @@ class MovementSystem(private val world: World) {
 
     /** Returns true if the actor is currently on a stairs, ladder tile, or near a ladder edge. */
     private fun isOnStairs(actor: Actor): Boolean {
-        val nx = round(actor.position.x).toInt()
-        val ny = round(actor.position.y).toInt()
+        val nx = floor(actor.position.x).toInt()
+        val ny = floor(actor.position.y).toInt()
         val z = floor(actor.position.z).toInt()
         for (checkZ in intArrayOf(z, z + 1)) {
             val node = world.getNode(nx, ny, checkZ) ?: continue
@@ -57,22 +57,21 @@ class MovementSystem(private val world: World) {
 
             val nextX = actor.position.x + step.x
             val nextY = actor.position.y + step.y
-            // When on stairs, check both floor(z) and round(z) — only block if BOTH levels block.
-            // This prevents getting stuck at the top of stairs (where floor(z) is the lower level
-            // with walls, but round(z) is the upper open level).
+            // When on stairs/ladders, the actor spans two Z levels.
+            // Must check collision at BOTH floor(z) and ceil(z) -- block if EITHER level blocks.
             val onStairs = isOnStairs(actor)
-            val zFloor = floor(actor.position.z).toInt()
-            val zRound = round(actor.position.z).toInt()
-            val z = if (onStairs) zFloor else zRound
+            val zLow = floor(actor.position.z).toInt()
+            val zHigh = kotlin.math.ceil(actor.position.z.toDouble()).toInt()
+            val z = if (onStairs) zLow else kotlin.math.round(actor.position.z).toInt()
             val size = actor.collisionSize
 
-            val actorNodeX = round(actor.position.x).toInt()
-            val actorNodeY = round(actor.position.y).toInt()
+            val actorNodeX = floor(actor.position.x).toInt()
+            val actorNodeY = floor(actor.position.y).toInt()
 
             var canMove = canMoveTo(nextX, nextY, z, size, actorNodeX, actorNodeY, log = logCooldown <= 0f)
-            // If blocked on stairs and floor/round differ, try the other z level
-            if (!canMove && onStairs && zFloor != zRound) {
-                canMove = canMoveTo(nextX, nextY, zRound, size, actorNodeX, actorNodeY, log = logCooldown <= 0f)
+            // On stairs, also check the upper Z level -- block if wall exists there
+            if (canMove && onStairs && zHigh != zLow) {
+                canMove = canMoveTo(nextX, nextY, zHigh, size, actorNodeX, actorNodeY, log = logCooldown <= 0f)
             }
 
             if (logCooldown <= 0f) {
@@ -86,10 +85,10 @@ class MovementSystem(private val world: World) {
             } else {
                 var canX = canMoveTo(nextX, actor.position.y, z, size, actorNodeX, actorNodeY, log = logCooldown <= 0f)
                 var canY = canMoveTo(actor.position.x, nextY, z, size, actorNodeX, actorNodeY, log = logCooldown <= 0f)
-                // Try alternate z level on stairs for slides too
-                if (onStairs && zFloor != zRound) {
-                    if (!canX) canX = canMoveTo(nextX, actor.position.y, zRound, size, actorNodeX, actorNodeY, log = logCooldown <= 0f)
-                    if (!canY) canY = canMoveTo(actor.position.x, nextY, zRound, size, actorNodeX, actorNodeY, log = logCooldown <= 0f)
+                // On stairs, also check upper Z for slides
+                if (onStairs && zHigh != zLow) {
+                    if (canX) canX = canMoveTo(nextX, actor.position.y, zHigh, size, actorNodeX, actorNodeY, log = logCooldown <= 0f)
+                    if (canY) canY = canMoveTo(actor.position.x, nextY, zHigh, size, actorNodeX, actorNodeY, log = logCooldown <= 0f)
                 }
                 if (logCooldown <= 0f) {
                     println("[$LOG_TAG]   BLOCKED full move. canX=$canX canY=$canY")
@@ -117,7 +116,7 @@ class MovementSystem(private val world: World) {
                     if (!onLadder) {
                         applyGravity(actor)
                     } else if (logCooldown <= 0f) {
-                        println("[$LOG_TAG] LADDER CLING: pos=(${actor.position.x}, ${actor.position.y}, ${actor.position.z}) moveDir=(${moveDir.x}, ${moveDir.y}) — gravity suspended")
+                        println("[$LOG_TAG] LADDER CLING: pos=(${actor.position.x}, ${actor.position.y}, ${actor.position.z}) moveDir=(${moveDir.x}, ${moveDir.y}) â€” gravity suspended")
                     }
                 }
             } else if (logCooldown <= 0f) {
@@ -134,9 +133,10 @@ class MovementSystem(private val world: World) {
      * Returns true if the actor is on stairs.
      */
     private fun applyStairsRamp(actor: Actor): Boolean {
-        val nx = round(actor.position.x).toInt()
-        val ny = round(actor.position.y).toInt()
-        val z = round(actor.position.z).toInt()
+        // Use floor() for correct tile lookup â€” the tile at index n spans [n, n+1)
+        val nx = floor(actor.position.x).toInt()
+        val ny = floor(actor.position.y).toInt()
+        val z = floor(actor.position.z).toInt()
 
         // Check current node and one below (for descending onto stairs from above)
         for (checkZ in intArrayOf(z, z - 1)) {
@@ -147,13 +147,12 @@ class MovementSystem(private val world: World) {
             val baseZ = checkZ.toFloat()
 
             // Calculate progress along the stairs (0 = bottom/entry, 1 = top/exit)
-            // The actor enters from the opposite side of facing and exits in the facing direction.
-            // Position within the tile: local offset from tile center is -0.5 to +0.5
+            // With floor-based lookup, position within tile is (actor.pos - nx) in [0, 1)
             val progress = when (facing) {
-                TileSlot.WALL_NORTH -> (actor.position.y - ny.toFloat()) + 0.5f  // -0.5..+0.5 -> 0..1
-                TileSlot.WALL_SOUTH -> -(actor.position.y - ny.toFloat()) + 0.5f
-                TileSlot.WALL_EAST  -> (actor.position.x - nx.toFloat()) + 0.5f
-                TileSlot.WALL_WEST  -> -(actor.position.x - nx.toFloat()) + 0.5f
+                TileSlot.WALL_NORTH -> actor.position.y - ny.toFloat()
+                TileSlot.WALL_SOUTH -> 1f - (actor.position.y - ny.toFloat())
+                TileSlot.WALL_EAST  -> actor.position.x - nx.toFloat()
+                TileSlot.WALL_WEST  -> 1f - (actor.position.x - nx.toFloat())
                 else -> 0.5f
             }.coerceIn(0f, 1f)
 
@@ -161,7 +160,7 @@ class MovementSystem(private val world: World) {
             // Prevent teleportation: only apply ramp if the Z change is gradual
             // (i.e., the actor's current Z is close to the target Z)
             val zDiff = kotlin.math.abs(targetZ - actor.position.z)
-            if (zDiff > 0.5f) continue  // Skip this stairs tile — would be a teleport
+            if (zDiff > 0.5f) continue  // Skip this stairs tile â€” would be a teleport
             actor.position.z = targetZ
             return true
         }
@@ -176,9 +175,9 @@ class MovementSystem(private val world: World) {
     private fun applyLadderClimb(actor: Actor, moveDir: Vec3, delta: Float): Boolean {
         if (moveDir.isZero) return false
 
-        val nx = round(actor.position.x).toInt()
-        val ny = round(actor.position.y).toInt()
-        val z = round(actor.position.z).toInt()
+        val nx = floor(actor.position.x).toInt()
+        val ny = floor(actor.position.y).toInt()
+        val z = floor(actor.position.z).toInt()
 
          // Check current node and one below
         for (checkZ in intArrayOf(z, z - 1)) {
@@ -188,18 +187,18 @@ class MovementSystem(private val world: World) {
             // Only climb if actor is near the wall the ladder faces
             val facing = ladderTile.facingDirection()
             val size = actor.collisionSize
-            val localX = actor.position.x - nx
+            val localX = actor.position.x - nx  // [0, 1) with floor-based lookup
             val localY = actor.position.y - ny
             val nearLadderWall = when (facing) {
-                TileSlot.WALL_NORTH -> localY + size > 0.35f
-                TileSlot.WALL_SOUTH -> localY - size < -0.35f
-                TileSlot.WALL_EAST  -> localX + size > 0.35f
-                TileSlot.WALL_WEST  -> localX - size < -0.35f
+                TileSlot.WALL_NORTH -> localY + size > 0.85f
+                TileSlot.WALL_SOUTH -> localY - size < 0.15f
+                TileSlot.WALL_EAST  -> localX + size > 0.85f
+                TileSlot.WALL_WEST  -> localX - size < 0.15f
                 else -> false
             }
             if (!nearLadderWall) continue
 
-            // If there's a floor above the ladder, don't climb — ladder acts as wall
+            // If there's a floor above the ladder, don't climb â€” ladder acts as wall
             if (hasFloorAbove(nx, ny, checkZ)) continue
 
             // Only climb if actor is moving into the ladder's facing direction
@@ -216,7 +215,7 @@ class MovementSystem(private val world: World) {
             val targetZ = baseZ + 1f // Ladder always lifts one full Z level
 
             // Smoothly move up: interpolate toward the target
-            val climbSpeed = 2.0f // Z units per second — will feel instant with small delta
+            val climbSpeed = 2.0f // Z units per second â€” will feel instant with small delta
             val diff = targetZ - actor.position.z
             if (diff > 0.01f) {
                 // Still climbing
@@ -238,9 +237,9 @@ class MovementSystem(private val world: World) {
     private fun applyLadderEdgeClimb(actor: Actor, moveDir: Vec3, delta: Float): Boolean {
         if (moveDir.isZero) return false
 
-        val nx = round(actor.position.x).toInt()
-        val ny = round(actor.position.y).toInt()
-        val z = round(actor.position.z).toInt()
+        val nx = floor(actor.position.x).toInt()
+        val ny = floor(actor.position.y).toInt()
+        val z = floor(actor.position.z).toInt()
         val size = actor.collisionSize
 
         val node = world.getNode(nx, ny, z) ?: return false
@@ -251,16 +250,16 @@ class MovementSystem(private val world: World) {
         val localY = actor.position.y - ny
 
         val nearEdge = when {
-            localY + size > 0.35f && node.isLadder(TileSlot.WALL_NORTH) && moveDir.y > 0f -> true
-            localY - size < -0.35f && node.isLadder(TileSlot.WALL_SOUTH) && moveDir.y < 0f -> true
-            localX + size > 0.35f && node.isLadder(TileSlot.WALL_EAST) && moveDir.x > 0f -> true
-            localX - size < -0.35f && node.isLadder(TileSlot.WALL_WEST) && moveDir.x < 0f -> true
+            localY + size > 0.85f && node.isLadder(TileSlot.WALL_NORTH) && moveDir.y > 0f -> true
+            localY - size < 0.15f && node.isLadder(TileSlot.WALL_SOUTH) && moveDir.y < 0f -> true
+            localX + size > 0.85f && node.isLadder(TileSlot.WALL_EAST) && moveDir.x > 0f -> true
+            localX - size < 0.15f && node.isLadder(TileSlot.WALL_WEST) && moveDir.x < 0f -> true
             else -> false
         }
 
         if (!nearEdge) return false
 
-        // If there's a floor above, don't climb — ladder acts as wall
+        // If there's a floor above, don't climb â€” ladder acts as wall
         if (hasFloorAbove(nx, ny, z)) return false
 
         val climbSpeed = 2.0f
@@ -273,12 +272,12 @@ class MovementSystem(private val world: World) {
      * The actor falls only if actively moving away from the ladder.
      */
     private fun isOnLadder(actor: Actor, moveDir: Vec3): Boolean {
-        val nx = round(actor.position.x).toInt()
-        val ny = round(actor.position.y).toInt()
-        val z = round(actor.position.z).toInt()
+        val nx = floor(actor.position.x).toInt()
+        val ny = floor(actor.position.y).toInt()
+        val z = floor(actor.position.z).toInt()
         val size = actor.collisionSize
 
-        // Check ladder tile — only if player is near the wall the ladder faces and no floor above
+        // Check ladder tile â€” only if player is near the wall the ladder faces and no floor above
         for (checkZ in intArrayOf(z, z - 1)) {
             val node = world.getNode(nx, ny, checkZ) ?: continue
             val ladderTile = node.getTile(TileSlot.STAIRS) as? LadderTile ?: continue
@@ -311,15 +310,15 @@ class MovementSystem(private val world: World) {
             }
         }
 
-        // Check ladder edge — only if no floor above
+        // Check ladder edge â€” only if no floor above
         val node = world.getNode(nx, ny, z)
         if (node != null && !hasFloorAbove(nx, ny, z)) {
-            val localX = actor.position.x - nx
+            val localX = actor.position.x - nx  // [0, 1) with floor-based lookup
             val localY = actor.position.y - ny
-            val nearNorth = localY + size > 0.35f && node.isLadder(TileSlot.WALL_NORTH)
-            val nearSouth = localY - size < -0.35f && node.isLadder(TileSlot.WALL_SOUTH)
-            val nearEast  = localX + size > 0.35f && node.isLadder(TileSlot.WALL_EAST)
-            val nearWest  = localX - size < -0.35f && node.isLadder(TileSlot.WALL_WEST)
+            val nearNorth = localY + size > 0.85f && node.isLadder(TileSlot.WALL_NORTH)
+            val nearSouth = localY - size < 0.15f && node.isLadder(TileSlot.WALL_SOUTH)
+            val nearEast  = localX + size > 0.85f && node.isLadder(TileSlot.WALL_EAST)
+            val nearWest  = localX - size < 0.15f && node.isLadder(TileSlot.WALL_WEST)
 
             if (nearNorth || nearSouth || nearEast || nearWest) {
                 if (moveDir.isZero) {
@@ -346,8 +345,10 @@ class MovementSystem(private val world: World) {
     /**
      * Check if the actor's bounding box at (tx, ty) would cross any blocking wall edge.
      *
-     * Walls sit at integer boundaries (e.g. x=1.5 is the boundary between node x=1 and x=2).
-     * We check every integer boundary that the bounding box spans and see if a wall exists there.
+     * Walls sit at integer boundaries (e.g. x=3 is the boundary between node x=2 and x=3).
+     * The rendering convention places tile n centered at (n+0.5, n+0.5), so edges are
+     * at integer world coordinates. We check every integer boundary the bounding box
+     * spans and see if a wall exists there.
      */
     private fun canMoveTo(tx: Float, ty: Float, z: Int, size: Float, actorNodeX: Int, actorNodeY: Int, log: Boolean = false): Boolean {
         val left   = tx - size
@@ -356,20 +357,20 @@ class MovementSystem(private val world: World) {
         val top    = ty + size
 
         // Out of world bounds
-        if (left < -0.5f || right > world.width - 0.5f ||
-            bottom < -0.5f || top > world.height - 0.5f) {
+        if (left < 0f || right > world.width.toFloat() ||
+            bottom < 0f || top > world.height.toFloat()) {
             if (log) println("[$LOG_TAG]   BLOCKED by world bounds: left=$left right=$right bottom=$bottom top=$top")
             return false
         }
 
-        // Check all vertical wall boundaries (X = integer + 0.5) that the box spans
-        val minNodeX = floor(left + 0.5f).toInt()
-        val maxNodeX = floor(right + 0.5f).toInt()
+        // Check all vertical wall boundaries (X = integer) that the box spans
+        val minNodeX = floor(left).toInt()
+        val maxNodeX = floor(right).toInt()
         for (ix in minNodeX until maxNodeX) {
-            val boundary = ix.toFloat() + 0.5f
+            val boundary = (ix + 1).toFloat()
             if (left < boundary && right > boundary) {
-                val minY = floor(bottom + 0.5f).toInt().coerceAtLeast(0)
-                val maxY = floor(top + 0.5f).toInt().coerceAtMost(world.height - 1)
+                val minY = floor(bottom).toInt().coerceAtLeast(0)
+                val maxY = floor(top).toInt().coerceAtMost(world.height - 1)
                 for (iy in minY..maxY) {
                     val leftNode = world.getNode(ix, iy, z)
                     if (leftNode != null && leftNode.isWallBlocking(TileSlot.WALL_EAST)) {
@@ -393,14 +394,14 @@ class MovementSystem(private val world: World) {
             }
         }
 
-        // Check all horizontal wall boundaries (Y = integer + 0.5) that the box spans
-        val minNodeY = floor(bottom + 0.5f).toInt()
-        val maxNodeY = floor(top + 0.5f).toInt()
+        // Check all horizontal wall boundaries (Y = integer) that the box spans
+        val minNodeY = floor(bottom).toInt()
+        val maxNodeY = floor(top).toInt()
         for (iy in minNodeY until maxNodeY) {
-            val boundary = iy.toFloat() + 0.5f
+            val boundary = (iy + 1).toFloat()
             if (bottom < boundary && top > boundary) {
-                val minX = floor(left + 0.5f).toInt().coerceAtLeast(0)
-                val maxX = floor(right + 0.5f).toInt().coerceAtMost(world.width - 1)
+                val minX = floor(left).toInt().coerceAtLeast(0)
+                val maxX = floor(right).toInt().coerceAtMost(world.width - 1)
                 for (ix in minX..maxX) {
                     val belowNode = world.getNode(ix, iy, z)
                     if (belowNode != null && belowNode.isWallBlocking(TileSlot.WALL_NORTH)) {
@@ -425,8 +426,8 @@ class MovementSystem(private val world: World) {
         }
 
         // Check stairs blocking: when the actor's center enters a stairs node from a blocked side
-        val targetNodeX = round(tx).toInt()
-        val targetNodeY = round(ty).toInt()
+        val targetNodeX = floor(tx).toInt()
+        val targetNodeY = floor(ty).toInt()
         if (targetNodeX != actorNodeX || targetNodeY != actorNodeY) {
             if (targetNodeX != actorNodeX) {
                 val side = if (targetNodeX > actorNodeX) TileSlot.WALL_WEST else TileSlot.WALL_EAST
@@ -455,21 +456,21 @@ class MovementSystem(private val world: World) {
 
         // Check ladder model collision (ladder is a thin obstacle within its node)
         // Only blocks when there's a floor above (ladder acts as wall); otherwise climbing handles it
-        val ladderCheckX = round(tx).toInt()
-        val ladderCheckY = round(ty).toInt()
+        val ladderCheckX = floor(tx).toInt()
+        val ladderCheckY = floor(ty).toInt()
         val ladderNode = world.getNode(ladderCheckX, ladderCheckY, z)
         if (ladderNode != null) {
             val ladderTile = ladderNode.getTile(TileSlot.STAIRS) as? LadderTile
             if (ladderTile != null && hasFloorAbove(ladderCheckX, ladderCheckY, z)) {
                 val facing = ladderTile.facingDirection()
-                val localX = tx - ladderCheckX
+                val localX = tx - ladderCheckX  // [0, 1) with floor-based lookup
                 val localY = ty - ladderCheckY
-                val modelPos = 0.35f
+                val modelPos = 0.85f  // wall position within [0,1) tile space
                 val blocked = when (facing) {
                     TileSlot.WALL_NORTH -> localY + size > modelPos
-                    TileSlot.WALL_SOUTH -> localY - size < -modelPos
+                    TileSlot.WALL_SOUTH -> localY - size < (1f - modelPos)
                     TileSlot.WALL_EAST  -> localX + size > modelPos
-                    TileSlot.WALL_WEST  -> localX - size < -modelPos
+                    TileSlot.WALL_WEST  -> localX - size < (1f - modelPos)
                     else -> false
                 }
                 if (blocked) {
@@ -505,7 +506,7 @@ class MovementSystem(private val world: World) {
 
     /**
      * Returns true if a ladder tile at (nx, ny, z) blocks entry from the given side.
-     * Ladder does not block node entry — collision is handled internally.
+     * Ladder does not block node entry â€” collision is handled internally.
      */
     private fun isLadderFacingBlocked(nx: Int, ny: Int, z: Int, entrySide: TileSlot, actorNodeX: Int, actorNodeY: Int): Boolean {
         return false
@@ -513,8 +514,9 @@ class MovementSystem(private val world: World) {
 
     /**
      * Returns true if the stairs at (nx, ny, z) blocks entry from the given side.
-     * Stairs allow entry only from the facing direction and its opposite.
-     * Skips blocking if the actor is already in that node.
+     * Stairs allow entry from the opposite-of-facing direction (bottom/entry) at same Z.
+     * Stairs block entry from the facing direction (top/exit) at same Z — the player
+     * can only come from Z+1 to descend. Side entry is always blocked.
      */
     private fun isStairsSideBlocked(nx: Int, ny: Int, z: Int, entrySide: TileSlot, actorNodeX: Int, actorNodeY: Int): Boolean {
         if (nx == actorNodeX && ny == actorNodeY) return false
@@ -528,7 +530,8 @@ class MovementSystem(private val world: World) {
             TileSlot.WALL_WEST  -> TileSlot.WALL_EAST
             else -> facing
         }
-        return entrySide != facing && entrySide != oppositeFacing
+        // Only allow entry from the opposite (bottom) side at same Z level
+        return entrySide != oppositeFacing
     }
 
     /**
@@ -536,9 +539,10 @@ class MovementSystem(private val world: World) {
      * If no floor is found, the actor stays at z=0.
      */
     private fun applyGravity(actor: Actor) {
-        val nx = round(actor.position.x).toInt()
-        val ny = round(actor.position.y).toInt()
-        var z = round(actor.position.z).toInt()
+        val nx = floor(actor.position.x).toInt()
+        val ny = floor(actor.position.y).toInt()
+        // Use round for Z so that z=0.9 (top of stairs) checks Z=1 floor first
+        var z = kotlin.math.round(actor.position.z).toInt()
 
         while (z >= 0) {
             val node = world.getNode(nx, ny, z)
@@ -552,13 +556,13 @@ class MovementSystem(private val world: World) {
                 val ladderTile = below.getTile(TileSlot.STAIRS) as? LadderTile
                 if (ladderTile != null) {
                     val facing = ladderTile.facingDirection()
-                    val localX = actor.position.x - nx
+                    val localX = actor.position.x - nx  // [0, 1) with floor-based lookup
                     val localY = actor.position.y - ny
                     val onLadderTop = when (facing) {
-                        TileSlot.WALL_NORTH -> localY > 0.2f
-                        TileSlot.WALL_SOUTH -> localY < -0.2f
-                        TileSlot.WALL_EAST  -> localX > 0.2f
-                        TileSlot.WALL_WEST  -> localX < -0.2f
+                        TileSlot.WALL_NORTH -> localY > 0.7f
+                        TileSlot.WALL_SOUTH -> localY < 0.3f
+                        TileSlot.WALL_EAST  -> localX > 0.7f
+                        TileSlot.WALL_WEST  -> localX < 0.3f
                         else -> false
                     }
                     if (onLadderTop) {
