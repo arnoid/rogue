@@ -257,51 +257,198 @@ class RoguelikeGame(
             val gridW = w.width; val gridH = w.height; val gridD = w.depth
             val occupancy = IntArray(gridW * gridH * gridD)
             val shadowTriangles = mutableListOf<Float>()
+
+            // Per-cell triangle index lists (global triangle index, where one
+            // triangle = 9 floats in `shadowTriangles`). A triangle may live in
+            // more than one list when the geometry straddles a cell boundary
+            // (notably doorway frames and the swung-open door panel), so that
+            // the GLSL ray-march finds it regardless of which cell its DDA
+            // happens to be marching through.
+            val perCellTris = Array(gridW * gridH * gridD) { mutableListOf<Int>() }
+            fun cellIdx(cx: Int, cy: Int, cz: Int): Int? {
+                if (cx < 0 || cx >= gridW || cy < 0 || cy >= gridH || cz < 0 || cz >= gridD) return null
+                return cz * gridW * gridH + cy * gridW + cx
+            }
+
             for (z in 0 until gridD) {
                 for (y in 0 until gridH) {
                     for (x in 0 until gridW) {
                         val node = w.getNode(x, y, z) ?: continue
                         var flags = 0
-                        if (node.hasTile(TileSlot.WALL_NORTH)) flags = flags or 1
-                        if (node.hasTile(TileSlot.WALL_SOUTH)) flags = flags or 2
-                        if (node.hasTile(TileSlot.WALL_EAST))  flags = flags or 4
-                        if (node.hasTile(TileSlot.WALL_WEST))  flags = flags or 8
+                        // A wall slot contributes a solid wall-edge flag only if
+                        // it contains a NON-door wall tile. Door slots are
+                        // shadow-cast via per-cell mesh triangles below, so that
+                        // light can pass through the open part of the doorway.
+                        if (isSolidWall(node, TileSlot.WALL_NORTH)) flags = flags or 1
+                        if (isSolidWall(node, TileSlot.WALL_SOUTH)) flags = flags or 2
+                        if (isSolidWall(node, TileSlot.WALL_EAST))  flags = flags or 4
+                        if (isSolidWall(node, TileSlot.WALL_WEST))  flags = flags or 8
                         if (node.hasTile(TileSlot.FLOOR))      flags = flags or 16
                         if (node.hasTile(TileSlot.CEILING))    flags = flags or 32
+                        occupancy[z * gridW * gridH + y * gridW + x] = flags
 
-                        var cellTriStart = shadowTriangles.size / 9
-                        var cellTriCount = 0
-
+                        // Stairs / ladder shadow geometry — register to owning cell only.
+                        val ownIdx = cellIdx(x, y, z) ?: continue
                         if (node.hasTile(TileSlot.STAIRS)) {
                             val tile = node.getTile(TileSlot.STAIRS)
                             if (tile is StairsTile) {
-                                stairsMesh?.let { cellTriCount += collectShadowTriangles(it, x.toFloat(), y.toFloat(), z.toFloat(), 0f, 0f, 0f, tile.rotationY + 180f, shadowTriangles) }
+                                stairsMesh?.let {
+                                    val first = shadowTriangles.size / 9
+                                    val n = collectShadowTriangles(it, x.toFloat(), y.toFloat(), z.toFloat(), 0f, 0f, 0f, tile.rotationY + 180f, shadowTriangles)
+                                    for (k in 0 until n) perCellTris[ownIdx].add(first + k)
+                                }
                             } else if (tile is LadderTile) {
                                 val rotY = tile.rotationY
                                 val offX = when (rotY) { 90f -> 0.5f; 270f -> -0.5f; else -> 0f }
                                 val offY = when (rotY) { 0f -> 0.5f; 180f -> -0.5f; else -> 0f }
-                                ladderMesh?.let { cellTriCount += collectShadowTriangles(it, x.toFloat(), y.toFloat(), z.toFloat(), offX, offY, 0f, rotY, shadowTriangles) }
+                                ladderMesh?.let {
+                                    val first = shadowTriangles.size / 9
+                                    val n = collectShadowTriangles(it, x.toFloat(), y.toFloat(), z.toFloat(), offX, offY, 0f, rotY, shadowTriangles)
+                                    for (k in 0 until n) perCellTris[ownIdx].add(first + k)
+                                }
                             }
                         }
 
-                        if (cellTriCount > 0) {
-                            flags = flags or ((cellTriCount and 0x1FF) shl 7)
-                            flags = flags or ((cellTriStart and 0xFFFF) shl 16)
+                        // Door-occluder triangles. Registered to BOTH the
+                        // owning cell and the cell on the other side of the
+                        // wall the door sits on (door frames and the swung
+                        // open panel straddle the wall boundary).
+                        collectDoorShadowTriangles(node, x, y, z, shadowTriangles) { slot, firstTri, n ->
+                            for (k in 0 until n) perCellTris[ownIdx].add(firstTri + k)
+                            val (nx, ny) = when (slot) {
+                                TileSlot.WALL_NORTH -> x to (y + 1)
+                                TileSlot.WALL_SOUTH -> x to (y - 1)
+                                TileSlot.WALL_EAST  -> (x + 1) to y
+                                TileSlot.WALL_WEST  -> (x - 1) to y
+                                else -> return@collectDoorShadowTriangles
+                            }
+                            val nbrIdx = cellIdx(nx, ny, z) ?: return@collectDoorShadowTriangles
+                            for (k in 0 until n) perCellTris[nbrIdx].add(firstTri + k)
                         }
-                        occupancy[z * gridW * gridH + y * gridW + x] = flags
                     }
                 }
             }
+
+            // Pack per-cell triangle lists into the cell-flag bits. We may
+            // need to remap by appending duplicate references to a contiguous
+            // "cell tri index" buffer — but the shader expects a contiguous
+            // run of triangles per cell. So we expand the triangle buffer:
+            // for each cell that references triangles, append the actual
+            // triangle vertex data in run, and store start+count in flags.
+            val expandedTris = mutableListOf<Float>()
+            for (z in 0 until gridD) {
+                for (y in 0 until gridH) {
+                    for (x in 0 until gridW) {
+                        val idx = z * gridW * gridH + y * gridW + x
+                        val list = perCellTris[idx]
+                        if (list.isEmpty()) continue
+                        val start = expandedTris.size / 9
+                        val count = list.size.coerceAtMost(0x1FF)
+                        for (i in 0 until count) {
+                            val src = list[i] * 9
+                            for (k in 0 until 9) expandedTris.add(shadowTriangles[src + k])
+                        }
+                        var f = occupancy[idx]
+                        f = f or ((count and 0x1FF) shl 7)
+                        f = f or ((start and 0xFFFF) shl 16)
+                        occupancy[idx] = f
+                    }
+                }
+            }
+
             val lights = w.lightSources.map { ls ->
                 SimpleUI.LightData(ls.x, ls.y, ls.z, ls.intensity, ls.colorR(), ls.colorG(), ls.colorB(), ls.radius)
             }
             ui.updateLighting(lights, occupancy, gridW, gridH, gridD)
-            val triArray = FloatArray(shadowTriangles.size)
-            for (i in shadowTriangles.indices) triArray[i] = shadowTriangles[i]
+            val triArray = FloatArray(expandedTris.size)
+            for (i in expandedTris.indices) triArray[i] = expandedTris[i]
             ui.updateShadowTriangles(triArray)
         } else {
             ui.updateLighting(emptyList(), IntArray(1), 1, 1, 1)
             ui.updateShadowTriangles(FloatArray(0))
+        }
+    }
+
+    private fun isSolidWall(node: com.roguelike.core.model.WorldNode, slot: TileSlot): Boolean {
+        if (!node.hasTile(slot)) return false
+        val tile = node.getTile(slot)
+        return tile !is DoorNorthTile && tile !is DoorSouthTile && tile !is DoorEastTile && tile !is DoorWestTile
+    }
+
+    /**
+     * Emits shadow-occluder triangles for any door slots on [node]. For each
+     * door slot we emit:
+     *   1) The doorway-frame mesh (a wall with an opening cut into it).
+     *   2) The door panel — either the closed slab in its rest pose, or the
+     *      same closed slab swung ~95° around its narrow vertical edge for
+     *      the open state. The transforms used here match those in
+     *      [drawWallOrDoor] so the shadow geometry tracks the visible geometry.
+     *
+     * For every batch of triangles appended to [out] the [onBatch] callback
+     * is invoked with the slot that produced them, the global index of the
+     * first triangle in the batch, and the batch's triangle count. This lets
+     * the caller register the same triangles in multiple cells (e.g. the
+     * owning cell and the cell on the other side of the wall).
+     */
+    private fun collectDoorShadowTriangles(
+        node: com.roguelike.core.model.WorldNode,
+        x: Int, y: Int, z: Int,
+        out: MutableList<Float>,
+        onBatch: (slot: TileSlot, firstTri: Int, count: Int) -> Unit
+    ) {
+        for (slot in arrayOf(TileSlot.WALL_NORTH, TileSlot.WALL_SOUTH, TileSlot.WALL_EAST, TileSlot.WALL_WEST)) {
+            val tile = node.getTile(slot) ?: continue
+            val (isDoor, isOpen) = when (tile) {
+                is DoorNorthTile -> true to tile.isOpen
+                is DoorSouthTile -> true to tile.isOpen
+                is DoorEastTile  -> true to tile.isOpen
+                is DoorWestTile  -> true to tile.isOpen
+                else -> false to false
+            }
+            if (!isDoor) continue
+            val (offsetX, offsetY, rotationYDeg) = when (slot) {
+                TileSlot.WALL_NORTH -> Triple( 0.0f,  0.5f,   0f)
+                TileSlot.WALL_SOUTH -> Triple( 0.0f, -0.5f, 180f)
+                TileSlot.WALL_EAST  -> Triple( 0.5f,  0.0f,  90f)
+                TileSlot.WALL_WEST  -> Triple(-0.5f,  0.0f, 270f)
+                else                -> Triple( 0.0f,  0.0f,   0f)
+            }
+
+            doorFrameMesh?.let {
+                val first = out.size / 9
+                val n = collectShadowTriangles(
+                    it, x.toFloat(), y.toFloat(), z.toFloat(),
+                    offsetX, offsetY, 0f, rotationYDeg, out
+                )
+                if (n > 0) onBatch(slot, first, n)
+            }
+
+            val panel = doorClosedMesh ?: continue
+            if (!isOpen) {
+                val first = out.size / 9
+                val n = collectShadowTriangles(
+                    panel, x.toFloat(), y.toFloat(), z.toFloat(),
+                    offsetX, offsetY, 0f, rotationYDeg, out
+                )
+                if (n > 0) onBatch(slot, first, n)
+            } else {
+                val openExtraDeg = 95f
+                val scale = panel.scale
+                val hingeOffsetLocalX = (1.1f - panel.center.x) * scale
+                val radClosed = Math.toRadians(rotationYDeg.toDouble()).toFloat()
+                val hingeClosedX = hingeOffsetLocalX * cos(radClosed) + offsetX
+                val hingeClosedY = hingeOffsetLocalX * sin(radClosed) + offsetY
+                val totalDeg = rotationYDeg + openExtraDeg
+                val radOpen = Math.toRadians(totalDeg.toDouble()).toFloat()
+                val openOffX = hingeClosedX - hingeOffsetLocalX * cos(radOpen)
+                val openOffY = hingeClosedY - hingeOffsetLocalX * sin(radOpen)
+                val first = out.size / 9
+                val n = collectShadowTriangles(
+                    panel, x.toFloat(), y.toFloat(), z.toFloat(),
+                    openOffX, openOffY, 0f, totalDeg, out
+                )
+                if (n > 0) onBatch(slot, first, n)
+            }
         }
     }
 
@@ -416,26 +563,75 @@ class RoguelikeGame(
             is DoorWestTile  -> tile.isOpen
             else -> false
         }
-        // Always draw the doorway frame
+        // Always draw the doorway frame (centered on the wall like a normal wall slab)
         doorFrameMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = offsetX, offsetY = offsetY, rotationYDeg = rotationYDeg, r = r, g = g, b = b) }
-        // Draw the door panel (closed or open) with a slightly different color so it's distinguishable
-        val panelMesh = if (isOpen) doorOpenMesh else doorClosedMesh
-        val pr = if (isOpen) 0.35f else 0.55f
-        val pg = if (isOpen) 0.55f else 0.35f
-        val pb = 0.25f
-        panelMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = offsetX, offsetY = offsetY, rotationYDeg = rotationYDeg, r = pr, g = pg, b = pb) }
+
+        // Door panel rendering.
+        //
+        // The closed door uses the exact same offset and rotation as the
+        // doorway frame, so the closed slab sits flush inside the doorway.
+        //
+        // The "open" state is produced by taking the SAME closed mesh and
+        // swinging it ~95° around one of its narrow vertical edges. The narrow
+        // edge in the source mesh (door_n_*) lives at local X = +1.1 (right
+        // edge of the slab when looking along −Z). To keep that hinge fixed
+        // in world space while we add an extra rotation, we compensate the
+        // draw offset so the hinge of the rotated mesh lands at the same
+        // world point it had in the closed state.
+        val panelMesh = doorClosedMesh ?: return
+        if (!isOpen) {
+            drawModelAtNode(
+                panelMesh, tbx, tby, tbz,
+                offsetX = offsetX, offsetY = offsetY,
+                rotationYDeg = rotationYDeg,
+                r = 0.55f, g = 0.35f, b = 0.25f
+            )
+            return
+        }
+
+        // --- open state: swing around the narrow +X edge ---
+        val openExtraDeg = 95f
+        val scale = panelMesh.scale
+        // Hinge offset from the mesh's bbox centre, in local model X (planar).
+        // The mesh's Y/Z are swapped on draw, so the X axis stays as the planar
+        // axis perpendicular to the wall normal. Distance from centre to the
+        // narrow edge = (maxX - cx) * scale.
+        val hingeOffsetLocalX = (1.1f - panelMesh.center.x) * scale  // ≈ +0.393
+
+        // Closed-state hinge world position (relative to cell centre):
+        //   rotate(hingeOffsetLocalX, 0, by rotationYDeg) + (offsetX, offsetY)
+        val radClosed = Math.toRadians(rotationYDeg.toDouble()).toFloat()
+        val hingeClosedX = hingeOffsetLocalX * cos(radClosed) + offsetX
+        val hingeClosedY = hingeOffsetLocalX * sin(radClosed) + offsetY
+
+        // Open-state hinge world position with extra rotation applied:
+        //   rotate(hingeOffsetLocalX, 0, by rotationYDeg + openExtraDeg) + (openOffX, openOffY)
+        // Solve for (openOffX, openOffY) such that hingeOpen == hingeClosed.
+        val radOpen = Math.toRadians((rotationYDeg + openExtraDeg).toDouble()).toFloat()
+        val openOffX = hingeClosedX - hingeOffsetLocalX * cos(radOpen)
+        val openOffY = hingeClosedY - hingeOffsetLocalX * sin(radOpen)
+
+        drawModelAtNode(
+            panelMesh, tbx, tby, tbz,
+            offsetX = openOffX, offsetY = openOffY,
+            rotationYDeg = rotationYDeg + openExtraDeg,
+            r = 0.35f, g = 0.55f, b = 0.25f
+        )
     }
 
     private fun drawModelAtNode(
         mesh: MeshData, nodeX: Float, nodeY: Float, nodeZ: Float,
         offsetX: Float = 0f, offsetY: Float = 0f, offsetZ: Float = 0f,
         rotationYDeg: Float = 0f,
-        r: Float, g: Float, b: Float, a: Float = 1f
+        r: Float, g: Float, b: Float, a: Float = 1f,
+        pivotLocalX: Float? = null, pivotLocalY: Float? = null, pivotLocalZ: Float? = null
     ) {
         val verts = mesh.vertices
         val indices = mesh.indices
         val scale = mesh.scale
-        val cx = mesh.center.x; val cy = mesh.center.y; val cz = mesh.center.z
+        val cx = pivotLocalX ?: mesh.center.x
+        val cy = pivotLocalY ?: mesh.center.y
+        val cz = pivotLocalZ ?: mesh.center.z
         val radY = Math.toRadians(rotationYDeg.toDouble()).toFloat()
         val cosY = cos(radY); val sinY = sin(radY)
 
