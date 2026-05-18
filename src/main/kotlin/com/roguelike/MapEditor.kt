@@ -445,8 +445,9 @@ class MapEditor(
             // Update face/edge highlighting based on current tool
             updateHoveredFace(w)
 
-            // Handle Ctrl+Click deletion
-            if (ctrlHeld && inputSystem.isMouseButtonJustPressed(0)) {
+            // Handle Ctrl+Click deletion (suppressed in Room mode — there
+            // Ctrl modifies the room-drag commit, not single-cell deletion).
+            if (ctrlHeld && selectedEditorMode != EditorMode.ROOM && inputSystem.isMouseButtonJustPressed(0)) {
                 when (selectedPaletteTab) {
                     PaletteTab.STRUCTURES -> {
                         if (cursorX in 0 until w.width && cursorY in 0 until w.height) {
@@ -547,6 +548,23 @@ class MapEditor(
                                             w.getNode(adjX, adjY, currentZ)?.untagManualDoor(oppSlot)
                                         }
                                     }
+                                } else if (selectedTag == WorldNode.Tags.SOCKET) {
+                                    // Remove socket tag from hovered edge.
+                                    val slot = when (hoveredFace) {
+                                        HoveredFace.EDGE_NORTH -> TileSlot.WALL_NORTH
+                                        HoveredFace.EDGE_SOUTH -> TileSlot.WALL_SOUTH
+                                        HoveredFace.EDGE_EAST  -> TileSlot.WALL_EAST
+                                        HoveredFace.EDGE_WEST  -> TileSlot.WALL_WEST
+                                        else -> null
+                                    }
+                                    if (slot != null) {
+                                        node.untagSocket(slot)
+                                    } else {
+                                        // No edge hovered → clear all socket slots on this node.
+                                        for (s in listOf(TileSlot.WALL_NORTH, TileSlot.WALL_SOUTH, TileSlot.WALL_EAST, TileSlot.WALL_WEST)) {
+                                            node.untagSocket(s)
+                                        }
+                                    }
                                 } else if (selectedTag != null) {
                                     node.tags.remove(selectedTag)
                                 } else {
@@ -570,7 +588,7 @@ class MapEditor(
             // top Z layer, and outer-perimeter cells get the appropriate
             // wall tile facing outward.
             var roomConsumedMouse = false
-            if (selectedEditorMode == EditorMode.ROOM && !uiBlocking && !ctrlHeld) {
+            if (selectedEditorMode == EditorMode.ROOM && !uiBlocking) {
                 if (!roomDragActive && inputSystem.isMouseButtonJustPressed(0) &&
                     cursorX in 0 until w.width && cursorY in 0 until w.height) {
                     roomDragActive = true
@@ -586,12 +604,15 @@ class MapEditor(
                         val otherZ = (roomAnchorZ + roomZExtent).coerceIn(0, w.depth - 1)
                         val zLo = minOf(roomAnchorZ, otherZ)
                         val zHi = maxOf(roomAnchorZ, otherZ)
-                        buildRoom(
-                            w,
-                            minOf(roomAnchorX, endX), maxOf(roomAnchorX, endX),
-                            minOf(roomAnchorY, endY), maxOf(roomAnchorY, endY),
-                            zLo, zHi
-                        )
+                        val xLo = minOf(roomAnchorX, endX); val xHi = maxOf(roomAnchorX, endX)
+                        val yLo = minOf(roomAnchorY, endY); val yHi = maxOf(roomAnchorY, endY)
+                        if (ctrlHeld) {
+                            // Ctrl held on release → strip every node + light
+                            // source inside the selection box (room removal).
+                            clearRoom(w, xLo, xHi, yLo, yHi, zLo, zHi)
+                        } else {
+                            buildRoom(w, xLo, xHi, yLo, yHi, zLo, zHi)
+                        }
                         roomDragActive = false
                         roomZExtent = 0
                     }
@@ -607,8 +628,12 @@ class MapEditor(
                 if (cursorX in 0 until w.width && cursorY in 0 until w.height) {
                     val node = w.getNode(cursorX, cursorY, currentZ)
                     if (node != null) {
-                        // Tag placement when Tags tab is active
-                        if (selectedPaletteTab == PaletteTab.TAGS && selectedTag != null && inputSystem.isMouseButtonJustPressed(0)) {
+                        // Tag placement when Tags tab is active.
+                        // When on the TAGS palette we ONLY mutate tags — never
+                        // run the currentTool action below (which would e.g.
+                        // place walls/floors as a side-effect of clicking).
+                        val onTagsPalette = selectedPaletteTab == PaletteTab.TAGS && selectedTag != null
+                        if (onTagsPalette && inputSystem.isMouseButtonJustPressed(0)) {
                             val tag = selectedTag!!
                             if (tag == WorldNode.Tags.LADDER) {
                                 // Ladder tag: only place on edge that has a LadderTile
@@ -679,12 +704,36 @@ class MapEditor(
                                 } else {
                                     System.out.println("[DOOR_MANUAL]   FAIL: slot=null (hoveredFace=$hoveredFace not an edge)")
                                 }
+                            } else if (tag == WorldNode.Tags.SOCKET) {
+                                // Socket tag: only valid on a wall slot that
+                                // faces the OUTER edge of the world. The
+                                // hovered edge must match the cell's world-
+                                // boundary side (e.g. WALL_NORTH only on
+                                // y == world.height - 1).
+                                val slot = when (hoveredFace) {
+                                    HoveredFace.EDGE_NORTH -> TileSlot.WALL_NORTH
+                                    HoveredFace.EDGE_SOUTH -> TileSlot.WALL_SOUTH
+                                    HoveredFace.EDGE_EAST  -> TileSlot.WALL_EAST
+                                    HoveredFace.EDGE_WEST  -> TileSlot.WALL_WEST
+                                    else -> null
+                                }
+                                val onOuterEdge = slot != null && when (slot) {
+                                    TileSlot.WALL_NORTH -> cursorY == w.height - 1
+                                    TileSlot.WALL_SOUTH -> cursorY == 0
+                                    TileSlot.WALL_EAST  -> cursorX == w.width - 1
+                                    TileSlot.WALL_WEST  -> cursorX == 0
+                                    else -> false
+                                }
+                                if (slot != null && onOuterEdge) {
+                                    node.tagAsSocket(slot)
+                                }
                             } else {
                                 if (!node.tags.contains(tag)) {
                                     node.tags.add(tag)
                                 }
                             }
                         }
+                        if (!onTagsPalette) {
                         when (currentTool) {
                             EditorTool.FLOOR -> node.setTile(FloorTile())
                             EditorTool.CEILING -> node.setTile(CeilingTile())
@@ -761,6 +810,7 @@ class MapEditor(
                             EditorTool.LIGHT -> {} // handled below
                             null -> {} // no tool selected
                         }
+                        } // end if (!onTagsPalette)
                     }
                 }
             }
@@ -963,7 +1013,7 @@ class MapEditor(
 
         // Also detect edges when placing ladder tags
         val needsEdgeDetection = currentTool == EditorTool.WALL || currentTool == EditorTool.WALL_DOORWAY || currentTool == EditorTool.DOOR || currentTool == EditorTool.LADDER ||
-            (selectedPaletteTab == PaletteTab.TAGS && (selectedTag == WorldNode.Tags.LADDER || selectedTag == WorldNode.Tags.DOOR_MANUAL))
+            (selectedPaletteTab == PaletteTab.TAGS && (selectedTag == WorldNode.Tags.LADDER || selectedTag == WorldNode.Tags.DOOR_MANUAL || selectedTag == WorldNode.Tags.SOCKET))
 
         when {
             needsEdgeDetection -> {
@@ -1592,6 +1642,23 @@ class MapEditor(
                             val tw = ui.textWidth(label) * 1.0f
                             ui.drawRect(screenPos.x - tw / 2f - 2f, screenPos.y - 1f, tw + 4f, 14f, 0f, 0f, 0f, 0.5f)
                             ui.drawText(label, screenPos.x - tw / 2f, screenPos.y, 1f, 0.7f, 0.2f, 1f, 1.0f)
+                        }
+                    }
+
+                    // Draw socket edge tags (cyan spheres on edges)
+                    for (slot in node.socketSlots) {
+                        val wx = x + 0.5f + when (slot) { TileSlot.WALL_EAST -> 0.48f; TileSlot.WALL_WEST -> -0.48f; else -> 0f }
+                        val wy = y + 0.5f + when (slot) { TileSlot.WALL_NORTH -> 0.48f; TileSlot.WALL_SOUTH -> -0.48f; else -> 0f }
+                        val wz = z + 0.5f
+                        debugRenderer.drawFilledSphere(wx, wy, wz, 0.10f, camera, 0.2f, 0.8f, 1f, 0.9f)
+                        debugRenderer.drawWireframeSphere(wx, wy, wz, 0.10f, camera, 0.4f, 0.9f, 1f, 0.95f, 8, 1.5f)
+                        val worldPos = org.joml.Vector3f(wx, wy, wz + 0.16f)
+                        val screenPos = camera.project(worldPos, sw, sh)
+                        if (screenPos.z in 0f..1f) {
+                            val label = "SOCKET ${slot.name.removePrefix("WALL_")}"
+                            val tw = ui.textWidth(label) * 1.0f
+                            ui.drawRect(screenPos.x - tw / 2f - 2f, screenPos.y - 1f, tw + 4f, 14f, 0f, 0f, 0f, 0.5f)
+                            ui.drawText(label, screenPos.x - tw / 2f, screenPos.y, 0.4f, 0.9f, 1f, 1f, 1.0f)
                         }
                     }
                 }
@@ -2456,6 +2523,7 @@ class MapEditor(
             val nodeHasTag = when (tag) {
                 WorldNode.Tags.DOOR_MANUAL -> currentNode?.manualDoorSlots?.isNotEmpty() == true
                 WorldNode.Tags.LADDER -> currentNode?.ladderSlots?.isNotEmpty() == true
+                WorldNode.Tags.SOCKET -> currentNode?.socketSlots?.isNotEmpty() == true
                 else -> currentNode?.tags?.contains(tag) == true
             }
             val hovered = mx >= palX + 8f && mx < palX + 8f + btnW && my >= by && my < by + btnH
@@ -2911,18 +2979,23 @@ class MapEditor(
         val yHi = maxOf(roomAnchorY, endY).toFloat() + 1f
         val zLo = zLoI.toFloat()
         val zHi = zHiI.toFloat() + 1f
+        // Red preview when Ctrl is held → release will REMOVE the box's
+        // contents instead of building a room.
+        val ctrlHeld = inputSystem.isKeyPressed(GLFW_KEY_LEFT_CONTROL) || inputSystem.isKeyPressed(GLFW_KEY_RIGHT_CONTROL)
+        val pr: Float; val pg: Float; val pb: Float
+        if (ctrlHeld) { pr = 1.0f; pg = 0.3f; pb = 0.3f } else { pr = 0.2f; pg = 0.9f; pb = 1.0f }
         debugRenderer.drawWireframeBox(
             xLo, yLo, zLo,
             xHi - xLo, yHi - yLo, zHi - zLo,
             camera,
-            0.2f, 0.9f, 1.0f, 0.9f, 2f
+            pr, pg, pb, 0.9f, 2f
         )
         // Footprint outline on the bottom Z of the (possibly extended-down) box
         debugRenderer.drawWireframeBox(
             xLo, yLo, zLo,
             xHi - xLo, yHi - yLo, 0.02f,
             camera,
-            0.2f, 0.9f, 1.0f, 0.55f, 1f
+            pr, pg, pb, 0.55f, 1f
         )
     }
 
@@ -2970,6 +3043,61 @@ class MapEditor(
                     if (x == xLo) node.setTile(WallWestTile())
                 }
             }
+        }
+    }
+
+    /**
+     * Room-removal counterpart to [buildRoom]: clears every node inside the
+     * inclusive cell range (removing all tiles, tags, items, ladder/door/
+     * socket slots) and removes every light source whose centre falls inside
+     * the same world-space AABB. Triggered by releasing the room-mode drag
+     * while CTRL is held.
+     */
+    private fun clearRoom(
+        w: World,
+        x0: Int, x1: Int,
+        y0: Int, y1: Int,
+        z0: Int, z1: Int
+    ) {
+        val xLo = x0.coerceAtLeast(0); val xHi = x1.coerceAtMost(w.width - 1)
+        val yLo = y0.coerceAtLeast(0); val yHi = y1.coerceAtMost(w.height - 1)
+        val zLo = z0.coerceAtLeast(0); val zHi = z1.coerceAtMost(w.depth - 1)
+        if (xHi < xLo || yHi < yLo || zHi < zLo) return
+
+        // 1) Strip all nodes inside the box.
+        for (z in zLo..zHi) {
+            for (x in xLo..xHi) {
+                for (y in yLo..yHi) {
+                    w.getNode(x, y, z)?.clear()
+                }
+            }
+        }
+
+        // 2) Remove lights whose centre falls in the world-space AABB. The
+        //    box's world extents are [xLo, xHi+1) × [yLo, yHi+1) × [zLo, zHi+1).
+        val fxLo = xLo.toFloat();           val fxHi = xHi.toFloat() + 1f
+        val fyLo = yLo.toFloat();           val fyHi = yHi.toFloat() + 1f
+        val fzLo = zLo.toFloat();           val fzHi = zHi.toFloat() + 1f
+        val removed = w.lightSources.removeAll { ls ->
+            ls.x in fxLo..fxHi && ls.y in fyLo..fyHi && ls.z in fzLo..fzHi
+        }
+        if (removed) {
+            // Selected-light index may now be invalid; reset.
+            selectedLightIndex = -1
+        }
+
+        // 3) Drop any associations that referenced cleared nodes (the
+        //    associations list stores WorldNode references; cleared nodes
+        //    still exist but no longer carry meaningful content, so
+        //    associations to/from them become stale).
+        w.associations.removeAll { a ->
+            (a.source.x in xLo..xHi && a.source.y in yLo..yHi && a.source.z in zLo..zHi) ||
+            (a.target.x in xLo..xHi && a.target.y in yLo..yHi && a.target.z in zLo..zHi)
+        }
+
+        // 4) Drop props that fall inside the box.
+        w.props.removeAll { p ->
+            p.x in fxLo..fxHi && p.y in fyLo..fyHi && p.z in fzLo..fzHi
         }
     }
 
