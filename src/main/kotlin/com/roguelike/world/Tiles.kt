@@ -66,6 +66,41 @@ class WallWestTile : BaseTile() {
     override fun isBlocking(): Boolean = true
 }
 
+// ── Wall Doorway tiles ───────────────────────────────────────────────────
+// A doorway is a wall section with an opening cut into it (the
+// `wall_doorway_n.obj` mesh). It looks like a wall with a hole in the
+// middle — light and actors can pass through the opening, so these tiles
+// report `isBlocking() = false`. They are distinct from Door tiles, which
+// have an open/closed state and a swinging panel.
+
+class WallDoorwayNorthTile : BaseTile() {
+    companion object { const val TYPE = "WallDoorwayNorthTile" }
+    override val type: String get() = TYPE
+    override val slot: TileSlot get() = TileSlot.WALL_NORTH
+    override fun isBlocking(): Boolean = false
+}
+
+class WallDoorwaySouthTile : BaseTile() {
+    companion object { const val TYPE = "WallDoorwaySouthTile" }
+    override val type: String get() = TYPE
+    override val slot: TileSlot get() = TileSlot.WALL_SOUTH
+    override fun isBlocking(): Boolean = false
+}
+
+class WallDoorwayEastTile : BaseTile() {
+    companion object { const val TYPE = "WallDoorwayEastTile" }
+    override val type: String get() = TYPE
+    override val slot: TileSlot get() = TileSlot.WALL_EAST
+    override fun isBlocking(): Boolean = false
+}
+
+class WallDoorwayWestTile : BaseTile() {
+    companion object { const val TYPE = "WallDoorwayWestTile" }
+    override val type: String get() = TYPE
+    override val slot: TileSlot get() = TileSlot.WALL_WEST
+    override fun isBlocking(): Boolean = false
+}
+
 // ── Door tiles (walls with open/closed state — used when a wall is tagged as door) ──
 
 class DoorNorthTile(var isOpen: Boolean = false) : BaseTile() {

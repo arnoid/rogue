@@ -29,6 +29,10 @@ private fun gameTileFactory(type: String): Tile? = when (type) {
     WallSouthTile.TYPE -> WallSouthTile()
     WallEastTile.TYPE -> WallEastTile()
     WallWestTile.TYPE -> WallWestTile()
+    WallDoorwayNorthTile.TYPE -> WallDoorwayNorthTile()
+    WallDoorwaySouthTile.TYPE -> WallDoorwaySouthTile()
+    WallDoorwayEastTile.TYPE -> WallDoorwayEastTile()
+    WallDoorwayWestTile.TYPE -> WallDoorwayWestTile()
     DoorNorthTile.TYPE -> DoorNorthTile()
     DoorSouthTile.TYPE -> DoorSouthTile()
     DoorEastTile.TYPE -> DoorEastTile()
@@ -372,7 +376,12 @@ class RoguelikeGame(
     private fun isSolidWall(node: com.roguelike.core.model.WorldNode, slot: TileSlot): Boolean {
         if (!node.hasTile(slot)) return false
         val tile = node.getTile(slot)
-        return tile !is DoorNorthTile && tile !is DoorSouthTile && tile !is DoorEastTile && tile !is DoorWestTile
+        // Doors and doorway-wall variants are NOT solid wall edges — their
+        // shadow geometry is contributed via mesh triangles in
+        // collectDoorShadowTriangles so light passes through the opening.
+        if (tile is DoorNorthTile || tile is DoorSouthTile || tile is DoorEastTile || tile is DoorWestTile) return false
+        if (tile is WallDoorwayNorthTile || tile is WallDoorwaySouthTile || tile is WallDoorwayEastTile || tile is WallDoorwayWestTile) return false
+        return true
     }
 
     /**
@@ -405,7 +414,9 @@ class RoguelikeGame(
                 is DoorWestTile  -> true to tile.isOpen
                 else -> false to false
             }
-            if (!isDoor) continue
+            val isDoorwayWall = tile is WallDoorwayNorthTile || tile is WallDoorwaySouthTile ||
+                                tile is WallDoorwayEastTile  || tile is WallDoorwayWestTile
+            if (!isDoor && !isDoorwayWall) continue
             val (offsetX, offsetY, rotationYDeg) = when (slot) {
                 TileSlot.WALL_NORTH -> Triple( 0.0f,  0.5f,   0f)
                 TileSlot.WALL_SOUTH -> Triple( 0.0f, -0.5f, 180f)
@@ -422,6 +433,9 @@ class RoguelikeGame(
                 )
                 if (n > 0) onBatch(slot, first, n)
             }
+
+            // Doorway walls have no swinging door panel — just the frame above.
+            if (!isDoor) continue
 
             val panel = doorClosedMesh ?: continue
             if (!isOpen) {
@@ -552,6 +566,13 @@ class RoguelikeGame(
     ) {
         val tile = node.getTile(slot)
         val isDoor = tile is DoorNorthTile || tile is DoorSouthTile || tile is DoorEastTile || tile is DoorWestTile
+        val isDoorwayWall = tile is WallDoorwayNorthTile || tile is WallDoorwaySouthTile || tile is WallDoorwayEastTile || tile is WallDoorwayWestTile
+        if (isDoorwayWall) {
+            // Render the doorway frame mesh in place of a normal wall slab —
+            // no swinging door panel.
+            doorFrameMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = offsetX, offsetY = offsetY, rotationYDeg = rotationYDeg, r = r, g = g, b = b) }
+            return
+        }
         if (!isDoor) {
             wallMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = offsetX, offsetY = offsetY, rotationYDeg = rotationYDeg, r = r, g = g, b = b) }
             return
@@ -654,16 +675,32 @@ class RoguelikeGame(
         }
 
         var i = 0
+        val colors = mesh.colors
         while (i < indices.size - 2) {
-            val v0 = xform(indices[i].toInt() and 0xFFFF)
-            val v1 = xform(indices[i + 1].toInt() and 0xFFFF)
-            val v2 = xform(indices[i + 2].toInt() and 0xFFFF)
-            ui.drawGpuTriangle(
-                v0[0], v0[1], v0[2], v0[3], v0[4], v0[5],
-                v1[0], v1[1], v1[2], v1[3], v1[4], v1[5],
-                v2[0], v2[1], v2[2], v2[3], v2[4], v2[5],
-                r, g, b, a
-            )
+            val idx0 = indices[i].toInt() and 0xFFFF
+            val idx1 = indices[i + 1].toInt() and 0xFFFF
+            val idx2 = indices[i + 2].toInt() and 0xFFFF
+            val v0 = xform(idx0)
+            val v1 = xform(idx1)
+            val v2 = xform(idx2)
+            if (colors != null) {
+                // Use per-vertex palette colors sampled from the model's PNG texture
+                val cr0 = colors[idx0 * 3]; val cg0 = colors[idx0 * 3 + 1]; val cb0 = colors[idx0 * 3 + 2]
+                val cr1 = colors[idx1 * 3]; val cg1 = colors[idx1 * 3 + 1]; val cb1 = colors[idx1 * 3 + 2]
+                val cr2 = colors[idx2 * 3]; val cg2 = colors[idx2 * 3 + 1]; val cb2 = colors[idx2 * 3 + 2]
+                ui.drawGpuTrianglePerVertexColor(
+                    v0[0], v0[1], v0[2], v0[3], v0[4], v0[5], cr0, cg0, cb0, a,
+                    v1[0], v1[1], v1[2], v1[3], v1[4], v1[5], cr1, cg1, cb1, a,
+                    v2[0], v2[1], v2[2], v2[3], v2[4], v2[5], cr2, cg2, cb2, a
+                )
+            } else {
+                ui.drawGpuTriangle(
+                    v0[0], v0[1], v0[2], v0[3], v0[4], v0[5],
+                    v1[0], v1[1], v1[2], v1[3], v1[4], v1[5],
+                    v2[0], v2[1], v2[2], v2[3], v2[4], v2[5],
+                    r, g, b, a
+                )
+            }
             i += 3
         }
     }

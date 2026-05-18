@@ -23,6 +23,10 @@ private fun defaultTileFactory(type: String): com.roguelike.core.model.Tile? = w
     WallSouthTile.TYPE -> WallSouthTile()
     WallEastTile.TYPE -> WallEastTile()
     WallWestTile.TYPE -> WallWestTile()
+    WallDoorwayNorthTile.TYPE -> WallDoorwayNorthTile()
+    WallDoorwaySouthTile.TYPE -> WallDoorwaySouthTile()
+    WallDoorwayEastTile.TYPE -> WallDoorwayEastTile()
+    WallDoorwayWestTile.TYPE -> WallDoorwayWestTile()
     DoorNorthTile.TYPE -> DoorNorthTile()
     DoorSouthTile.TYPE -> DoorSouthTile()
     DoorEastTile.TYPE -> DoorEastTile()
@@ -120,7 +124,7 @@ class MapEditor(
     private var currentTool: EditorTool? = EditorTool.FLOOR
     private var lastFrameTime: Long = System.nanoTime()
 
-    enum class EditorTool { FLOOR, CEILING, WALL, DOOR, LADDER, STAIRS, LIGHT }
+    enum class EditorTool { FLOOR, CEILING, WALL, WALL_DOORWAY, DOOR, LADDER, STAIRS, LIGHT }
 
     /** Current stairs rotation in degrees (0=N, 90=E, 180=S, 270=W). */
     private var stairsRotation = 0f
@@ -593,6 +597,17 @@ class MapEditor(
                                     else -> {}
                                 }
                             }
+                            EditorTool.WALL_DOORWAY -> {
+                                // Place a doorway-wall (wall with an opening) along the hovered edge.
+                                // Acts as a non-blocking wall variant — distinct from a Door tile.
+                                when (hoveredFace) {
+                                    HoveredFace.EDGE_NORTH -> node.setTile(WallDoorwayNorthTile())
+                                    HoveredFace.EDGE_SOUTH -> node.setTile(WallDoorwaySouthTile())
+                                    HoveredFace.EDGE_EAST  -> node.setTile(WallDoorwayEastTile())
+                                    HoveredFace.EDGE_WEST  -> node.setTile(WallDoorwayWestTile())
+                                    else -> {}
+                                }
+                            }
                             EditorTool.DOOR -> {
                                 // Place door (doorway + door tile) along the hovered edge
                                 val slot = when (hoveredFace) {
@@ -846,7 +861,7 @@ class MapEditor(
         val bz = currentZ.toFloat()
 
         // Also detect edges when placing ladder tags
-        val needsEdgeDetection = currentTool == EditorTool.WALL || currentTool == EditorTool.DOOR || currentTool == EditorTool.LADDER ||
+        val needsEdgeDetection = currentTool == EditorTool.WALL || currentTool == EditorTool.WALL_DOORWAY || currentTool == EditorTool.DOOR || currentTool == EditorTool.LADDER ||
             (selectedPaletteTab == PaletteTab.TAGS && (selectedTag == WorldNode.Tags.LADDER || selectedTag == WorldNode.Tags.DOOR_MANUAL))
 
         when {
@@ -1361,7 +1376,9 @@ class MapEditor(
                         ceilingMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetZ = 0.5f, r = floorR, g = floorG, b = floorB) }
                     }
                     if (hasWallN) {
-                        val isDoor = node.isDoor(TileSlot.WALL_NORTH)
+                        val tile = node.getTile(TileSlot.WALL_NORTH)
+                        val isDoorway = tile is WallDoorwayNorthTile
+                        val isDoor = node.isDoor(TileSlot.WALL_NORTH) || isDoorway
                         val mesh = if (isDoor) doorMesh else wallMesh
                         val r = if (node.isManualDoor(TileSlot.WALL_NORTH)) 0.3f else wallR
                         val g = if (node.isManualDoor(TileSlot.WALL_NORTH)) 0.6f else wallG
@@ -1369,7 +1386,9 @@ class MapEditor(
                         mesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetY = 0.5f, rotationYDeg = 0f, r = r, g = g, b = b) }
                     }
                     if (hasWallS) {
-                        val isDoor = node.isDoor(TileSlot.WALL_SOUTH)
+                        val tile = node.getTile(TileSlot.WALL_SOUTH)
+                        val isDoorway = tile is WallDoorwaySouthTile
+                        val isDoor = node.isDoor(TileSlot.WALL_SOUTH) || isDoorway
                         val mesh = if (isDoor) doorMesh else wallMesh
                         val r = if (node.isManualDoor(TileSlot.WALL_SOUTH)) 0.3f else wallR
                         val g = if (node.isManualDoor(TileSlot.WALL_SOUTH)) 0.6f else wallG
@@ -1377,7 +1396,9 @@ class MapEditor(
                         mesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetY = -0.5f, rotationYDeg = 0f, r = r, g = g, b = b) }
                     }
                     if (hasWallE) {
-                        val isDoor = node.isDoor(TileSlot.WALL_EAST)
+                        val tile = node.getTile(TileSlot.WALL_EAST)
+                        val isDoorway = tile is WallDoorwayEastTile
+                        val isDoor = node.isDoor(TileSlot.WALL_EAST) || isDoorway
                         val mesh = if (isDoor) doorMesh else wallMesh
                         val r = if (node.isManualDoor(TileSlot.WALL_EAST)) 0.3f else wallR
                         val g = if (node.isManualDoor(TileSlot.WALL_EAST)) 0.6f else wallG
@@ -1385,7 +1406,9 @@ class MapEditor(
                         mesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = 0.5f, rotationYDeg = 90f, r = r, g = g, b = b) }
                     }
                     if (hasWallW) {
-                        val isDoor = node.isDoor(TileSlot.WALL_WEST)
+                        val tile = node.getTile(TileSlot.WALL_WEST)
+                        val isDoorway = tile is WallDoorwayWestTile
+                        val isDoor = node.isDoor(TileSlot.WALL_WEST) || isDoorway
                         val mesh = if (isDoor) doorMesh else wallMesh
                         val r = if (node.isManualDoor(TileSlot.WALL_WEST)) 0.3f else wallR
                         val g = if (node.isManualDoor(TileSlot.WALL_WEST)) 0.6f else wallG
@@ -1977,6 +2000,13 @@ class MapEditor(
                 // Wall model preview button
                 drawModelPreviewButton(palX + 8f, by, btnW.coerceAtMost(previewSize + 16f), previewSize, wallMesh,
                     EditorTool.WALL, "Wall", 0.55f, 0.42f, 0.30f, mx, my)
+                by += previewSize + previewPad
+
+                // Wall-doorway preview button (a wall with an opening cut into it).
+                // Placed exactly like a normal wall (on hovered edge) but is
+                // non-blocking so actors can walk through the opening.
+                drawModelPreviewButton(palX + 8f, by, btnW.coerceAtMost(previewSize + 16f), previewSize, doorMesh,
+                    EditorTool.WALL_DOORWAY, "Doorway", 0.55f, 0.42f, 0.30f, mx, my)
                 by += previewSize + previewPad
 
                 // Separator

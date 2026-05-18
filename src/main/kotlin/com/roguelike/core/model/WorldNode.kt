@@ -117,7 +117,10 @@ class WorldNode(val x: Int, val y: Int, val z: Int) {
             // Door tile's isBlocking() returns false when open, true when closed
             return wall.isBlocking()
         }
-        return true
+        // Most walls are solid (isBlocking() = true), but some wall variants
+        // (e.g. WallDoorway*Tile — a wall with an opening cut into it) report
+        // isBlocking() = false so actors can walk through the opening.
+        return wall.isBlocking()
     }
 
     // ── Reset ───────────────────────────────────────────────────────────
