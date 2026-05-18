@@ -143,7 +143,14 @@ class SimpleUI(
                 for (px in 0 until glyphW) {
                     if (pattern[py] and (1 shl (glyphW - 1 - px)) != 0) {
                         val bx = ox + px + 1
-                        val by = oy + py + 3
+                        // Place glyph rows near the top of the cell so the
+                        // visible text sits where callers expect (top-left of
+                        // the cell ≈ top of the text line). Rows 1..7 of the
+                        // 14-row cell are used for glyph pixels; rows 0 and
+                        // 8..13 are padding so descender-friendly chars like
+                        // '_' (which lives on glyph row 6) still fall inside
+                        // the cell.
+                        val by = oy + py + 1
                         if (bx < ATLAS_W && by < ATLAS_H) {
                             bitmap.put(by * ATLAS_W + bx, 0xFF.toByte())
                         }
@@ -1166,10 +1173,18 @@ class SimpleUI(
             if (quadCount >= maxQuads) return
 
             val gl = glyphs[idx]
-            val u0 = gl.x0.toFloat() / ATLAS_W
-            val v0 = gl.y0.toFloat() / ATLAS_H
-            val u1 = gl.x1.toFloat() / ATLAS_W
-            val v1 = gl.y1.toFloat() / ATLAS_H
+            // Tighten UVs by half a texel on each side. With NEAREST sampling
+            // and a quad that maps exactly to the cell extents, the bottom /
+            // right edge would otherwise sample the first texel of the next
+            // cell (blank padding) — clipping the bottom row of the glyph
+            // and making characters whose lowest pixels sit on the last cell
+            // row (e.g. '_') disappear.
+            val uvInsetX = 0.5f / ATLAS_W
+            val uvInsetY = 0.5f / ATLAS_H
+            val u0 = gl.x0.toFloat() / ATLAS_W + uvInsetX
+            val v0 = gl.y0.toFloat() / ATLAS_H + uvInsetY
+            val u1 = gl.x1.toFloat() / ATLAS_W - uvInsetX
+            val v1 = gl.y1.toFloat() / ATLAS_H - uvInsetY
 
             val gx = cursorX + gl.xoff * scale
             val gy = y + (gl.yoff + 14f) * scale

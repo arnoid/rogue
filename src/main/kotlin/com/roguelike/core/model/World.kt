@@ -123,4 +123,48 @@ class World(width: Int, height: Int, depth: Int) {
         height = newHeight
         depth = newDepth
     }
+
+    /**
+     * Resize the world to the exact dimensions [newWidth] × [newHeight] × [newDepth].
+     * All dimensions must be positive multiples of 3.
+     *
+     * Existing nodes inside the new extents are preserved; nodes outside the
+     * new extents (and any lights, props or associations referring to them)
+     * are discarded. Use this — instead of [ensureSize] — when the editor
+     * needs to shrink the world.
+     */
+    fun setSize(newWidth: Int, newHeight: Int, newDepth: Int) {
+        require(newWidth > 0 && newWidth % 3 == 0)   { "width must be a positive multiple of 3, got $newWidth" }
+        require(newHeight > 0 && newHeight % 3 == 0) { "height must be a positive multiple of 3, got $newHeight" }
+        require(newDepth > 0 && newDepth % 3 == 0)   { "depth must be a positive multiple of 3, got $newDepth" }
+        if (newWidth == width && newHeight == height && newDepth == depth) return
+
+        val newNodes = Array(newWidth) { x ->
+            Array(newHeight) { y ->
+                Array(newDepth) { z ->
+                    if (x < width && y < height && z < depth) nodes[x][y][z]
+                    else WorldNode(x, y, z)
+                }
+            }
+        }
+
+        // Drop tag-index entries pointing to nodes outside the new extents.
+        for ((_, list) in nodesByTag) {
+            list.removeAll { it.x >= newWidth || it.y >= newHeight || it.z >= newDepth }
+        }
+
+        // Drop lights / props / associations that reference removed nodes
+        // or coordinates outside the new world.
+        lightSources.removeAll { it.x >= newWidth.toFloat() || it.y >= newHeight.toFloat() || it.z >= newDepth.toFloat() }
+        props.removeAll { it.x >= newWidth.toFloat() || it.y >= newHeight.toFloat() || it.z >= newDepth.toFloat() }
+        associations.removeAll { a ->
+            a.source.x >= newWidth || a.source.y >= newHeight || a.source.z >= newDepth ||
+            a.target.x >= newWidth || a.target.y >= newHeight || a.target.z >= newDepth
+        }
+
+        nodes = newNodes
+        width = newWidth
+        height = newHeight
+        depth = newDepth
+    }
 }

@@ -89,7 +89,7 @@ class MapEditor(
     private var showCeilings = true          // ceiling visibility toggle
 
     /** Editor modes selection group — only one can be active at a time. */
-    private enum class EditorMode { NORMAL, GRID_TOGGLE, LIGHTS, GPU_RENDER }
+    private enum class EditorMode { NORMAL, GRID_TOGGLE, LIGHTS, GPU_RENDER, ROOM }
     private var selectedEditorMode = EditorMode.NORMAL
 
     /**
@@ -131,8 +131,29 @@ class MapEditor(
     private var ladderRotation = 0f
 
     /** Tools palette tab selection. */
-    private enum class PaletteTab { STRUCTURES, LIGHTS, TAGS }
+    private enum class PaletteTab { WORLD, STRUCTURES, LIGHTS, TAGS }
     private var selectedPaletteTab = PaletteTab.STRUCTURES
+
+    /** Horizontal scroll offset (pixels) for the tools-palette tab strip. */
+    private var paletteTabsScrollX: Float = 0f
+
+    /** Which world-size slider (X/Y/Z) is currently being dragged, or null. */
+    private var draggingWorldSlider: Char? = null
+
+    // ── Room mode drag state ─────────────────────────────────────────────
+    // EditorMode.ROOM: pressing the left mouse button over the viewport
+    // starts a rectangle selection on the cursor's Z layer. While dragging,
+    // the Z / X keys grow / shrink the box's Z extent (X adds another
+    // layer on top, Z removes one) so the user can build multi-storey
+    // rooms without releasing the mouse. On release the box's interior
+    // tiles are wiped and the bottom/top/perimeter cells are populated
+    // with floor / ceiling / wall tiles.
+    private var roomDragActive = false
+    private var roomAnchorX = 0
+    private var roomAnchorY = 0
+    private var roomAnchorZ = 0
+    /** Extra Z layers above [roomAnchorZ] included in the box (0 = single layer). */
+    private var roomZExtent = 0
 
     /** Index of the currently selected light source in the world (for editing radius/intensity). */
     private var selectedLightIndex: Int = -1
@@ -182,7 +203,7 @@ class MapEditor(
     }
 
     private fun newWorld() {
-        world = World(12, 12, 3)
+        world = World(3, 3, 3)
         currentFilePath = null
         resetCamera()
     }
@@ -355,8 +376,29 @@ class MapEditor(
                 if (inputSystem.isKeyPressed(GLFW_KEY_S)) elevation = (elevation - rotSpeed).coerceAtLeast(5f)
             }
 
-            if (inputSystem.isKeyJustPressed(GLFW_KEY_Z)) currentZ = (currentZ - 1).coerceAtLeast(0)
-            if (inputSystem.isKeyJustPressed(GLFW_KEY_X)) currentZ = (currentZ + 1).coerceAtMost(w.depth - 1)
+            if (inputSystem.isKeyJustPressed(GLFW_KEY_Z)) {
+                if (roomDragActive) {
+                    // Shrink the room's Z extent by one layer. Once it hits
+                    // zero (single layer at the anchor), further presses
+                    // extend the box DOWNWARD along the Z axis (negative
+                    // extent), clamped to layer 0.
+                    val minExtent = -roomAnchorZ
+                    roomZExtent = (roomZExtent - 1).coerceAtLeast(minExtent)
+                } else {
+                    currentZ = (currentZ - 1).coerceAtLeast(0)
+                }
+            }
+            if (inputSystem.isKeyJustPressed(GLFW_KEY_X)) {
+                if (roomDragActive) {
+                    // Grow the room's Z extent by one layer. If the extent
+                    // is currently negative (the box was extended downward),
+                    // X pulls the bottom back up before continuing upward.
+                    val maxExtent = ((w.depth - 1) - roomAnchorZ).coerceAtLeast(0)
+                    roomZExtent = (roomZExtent + 1).coerceAtMost(maxExtent)
+                } else {
+                    currentZ = (currentZ + 1).coerceAtMost(w.depth - 1)
+                }
+            }
 
             val scroll = inputSystem.getScrollDelta()
             if (scroll != 0f) {
@@ -434,7 +476,25 @@ class MapEditor(
                                         HoveredFace.EDGE_SOUTH -> node.removeTile(TileSlot.WALL_SOUTH)
                                         HoveredFace.EDGE_EAST -> node.removeTile(TileSlot.WALL_EAST)
                                         HoveredFace.EDGE_WEST -> node.removeTile(TileSlot.WALL_WEST)
-                                        HoveredFace.NONE -> node.clear()
+                                        // No specific face was detected by the
+                                        // ray-cast (typical for tools whose
+                                        // hover detection doesn't return a
+                                        // face, e.g. FLOOR / CEILING when the
+                                        // ray hits the cell from inside).
+                                        // Fall back to removing the single
+                                        // tile that matches the active tool —
+                                        // never wipe the whole node.
+                                        HoveredFace.NONE -> when (currentTool) {
+                                            EditorTool.FLOOR        -> node.removeTile(TileSlot.FLOOR)
+                                            EditorTool.CEILING      -> node.removeTile(TileSlot.CEILING)
+                                            EditorTool.WALL,
+                                            EditorTool.WALL_DOORWAY,
+                                            EditorTool.DOOR,
+                                            EditorTool.LADDER,
+                                            EditorTool.STAIRS,
+                                            EditorTool.LIGHT,
+                                            null                    -> { /* no-op */ }
+                                        }
                                     }
                                 }
                             }
@@ -449,6 +509,7 @@ class MapEditor(
                             else if (selectedLightIndex > clickedIdx) selectedLightIndex--
                         }
                     }
+                    PaletteTab.WORLD -> { /* No viewport interactions for the World tab. */ }
                     PaletteTab.TAGS -> {
                         // Ctrl+Click removes the selected tag (or all tags if none selected)
                         if (cursorX in 0 until w.width && cursorY in 0 until w.height) {
@@ -501,8 +562,48 @@ class MapEditor(
                 }
             }
 
+            // ── Room mode: drag-select a rectangle on the cursor's Z layer.
+            // While the drag is in progress, Z / X grow/shrink the box's Z
+            // extent (X adds another layer on top, Z removes one). On release
+            // the box is committed: every node inside the box is cleared
+            // first, then floors go on the bottom Z layer, ceilings on the
+            // top Z layer, and outer-perimeter cells get the appropriate
+            // wall tile facing outward.
+            var roomConsumedMouse = false
+            if (selectedEditorMode == EditorMode.ROOM && !uiBlocking && !ctrlHeld) {
+                if (!roomDragActive && inputSystem.isMouseButtonJustPressed(0) &&
+                    cursorX in 0 until w.width && cursorY in 0 until w.height) {
+                    roomDragActive = true
+                    roomAnchorX = cursorX
+                    roomAnchorY = cursorY
+                    roomAnchorZ = currentZ
+                    roomZExtent = 0
+                }
+                if (roomDragActive) {
+                    if (!inputSystem.isMouseButtonPressed(0)) {
+                        val endX = cursorX.coerceIn(0, w.width - 1)
+                        val endY = cursorY.coerceIn(0, w.height - 1)
+                        val otherZ = (roomAnchorZ + roomZExtent).coerceIn(0, w.depth - 1)
+                        val zLo = minOf(roomAnchorZ, otherZ)
+                        val zHi = maxOf(roomAnchorZ, otherZ)
+                        buildRoom(
+                            w,
+                            minOf(roomAnchorX, endX), maxOf(roomAnchorX, endX),
+                            minOf(roomAnchorY, endY), maxOf(roomAnchorY, endY),
+                            zLo, zHi
+                        )
+                        roomDragActive = false
+                        roomZExtent = 0
+                    }
+                    roomConsumedMouse = true
+                } else if (inputSystem.isMouseButtonPressed(0)) {
+                    // Drag began outside bounds — still suppress regular placement.
+                    roomConsumedMouse = true
+                }
+            }
+
             // Place with left mouse (non-Ctrl)
-            if (!ctrlHeld && inputSystem.isMouseButtonPressed(0)) {
+            if (!roomConsumedMouse && !ctrlHeld && inputSystem.isMouseButtonPressed(0)) {
                 if (cursorX in 0 until w.width && cursorY in 0 until w.height) {
                     val node = w.getNode(cursorX, cursorY, currentZ)
                     if (node != null) {
@@ -665,7 +766,7 @@ class MapEditor(
             }
 
             // Light selection, dragging, and placement
-            if (currentTool == EditorTool.LIGHT && !ctrlHeld && inputSystem.isMouseButtonJustPressed(0)) {
+            if (selectedEditorMode != EditorMode.ROOM && currentTool == EditorTool.LIGHT && !ctrlHeld && inputSystem.isMouseButtonJustPressed(0)) {
                 // Try to select an existing light first (check proximity in screen space)
                 val clickedLightIdx = findLightAtMouse(w)
                 if (clickedLightIdx >= 0) {
@@ -1508,6 +1609,7 @@ class MapEditor(
                     1f, 1f, 0f, 0.9f, 2f
                 )
             }
+            drawRoomDragPreview(w)
 
             // Draw light sources
             for ((idx, ls) in w.lightSources.withIndex()) {
@@ -1606,6 +1708,7 @@ class MapEditor(
                 1f, 1f, 0f, 0.9f, 2f
             )
         }
+        drawRoomDragPreview(w)
 
         // Draw light sources
         for ((idx, ls) in w.lightSources.withIndex()) {
@@ -1707,6 +1810,17 @@ class MapEditor(
             iconDrawer = { x, y, s -> drawGpuIcon(x, y, s) }
         ) {
             selectedEditorMode = if (selectedEditorMode == EditorMode.GPU_RENDER) EditorMode.NORMAL else EditorMode.GPU_RENDER
+        }
+        by += btnSize + btnPad
+
+        // --- Room mode (drag → cleared box with floor + ceiling + walls; Z/X resize Z extent during drag) ---
+        drawModeButton(btnPad, by, btnSize, selectedEditorMode == EditorMode.ROOM, mx, my,
+            tooltip = "Room (drag; Z/X during drag = fewer/more Z layers)",
+            iconDrawer = { x, y, s -> drawRoomIcon(x, y, s) }
+        ) {
+            selectedEditorMode = if (selectedEditorMode == EditorMode.ROOM) EditorMode.NORMAL else EditorMode.ROOM
+            roomDragActive = false
+            roomZExtent = 0
         }
         by += btnSize + btnPad
 
@@ -1853,6 +1967,21 @@ class MapEditor(
         debugRenderer.drawLine(cx - hs, cy - hs, cx - hs + ox, cy - hs - oy, col * 0.6f, col * 0.5f, col * 0.2f, a * 0.7f, 1f)
     }
 
+    /** Icon for the Room mode: a small rectangular room outline with a diagonal hint. */
+    private fun drawRoomIcon(x: Float, y: Float, s: Float) {
+        val on = selectedEditorMode == EditorMode.ROOM
+        val col = if (on) 0.9f else 0.55f
+        val a   = if (on) 0.95f else 0.7f
+        val pad = s * 0.18f
+        val x0 = x + pad; val y0 = y + pad
+        val x1 = x + s - pad; val y1 = y + s - pad
+        debugRenderer.drawLine(x0, y0, x1, y0, col, col, col + 0.05f, a, 1.6f)
+        debugRenderer.drawLine(x1, y0, x1, y1, col, col, col + 0.05f, a, 1.6f)
+        debugRenderer.drawLine(x1, y1, x0, y1, col, col, col + 0.05f, a, 1.6f)
+        debugRenderer.drawLine(x0, y1, x0, y0, col, col, col + 0.05f, a, 1.6f)
+        debugRenderer.drawLine(x0 + 2f, y0 + 2f, x1 - 2f, y1 - 2f, col * 0.75f, col * 0.8f, col * 0.9f, a * 0.7f, 1f)
+    }
+
     /** Draw a ceiling toggle icon (horizontal line with downward-facing surface). */
     private fun drawCeilingIcon(x: Float, y: Float, s: Float, enabled: Boolean) {
         val col = if (enabled) 0.85f else 0.45f
@@ -1904,65 +2033,141 @@ class MapEditor(
         val mx = inputSystem.getMouseX()
         val my = inputSystem.getMouseY()
 
-        // --- Tab bar (3 tabs) ---
-        var tabY = barH + 32f
-        val tabW = (toolsPaletteWidth - 16f) / 3f
+        // --- Tab bar (horizontally scrollable, auto-sized per label) ---
+        val tabY = barH + 32f
         val tabH = 24f
+        val stripX = palX + 8f
+        val stripW = toolsPaletteWidth - 16f
+        val tabPadX = 12f            // horizontal padding inside each tab
+        val tabGap  = 2f             // gap between tabs
+        val textScale = 1f
 
-        // Structures tab
-        val structActive = selectedPaletteTab == PaletteTab.STRUCTURES
-        val structHovered = mx >= palX + 8f && mx < palX + 8f + tabW && my >= tabY && my < tabY + tabH
-        if (structActive) {
-            ui.drawRect(palX + 8f, tabY, tabW, tabH, 0.25f, 0.35f, 0.55f, 0.9f)
-        } else if (structHovered) {
-            ui.drawRect(palX + 8f, tabY, tabW, tabH, 0.2f, 0.26f, 0.38f, 0.7f)
-        } else {
-            ui.drawRect(palX + 8f, tabY, tabW, tabH, 0.15f, 0.17f, 0.22f, 0.6f)
-        }
-        ui.drawText("Structures", palX + 12f, tabY + 5f, 0.82f, 0.82f, 0.9f, 1f, 1f)
-        if (structHovered && inputSystem.isMouseButtonJustPressed(0)) {
-            selectedPaletteTab = PaletteTab.STRUCTURES
-            currentTool = EditorTool.FLOOR
-        }
+        // Tab definitions: (label, tab enum, onSelect)
+        data class TabDef(val label: String, val tab: PaletteTab, val onSelect: () -> Unit)
+        val tabs = listOf(
+            TabDef("World", PaletteTab.WORLD) {
+                selectedPaletteTab = PaletteTab.WORLD
+                currentTool = null
+            },
+            TabDef("Structures", PaletteTab.STRUCTURES) {
+                selectedPaletteTab = PaletteTab.STRUCTURES
+                currentTool = EditorTool.FLOOR
+            },
+            TabDef("Lights", PaletteTab.LIGHTS) {
+                selectedPaletteTab = PaletteTab.LIGHTS
+                currentTool = EditorTool.LIGHT
+            },
+            TabDef("Tags", PaletteTab.TAGS) {
+                selectedPaletteTab = PaletteTab.TAGS
+                currentTool = null
+            }
+        )
 
-        // Lights tab
-        val lightsActive = selectedPaletteTab == PaletteTab.LIGHTS
-        val lightsHovered = mx >= palX + 8f + tabW && mx < palX + 8f + tabW * 2f && my >= tabY && my < tabY + tabH
-        if (lightsActive) {
-            ui.drawRect(palX + 8f + tabW, tabY, tabW, tabH, 0.25f, 0.35f, 0.55f, 0.9f)
-        } else if (lightsHovered) {
-            ui.drawRect(palX + 8f + tabW, tabY, tabW, tabH, 0.2f, 0.26f, 0.38f, 0.7f)
-        } else {
-            ui.drawRect(palX + 8f + tabW, tabY, tabW, tabH, 0.15f, 0.17f, 0.22f, 0.6f)
-        }
-        ui.drawText("Lights", palX + 12f + tabW, tabY + 5f, 0.82f, 0.82f, 0.9f, 1f, 1f)
-        if (lightsHovered && inputSystem.isMouseButtonJustPressed(0)) {
-            selectedPaletteTab = PaletteTab.LIGHTS
-            currentTool = EditorTool.LIGHT
-        }
-
-        // Tags tab
-        val tagsActive = selectedPaletteTab == PaletteTab.TAGS
-        val tagsHovered = mx >= palX + 8f + tabW * 2f && mx < palX + 8f + tabW * 3f && my >= tabY && my < tabY + tabH
-        if (tagsActive) {
-            ui.drawRect(palX + 8f + tabW * 2f, tabY, tabW, tabH, 0.25f, 0.35f, 0.55f, 0.9f)
-        } else if (tagsHovered) {
-            ui.drawRect(palX + 8f + tabW * 2f, tabY, tabW, tabH, 0.2f, 0.26f, 0.38f, 0.7f)
-        } else {
-            ui.drawRect(palX + 8f + tabW * 2f, tabY, tabW, tabH, 0.15f, 0.17f, 0.22f, 0.6f)
-        }
-        ui.drawText("Tags", palX + 12f + tabW * 2f, tabY + 5f, 0.82f, 0.82f, 0.9f, 1f, 1f)
-        if (tagsHovered && inputSystem.isMouseButtonJustPressed(0)) {
-            selectedPaletteTab = PaletteTab.TAGS
-            currentTool = null
+        // Compute each tab's width from its label width plus padding.
+        val tabWidths = FloatArray(tabs.size)
+        var totalWidth = 0f
+        for (i in tabs.indices) {
+            val w = ui.textWidth(tabs[i].label, textScale) + tabPadX * 2f
+            tabWidths[i] = w
+            totalWidth += w
+            if (i < tabs.size - 1) totalWidth += tabGap
         }
 
-        // Tab underline
-        ui.drawRect(palX + 8f, tabY + tabH, toolsPaletteWidth - 16f, 1f, 0.3f, 0.35f, 0.45f, 0.7f)
+        // Clamp horizontal scroll to the strip.
+        val maxScroll = (totalWidth - stripW).coerceAtLeast(0f)
+        // Mouse-wheel horizontal scrolling when the cursor is over the tab strip.
+        val overStrip = mx >= stripX && mx < stripX + stripW && my >= tabY && my < tabY + tabH
+        if (overStrip) {
+            val scroll = inputSystem.getScrollDelta()
+            if (scroll != 0f) paletteTabsScrollX -= scroll * 30f
+        }
+        paletteTabsScrollX = paletteTabsScrollX.coerceIn(0f, maxScroll)
+
+        // Render tabs, hard-clipped to the strip extents. Tabs fully outside
+        // the strip are skipped; tabs that straddle a strip edge have their
+        // background quad clamped to the visible region and their label is
+        // only drawn when it fits entirely inside the strip (avoids text
+        // bleeding past the palette border onto the viewport).
+        var cursorX = stripX - paletteTabsScrollX
+        for (i in tabs.indices) {
+            val def = tabs[i]
+            val w = tabWidths[i]
+            val rightEdge = cursorX + w
+            // Skip fully off-screen tabs
+            if (rightEdge <= stripX || cursorX >= stripX + stripW) {
+                cursorX = rightEdge + tabGap
+                continue
+            }
+
+            val active = selectedPaletteTab == def.tab
+            // Hit test is clipped to the visible strip so clicks outside don't register.
+            val visibleLeft  = maxOf(cursorX, stripX)
+            val visibleRight = minOf(rightEdge, stripX + stripW)
+            val hovered = mx >= visibleLeft && mx < visibleRight && my >= tabY && my < tabY + tabH
+
+            val bgR: Float; val bgG: Float; val bgB: Float; val bgA: Float
+            when {
+                active  -> { bgR = 0.25f; bgG = 0.35f; bgB = 0.55f; bgA = 0.9f }
+                hovered -> { bgR = 0.20f; bgG = 0.26f; bgB = 0.38f; bgA = 0.7f }
+                else    -> { bgR = 0.15f; bgG = 0.17f; bgB = 0.22f; bgA = 0.6f }
+            }
+            // Draw only the clipped portion of the tab's background.
+            ui.drawRect(visibleLeft, tabY, visibleRight - visibleLeft, tabH, bgR, bgG, bgB, bgA)
+
+            // Draw the label only when the tab is fully visible (no scissor
+            // available to clip text glyphs).
+            val labelX = cursorX + tabPadX
+            val labelW = ui.textWidth(def.label, textScale)
+            if (labelX >= stripX && labelX + labelW <= stripX + stripW) {
+                ui.drawText(def.label, labelX, tabY + 5f, 0.82f, 0.82f, 0.9f, 1f, textScale)
+            }
+
+            if (hovered && inputSystem.isMouseButtonJustPressed(0)) {
+                def.onSelect()
+            }
+            cursorX = rightEdge + tabGap
+        }
+
+        // Tab underline (full strip)
+        ui.drawRect(stripX, tabY + tabH, stripW, 1f, 0.3f, 0.35f, 0.45f, 0.7f)
+
+        // Scroll indicator chevrons when content overflows
+        if (maxScroll > 0f) {
+            val chevColor = 0.55f
+            if (paletteTabsScrollX > 0.5f) {
+                ui.drawText("<", stripX, tabY + 5f, chevColor, chevColor, chevColor + 0.1f, 1f, 1f)
+            }
+            if (paletteTabsScrollX < maxScroll - 0.5f) {
+                ui.drawText(">", stripX + stripW - 8f, tabY + 5f, chevColor, chevColor, chevColor + 0.1f, 1f, 1f)
+            }
+        }
 
         var by = tabY + tabH + 8f
 
         when (selectedPaletteTab) {
+            PaletteTab.WORLD -> {
+                ui.drawText("World size", palX + 10f, by, 0.7f, 0.75f, 0.85f, 1f, 1.1f)
+                by += 22f
+                // Three sliders. Values are integer in [1, 255]; whenever the
+                // user moves a slider we snap to the nearest positive multiple
+                // of 3 (the World class requires this) and call setSize on the
+                // world. Sliders are draggable; releasing the mouse button or
+                // moving the cursor off any slider commits the new size.
+                val w0 = world
+                if (w0 != null) {
+                    by = drawWorldSizeSlider("X", 'X', w0.width,  palX, by, btnW, mx, my)
+                    by += 4f
+                    by = drawWorldSizeSlider("Y", 'Y', w0.height, palX, by, btnW, mx, my)
+                    by += 4f
+                    by = drawWorldSizeSlider("Z", 'Z', w0.depth,  palX, by, btnW, mx, my)
+                }
+                // Release the drag when the mouse button is released anywhere.
+                if (!inputSystem.isMouseButtonPressed(0)) draggingWorldSlider = null
+
+                by += 8f
+                ui.drawText("Range: 1 - 255 (snapped to 3)", palX + 10f, by, 0.45f, 0.5f, 0.6f, 0.7f, 0.9f)
+                by += 16f
+            }
             PaletteTab.STRUCTURES -> {
                 val previewSize = 64f
                 val previewPad = 8f
@@ -2330,6 +2535,85 @@ class MapEditor(
      * Draw a model preview button in the palette. Renders a small 3D preview of the mesh
      * using projected wireframe within the button bounds.
      */
+    /**
+     * Draw a labelled horizontal slider for one of the world's three size
+     * axes. Shows the current value, supports click-and-drag, and applies
+     * any change immediately by calling [World.setSize] (snapping the slider
+     * value to a positive multiple of 3). Returns the next `by` cursor y.
+     */
+    private fun drawWorldSizeSlider(
+        label: String, axis: Char, currentValue: Int,
+        palX: Float, by: Float, btnW: Float, mx: Float, my: Float
+    ): Float {
+        val w0 = world ?: return by
+        val rowH = 22f
+        val labelW = 18f
+        val valueW = 36f
+        val trackX = palX + 10f + labelW + 4f
+        val trackY = by + 8f
+        val trackW = btnW - labelW - valueW - 16f
+        val trackH = 6f
+        val sliderMin = 1
+        val sliderMax = 255
+
+        // Track background
+        ui.drawRect(trackX, trackY, trackW, trackH, 0.12f, 0.14f, 0.18f, 0.9f)
+        ui.drawRect(trackX, trackY, trackW, 1f, 0.3f, 0.35f, 0.45f, 0.7f)
+
+        // Compute slider position from current value
+        val tCur = ((currentValue - sliderMin).toFloat() / (sliderMax - sliderMin).toFloat()).coerceIn(0f, 1f)
+        val handleW = 8f
+        val handleX = trackX + tCur * trackW - handleW / 2f
+        val handleY = trackY - 5f
+        val handleH = trackH + 10f
+
+        // Hit-test the track for click/drag
+        val overTrack = mx >= trackX && mx <= trackX + trackW && my >= handleY && my <= handleY + handleH
+        if (overTrack && inputSystem.isMouseButtonJustPressed(0)) draggingWorldSlider = axis
+
+        // Compute target value while dragging
+        var targetValue = currentValue
+        if (draggingWorldSlider == axis && inputSystem.isMouseButtonPressed(0)) {
+            val t = ((mx - trackX) / trackW).coerceIn(0f, 1f)
+            val raw = sliderMin + (t * (sliderMax - sliderMin)).toInt()
+            targetValue = raw.coerceIn(sliderMin, sliderMax)
+        }
+
+        // Snap to nearest positive multiple of 3 (World requires this).
+        val snapped = ((targetValue + 1) / 3).coerceAtLeast(1) * 3
+
+        // Apply size change immediately
+        if (snapped != currentValue) {
+            val newW = if (axis == 'X') snapped else w0.width
+            val newH = if (axis == 'Y') snapped else w0.height
+            val newD = if (axis == 'Z') snapped else w0.depth
+            try { w0.setSize(newW, newH, newD) } catch (_: Exception) { /* invalid, ignore */ }
+            // Keep the cursor/camera inside the new bounds
+            cursorX = cursorX.coerceAtMost(w0.width - 1)
+            cursorY = cursorY.coerceAtMost(w0.height - 1)
+            currentZ = currentZ.coerceAtMost(w0.depth - 1)
+        }
+
+        // Handle fill (active portion of the track)
+        val tNow = ((w0.let { if (axis == 'X') it.width else if (axis == 'Y') it.height else it.depth } - sliderMin)
+            .toFloat() / (sliderMax - sliderMin).toFloat()).coerceIn(0f, 1f)
+        ui.drawRect(trackX, trackY, tNow * trackW, trackH, 0.30f, 0.45f, 0.70f, 0.9f)
+
+        // Handle thumb
+        val handleHovered = mx >= handleX && mx <= handleX + handleW && my >= handleY && my <= handleY + handleH
+        val hr = if (handleHovered || draggingWorldSlider == axis) 0.6f else 0.45f
+        ui.drawRect(handleX, handleY, handleW, handleH, hr, hr + 0.05f, hr + 0.15f, 1f)
+
+        // Label and value text
+        ui.drawText(label, palX + 10f, by + 4f, 0.85f, 0.85f, 0.9f, 1f, 1f)
+        val shown = when (axis) {
+            'X' -> w0.width; 'Y' -> w0.height; else -> w0.depth
+        }
+        ui.drawText(shown.toString(), trackX + trackW + 6f, by + 4f, 0.85f, 0.85f, 0.9f, 1f, 1f)
+
+        return by + rowH
+    }
+
     private fun drawModelPreviewButton(
         x: Float, y: Float, w: Float, h: Float,
         mesh: MeshData?, tool: EditorTool, label: String,
@@ -2607,6 +2891,86 @@ class MapEditor(
     private fun drawLine(x1: Float, y1: Float, x2: Float, y2: Float,
                          r: Float, g: Float, b: Float, a: Float, thickness: Float = 2f) {
         debugRenderer.drawLine(x1, y1, x2, y2, r, g, b, a, thickness)
+    }
+
+    /**
+     * Draw the wireframe preview of the in-progress Room mode selection.
+     * Called from both rendering paths (GPU and CPU) right after the cursor
+     * highlight so it appears on top of the world.
+     */
+    private fun drawRoomDragPreview(w: World) {
+        if (selectedEditorMode != EditorMode.ROOM || !roomDragActive) return
+        val endX = cursorX.coerceIn(0, w.width - 1)
+        val endY = cursorY.coerceIn(0, w.height - 1)
+        val otherZ = (roomAnchorZ + roomZExtent).coerceIn(0, w.depth - 1)
+        val zLoI = minOf(roomAnchorZ, otherZ)
+        val zHiI = maxOf(roomAnchorZ, otherZ)
+        val xLo = minOf(roomAnchorX, endX).toFloat()
+        val xHi = maxOf(roomAnchorX, endX).toFloat() + 1f
+        val yLo = minOf(roomAnchorY, endY).toFloat()
+        val yHi = maxOf(roomAnchorY, endY).toFloat() + 1f
+        val zLo = zLoI.toFloat()
+        val zHi = zHiI.toFloat() + 1f
+        debugRenderer.drawWireframeBox(
+            xLo, yLo, zLo,
+            xHi - xLo, yHi - yLo, zHi - zLo,
+            camera,
+            0.2f, 0.9f, 1.0f, 0.9f, 2f
+        )
+        // Footprint outline on the bottom Z of the (possibly extended-down) box
+        debugRenderer.drawWireframeBox(
+            xLo, yLo, zLo,
+            xHi - xLo, yHi - yLo, 0.02f,
+            camera,
+            0.2f, 0.9f, 1.0f, 0.55f, 1f
+        )
+    }
+
+    /**
+     * Build a room box in [w] over the inclusive cell range
+     * [x0..x1, y0..y1, z0..z1].
+     *
+     * 1. Every node in the box is fully cleared first (removes any existing
+     *    walls, floors, doors, ceilings, ladders, tags, etc.).
+     * 2. The bottom Z layer (z == z0) gets floor tiles in every cell.
+     * 3. The top Z layer (z == z1) gets ceiling tiles in every cell.
+     * 4. Every perimeter cell on the XY rectangle gets the appropriate wall
+     *    tile on the slot facing outward.
+     */
+    private fun buildRoom(
+        w: World,
+        x0: Int, x1: Int,
+        y0: Int, y1: Int,
+        z0: Int, z1: Int
+    ) {
+        val xLo = x0.coerceAtLeast(0); val xHi = x1.coerceAtMost(w.width - 1)
+        val yLo = y0.coerceAtLeast(0); val yHi = y1.coerceAtMost(w.height - 1)
+        val zLo = z0.coerceAtLeast(0); val zHi = z1.coerceAtMost(w.depth - 1)
+        if (xHi < xLo || yHi < yLo || zHi < zLo) return
+
+        // 1) Clear every node in the box first (interior wipe).
+        for (z in zLo..zHi) {
+            for (x in xLo..xHi) {
+                for (y in yLo..yHi) {
+                    w.getNode(x, y, z)?.clear()
+                }
+            }
+        }
+
+        // 2) Floor / ceiling / perimeter walls.
+        for (z in zLo..zHi) {
+            for (x in xLo..xHi) {
+                for (y in yLo..yHi) {
+                    val node = w.getNode(x, y, z) ?: continue
+                    if (z == zLo) node.setTile(FloorTile())
+                    if (z == zHi) node.setTile(CeilingTile())
+                    if (y == yHi) node.setTile(WallNorthTile())
+                    if (y == yLo) node.setTile(WallSouthTile())
+                    if (x == xHi) node.setTile(WallEastTile())
+                    if (x == xLo) node.setTile(WallWestTile())
+                }
+            }
+        }
     }
 
     fun resize(width: Int, height: Int) {

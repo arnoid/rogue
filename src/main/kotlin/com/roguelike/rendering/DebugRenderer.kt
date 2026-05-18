@@ -175,28 +175,38 @@ class DebugRenderer(private val ui: SimpleUI) {
         r: Float, g: Float, b: Float, a: Float,
         thickness: Float = 1.5f
     ) {
+        drawWireframeBox(x, y, z, size, size, size, camera, r, g, b, a, thickness)
+    }
+
+    /**
+     * Draw the 12-edge wireframe of an axis-aligned box at (x,y,z) with the
+     * given per-axis dimensions. Same projection / styling as
+     * [drawWireframeCube]. Used for multi-cell selection previews where a
+     * single uniform-edge cube isn't enough.
+     */
+    fun drawWireframeBox(
+        x: Float, y: Float, z: Float,
+        sx: Float, sy: Float, sz: Float,
+        camera: Camera,
+        r: Float, g: Float, b: Float, a: Float,
+        thickness: Float = 1.5f
+    ) {
         val sw = ui.screenWidth
         val sh = ui.screenHeight
-        val s = size
 
-        // 8 corners
         val corners = arrayOf(
-            Vector3f(x,   y,   z),     Vector3f(x+s, y,   z),
-            Vector3f(x+s, y+s, z),     Vector3f(x,   y+s, z),
-            Vector3f(x,   y,   z+s),   Vector3f(x+s, y,   z+s),
-            Vector3f(x+s, y+s, z+s),   Vector3f(x,   y+s, z+s)
+            Vector3f(x,    y,    z),     Vector3f(x+sx, y,    z),
+            Vector3f(x+sx, y+sy, z),     Vector3f(x,    y+sy, z),
+            Vector3f(x,    y,    z+sz),  Vector3f(x+sx, y,    z+sz),
+            Vector3f(x+sx, y+sy, z+sz),  Vector3f(x,    y+sy, z+sz)
         )
 
-        // Project each corner to screen space
-        val projected = Array(8) { i ->
-            camera.project(corners[i], sw, sh)
-        }
+        val projected = Array(8) { i -> camera.project(corners[i], sw, sh) }
 
-        // 12 edges by vertex index pairs
         val edges = intArrayOf(
-            0,1, 1,2, 2,3, 3,0,   // bottom face
-            4,5, 5,6, 6,7, 7,4,   // top face
-            0,4, 1,5, 2,6, 3,7    // vertical pillars
+            0,1, 1,2, 2,3, 3,0,
+            4,5, 5,6, 6,7, 7,4,
+            0,4, 1,5, 2,6, 3,7
         )
 
         var i = 0
