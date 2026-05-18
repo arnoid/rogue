@@ -6,6 +6,15 @@ import java.io.File
 
 object WorldIO {
 
+    /** Returns true if the given ladder slot is already represented by a directional tag. */
+    private fun isLadderSlotCoveredByTag(slot: TileSlot, tags: Set<String>): Boolean = when (slot) {
+        TileSlot.WALL_NORTH -> "north_ladder" in tags
+        TileSlot.WALL_SOUTH -> "south_ladder" in tags
+        TileSlot.WALL_EAST  -> "east_ladder" in tags
+        TileSlot.WALL_WEST  -> "west_ladder" in tags
+        else -> false
+    }
+
     private fun resourceRoot(): File = File(".").absoluteFile
 
     private fun toRelativeModelPath(absolutePath: String): String {
@@ -62,6 +71,15 @@ object WorldIO {
                 }
                 nodeData.ladderSlots.forEach { slotName ->
                     try { node.tagAsLadder(TileSlot.valueOf(slotName)) } catch (_: IllegalArgumentException) {}
+                }
+                // Support directional ladder tags (e.g. "north_ladder" -> WALL_NORTH)
+                nodeData.tags.forEach { tag ->
+                    when (tag) {
+                        "north_ladder" -> node.tagAsLadder(TileSlot.WALL_NORTH)
+                        "south_ladder" -> node.tagAsLadder(TileSlot.WALL_SOUTH)
+                        "east_ladder"  -> node.tagAsLadder(TileSlot.WALL_EAST)
+                        "west_ladder"  -> node.tagAsLadder(TileSlot.WALL_WEST)
+                    }
                 }
                 nodeData.items.forEach { itemData ->
                     val item = ItemFactory.create(itemData.type, itemData.id)
@@ -132,7 +150,9 @@ object WorldIO {
                             doorSlots = ArrayList(node.doorSlots.map { it.name }),
                             manualDoorSlots = ArrayList(node.manualDoorSlots.map { it.name }),
                             socketSlots = ArrayList(node.socketSlots.map { it.name }),
-                            ladderSlots = ArrayList(node.ladderSlots.map { it.name })
+                            ladderSlots = ArrayList(node.ladderSlots
+                                .filter { slot -> !isLadderSlotCoveredByTag(slot, node.tags) }
+                                .map { it.name })
                         ))
                     }
                 }

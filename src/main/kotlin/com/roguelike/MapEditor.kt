@@ -421,7 +421,22 @@ class MapEditor(
                             val node = w.getNode(cursorX, cursorY, currentZ)
                             if (node != null) {
                                 when (currentTool) {
-                                    EditorTool.LADDER, EditorTool.STAIRS -> node.removeTile(TileSlot.STAIRS)
+                                    EditorTool.LADDER -> {
+                                        node.removeTile(TileSlot.STAIRS)
+                                        // Also remove ladder edge tag from hovered edge
+                                        when (hoveredFace) {
+                                            HoveredFace.EDGE_NORTH -> node.untagLadder(TileSlot.WALL_NORTH)
+                                            HoveredFace.EDGE_SOUTH -> node.untagLadder(TileSlot.WALL_SOUTH)
+                                            HoveredFace.EDGE_EAST -> node.untagLadder(TileSlot.WALL_EAST)
+                                            HoveredFace.EDGE_WEST -> node.untagLadder(TileSlot.WALL_WEST)
+                                            else -> {
+                                                // Remove all ladder tags if no edge hovered
+                                                for (s in listOf(TileSlot.WALL_NORTH, TileSlot.WALL_SOUTH, TileSlot.WALL_EAST, TileSlot.WALL_WEST))
+                                                    node.untagLadder(s)
+                                            }
+                                        }
+                                    }
+                                    EditorTool.STAIRS -> node.removeTile(TileSlot.STAIRS)
                                     else -> when (hoveredFace) {
                                         HoveredFace.BOTTOM -> node.removeTile(TileSlot.FLOOR)
                                         HoveredFace.TOP -> node.removeTile(TileSlot.CEILING)
@@ -449,10 +464,24 @@ class MapEditor(
                         if (cursorX in 0 until w.width && cursorY in 0 until w.height) {
                             val node = w.getNode(cursorX, cursorY, currentZ)
                             if (node != null) {
-                                if (selectedTag != null) {
+                                if (selectedTag == WorldNode.Tags.LADDER) {
+                                    // Remove ladder tag from hovered edge
+                                    val slot = when (hoveredFace) {
+                                        HoveredFace.EDGE_NORTH -> TileSlot.WALL_NORTH
+                                        HoveredFace.EDGE_SOUTH -> TileSlot.WALL_SOUTH
+                                        HoveredFace.EDGE_EAST -> TileSlot.WALL_EAST
+                                        HoveredFace.EDGE_WEST -> TileSlot.WALL_WEST
+                                        else -> null
+                                    }
+                                    if (slot != null) node.untagLadder(slot)
+                                } else if (selectedTag != null) {
                                     node.tags.remove(selectedTag)
                                 } else {
                                     node.tags.clear()
+                                    // Also clear all ladder edge tags
+                                    for (s in listOf(TileSlot.WALL_NORTH, TileSlot.WALL_SOUTH, TileSlot.WALL_EAST, TileSlot.WALL_WEST)) {
+                                        node.untagLadder(s)
+                                    }
                                 }
                             }
                         }
@@ -468,8 +497,22 @@ class MapEditor(
                         // Tag placement when Tags tab is active
                         if (selectedPaletteTab == PaletteTab.TAGS && selectedTag != null && inputSystem.isMouseButtonJustPressed(0)) {
                             val tag = selectedTag!!
-                            if (!node.tags.contains(tag)) {
-                                node.tags.add(tag)
+                            if (tag == WorldNode.Tags.LADDER) {
+                                // Ladder tag is edge-based: use hovered face to determine edge
+                                val slot = when (hoveredFace) {
+                                    HoveredFace.EDGE_NORTH -> TileSlot.WALL_NORTH
+                                    HoveredFace.EDGE_SOUTH -> TileSlot.WALL_SOUTH
+                                    HoveredFace.EDGE_EAST -> TileSlot.WALL_EAST
+                                    HoveredFace.EDGE_WEST -> TileSlot.WALL_WEST
+                                    else -> null
+                                }
+                                if (slot != null) {
+                                    node.tagAsLadder(slot)
+                                }
+                            } else {
+                                if (!node.tags.contains(tag)) {
+                                    node.tags.add(tag)
+                                }
                             }
                         }
                         when (currentTool) {
@@ -486,7 +529,26 @@ class MapEditor(
                                 }
                             }
                             EditorTool.LADDER -> {
-                                val t = LadderTile(); t.rotationY = ladderRotation; node.setTile(t)
+                                // Place ladder on the hovered edge (like walls)
+                                val rot = when (hoveredFace) {
+                                    HoveredFace.EDGE_NORTH -> 0f
+                                    HoveredFace.EDGE_SOUTH -> 180f
+                                    HoveredFace.EDGE_EAST -> 90f
+                                    HoveredFace.EDGE_WEST -> 270f
+                                    else -> null
+                                }
+                                if (rot != null) {
+                                    val t = LadderTile(); t.rotationY = rot; node.setTile(t)
+                                    // Also tag the edge as ladder for navigation
+                                    val slot = when (hoveredFace) {
+                                        HoveredFace.EDGE_NORTH -> TileSlot.WALL_NORTH
+                                        HoveredFace.EDGE_SOUTH -> TileSlot.WALL_SOUTH
+                                        HoveredFace.EDGE_EAST -> TileSlot.WALL_EAST
+                                        HoveredFace.EDGE_WEST -> TileSlot.WALL_WEST
+                                        else -> null
+                                    }
+                                    slot?.let { node.tagAsLadder(it) }
+                                }
                             }
                             EditorTool.STAIRS -> {
                                 val t = StairsTile(); t.rotationY = stairsRotation; node.setTile(t)
@@ -695,8 +757,12 @@ class MapEditor(
         val by = cursorY.toFloat()
         val bz = currentZ.toFloat()
 
-        when (currentTool) {
-            EditorTool.FLOOR -> {
+        // Also detect edges when placing ladder tags
+        val needsEdgeDetection = currentTool == EditorTool.WALL || currentTool == EditorTool.LADDER ||
+            (selectedPaletteTab == PaletteTab.TAGS && selectedTag == WorldNode.Tags.LADDER)
+
+        when {
+            currentTool == EditorTool.FLOOR -> {
                 // Highlight bottom face (z = bz plane)
                 if (abs(dir.z) > 1e-6f) {
                     val t = (bz - nearWorld.z) / dir.z
@@ -709,7 +775,7 @@ class MapEditor(
                     }
                 }
             }
-            EditorTool.CEILING -> {
+            currentTool == EditorTool.CEILING -> {
                 // Highlight top face (z = bz + 1 plane)
                 if (abs(dir.z) > 1e-6f) {
                     val t = (bz + 1f - nearWorld.z) / dir.z
@@ -722,59 +788,31 @@ class MapEditor(
                     }
                 }
             }
-            EditorTool.WALL, EditorTool.LADDER -> {
-                // Find closest edge of the cube the ray is near
-                // Test all 4 face planes and find the closest hit
-                data class FaceHit(val face: HoveredFace, val t: Float)
-                val hits = mutableListOf<FaceHit>()
-
-                // North face (y = by + 1)
-                if (abs(dir.y) > 1e-6f) {
-                    val t = (by + 1f - nearWorld.y) / dir.y
+            needsEdgeDetection -> {
+                // Determine which inner edge of the cursor node the mouse is closest to.
+                // Use the ray-floor intersection point to find the local position within the tile,
+                // then pick the nearest edge.
+                val planeZ = currentZ.toFloat()
+                if (abs(dir.z) > 1e-6f) {
+                    val t = (planeZ - nearWorld.z) / dir.z
                     if (t > 0) {
-                        val hx = nearWorld.x + dir.x * t
-                        val hz = nearWorld.z + dir.z * t
-                        if (hx >= bx && hx <= bx + 1f && hz >= bz && hz <= bz + 1f) {
-                            hits.add(FaceHit(HoveredFace.EDGE_NORTH, t))
+                        val hitX = nearWorld.x + dir.x * t
+                        val hitY = nearWorld.y + dir.y * t
+                        val localX = hitX - bx  // [0, 1) within tile
+                        val localY = hitY - by
+                        // Find which edge is closest
+                        val distN = 1f - localY
+                        val distS = localY
+                        val distE = 1f - localX
+                        val distW = localX
+                        val minDist = minOf(distN, distS, distE, distW)
+                        hoveredFace = when (minDist) {
+                            distN -> HoveredFace.EDGE_NORTH
+                            distS -> HoveredFace.EDGE_SOUTH
+                            distE -> HoveredFace.EDGE_EAST
+                            else -> HoveredFace.EDGE_WEST
                         }
                     }
-                }
-                // South face (y = by)
-                if (abs(dir.y) > 1e-6f) {
-                    val t = (by - nearWorld.y) / dir.y
-                    if (t > 0) {
-                        val hx = nearWorld.x + dir.x * t
-                        val hz = nearWorld.z + dir.z * t
-                        if (hx >= bx && hx <= bx + 1f && hz >= bz && hz <= bz + 1f) {
-                            hits.add(FaceHit(HoveredFace.EDGE_SOUTH, t))
-                        }
-                    }
-                }
-                // East face (x = bx + 1)
-                if (abs(dir.x) > 1e-6f) {
-                    val t = (bx + 1f - nearWorld.x) / dir.x
-                    if (t > 0) {
-                        val hy = nearWorld.y + dir.y * t
-                        val hz = nearWorld.z + dir.z * t
-                        if (hy >= by && hy <= by + 1f && hz >= bz && hz <= bz + 1f) {
-                            hits.add(FaceHit(HoveredFace.EDGE_EAST, t))
-                        }
-                    }
-                }
-                // West face (x = bx)
-                if (abs(dir.x) > 1e-6f) {
-                    val t = (bx - nearWorld.x) / dir.x
-                    if (t > 0) {
-                        val hy = nearWorld.y + dir.y * t
-                        val hz = nearWorld.z + dir.z * t
-                        if (hy >= by && hy <= by + 1f && hz >= bz && hz <= bz + 1f) {
-                            hits.add(FaceHit(HoveredFace.EDGE_WEST, t))
-                        }
-                    }
-                }
-
-                if (hits.isNotEmpty()) {
-                    hoveredFace = hits.minByOrNull { it.t }!!.face
                 }
             }
             else -> {
@@ -1274,16 +1312,15 @@ class MapEditor(
             for (x in 0 until w.width) {
                 for (y in 0 until w.height) {
                     val node = w.getNode(x, y, z) ?: continue
-                    if (node.tags.isEmpty()) continue
                     var offsetZ = 0f
+
+                    // Draw regular tags
                     for (tag in node.tags) {
                         val wx = x + 0.5f
                         val wy = y + 0.5f
                         val wz = z + 0.85f + offsetZ
-                        // Draw small sphere at tag position
                         debugRenderer.drawFilledSphere(wx, wy, wz, 0.12f, camera, 0.9f, 0.8f, 0.2f, 0.85f)
                         debugRenderer.drawWireframeSphere(wx, wy, wz, 0.12f, camera, 1f, 1f, 0.4f, 0.9f, 8, 1.5f)
-                        // Draw tag name as text above the sphere
                         val worldPos = org.joml.Vector3f(wx, wy, wz + 0.15f)
                         val screenPos = camera.project(worldPos, sw, sh)
                         if (screenPos.z in 0f..1f) {
@@ -1293,6 +1330,23 @@ class MapEditor(
                             ui.drawText(label, screenPos.x - tw / 2f, screenPos.y, 1f, 0.95f, 0.3f, 1f, 1.2f)
                         }
                         offsetZ += 0.3f
+                    }
+
+                    // Draw ladder edge tags (green spheres on edges)
+                    for (slot in node.ladderSlots) {
+                        val wx = x + 0.5f + when (slot) { TileSlot.WALL_EAST -> 0.45f; TileSlot.WALL_WEST -> -0.45f; else -> 0f }
+                        val wy = y + 0.5f + when (slot) { TileSlot.WALL_NORTH -> 0.45f; TileSlot.WALL_SOUTH -> -0.45f; else -> 0f }
+                        val wz = z + 0.5f
+                        debugRenderer.drawFilledSphere(wx, wy, wz, 0.08f, camera, 0.3f, 0.9f, 0.4f, 0.9f)
+                        debugRenderer.drawWireframeSphere(wx, wy, wz, 0.08f, camera, 0.4f, 1f, 0.5f, 0.9f, 6, 1.5f)
+                        val worldPos = org.joml.Vector3f(wx, wy, wz + 0.12f)
+                        val screenPos = camera.project(worldPos, sw, sh)
+                        if (screenPos.z in 0f..1f) {
+                            val label = "LADDER ${slot.name.removePrefix("WALL_")}"
+                            val tw = ui.textWidth(label) * 1.0f
+                            ui.drawRect(screenPos.x - tw / 2f - 2f, screenPos.y - 1f, tw + 4f, 14f, 0f, 0f, 0f, 0.5f)
+                            ui.drawText(label, screenPos.x - tw / 2f, screenPos.y, 0.3f, 0.95f, 0.4f, 1f, 1.0f)
+                        }
                     }
                 }
             }

@@ -327,13 +327,14 @@ class RoguelikeGame(
     private fun renderWorld(w: World) {
         val floorR = 0.25f; val floorG = 0.30f; val floorB = 0.40f
         val wallR  = 0.55f; val wallG  = 0.42f; val wallB  = 0.30f
+        val playerZ = kotlin.math.floor(player?.position?.z ?: 0f).toInt()
 
         for (z in 0..maxRenderZ) {
             for (x in 0 until w.width) {
                 for (y in 0 until w.height) {
                     val node = w.getNode(x, y, z) ?: continue
                     val hasFloor = node.hasTile(TileSlot.FLOOR)
-                    val hasCeiling = node.hasTile(TileSlot.CEILING)
+                    val hasCeiling = node.hasTile(TileSlot.CEILING) && z < playerZ
                     val hasWallN = node.hasTile(TileSlot.WALL_NORTH)
                     val hasWallS = node.hasTile(TileSlot.WALL_SOUTH)
                     val hasWallE = node.hasTile(TileSlot.WALL_EAST)

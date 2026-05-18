@@ -13,5 +13,10 @@ abstract class Actor {
     var collisionSize: Float = 0.15f
     val inventory = mutableListOf<Item>()
 
+    /** True when the actor is in the CLIMBING state (on a ladder). */
+    var isClimbing: Boolean = false
+    /** The X,Y position the actor is locked to while climbing (ladder center axis). */
+    val climbAnchor = Vec3()
+
     open fun update(delta: Float) {}
 }
