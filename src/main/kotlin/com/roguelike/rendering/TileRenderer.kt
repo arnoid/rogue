@@ -26,6 +26,9 @@ class TileRenderer(private val registry: TileRenderRegistry) {
     /**
      * Collect a mesh entry for this tile into the provided list.
      * The model matrix encodes position and rotation.
+     *
+     * For door tiles, picks the alt (open) model when `isOpen=true`, and also
+     * emits the doorway frame mesh so the surrounding wall is always visible.
      */
     fun collectMesh(
         tile: Tile,
@@ -35,9 +38,16 @@ class TileRenderer(private val registry: TileRenderRegistry) {
         if (tile !is BaseTile) return
         val renderData = registry[tile] ?: return
 
-        // The model in TileRenderData is expected to be a VulkanMesh once
-        // the asset loading pipeline is integrated
-        val mesh = renderData.model as? VulkanMesh ?: return
+        // Pick door open/closed model based on tile state
+        val isDoorOpen = when (tile) {
+            is DoorNorthTile -> tile.isOpen
+            is DoorSouthTile -> tile.isOpen
+            is DoorEastTile  -> tile.isOpen
+            is DoorWestTile  -> tile.isOpen
+            else -> false
+        }
+        val activeModel = if (isDoorOpen && renderData.altModel != null) renderData.altModel else renderData.model
+        val mesh = activeModel as? VulkanMesh ?: return
 
         val modelMatrix = Matrix4f().translation(
             x + tile.xOffset,
@@ -57,6 +67,21 @@ class TileRenderer(private val registry: TileRenderRegistry) {
         modelMatrix.scale(sx, sy, sz)
 
         entries.add(SceneMeshEntry(mesh, modelMatrix))
+
+        // Also emit the optional frame mesh (doorway frame) with the same transform
+        val frameMesh = renderData.frameModel as? VulkanMesh
+        if (frameMesh != null) {
+            val frameMatrix = Matrix4f().translation(
+                x + tile.xOffset,
+                y + tile.yOffset,
+                z + tile.zOffset
+            )
+            frameMatrix.rotateX(Math.toRadians(tile.rotationX.toDouble()).toFloat())
+            frameMatrix.rotateY(Math.toRadians(tile.rotationY.toDouble()).toFloat())
+            frameMatrix.rotateZ(Math.toRadians(tile.rotationZ.toDouble()).toFloat())
+            frameMatrix.scale(sx, sy, sz)
+            entries.add(SceneMeshEntry(frameMesh, frameMatrix))
+        }
     }
 }
 

@@ -30,7 +30,7 @@
     {"x":3,"y":9,"z":0,"tiles":[{"type":"WallEastTile","slot":"WALL_EAST"}]},
     {"x":4,"y":2,"z":0,"tiles":[{"type":"WallNorthTile","slot":"WALL_NORTH"}]},
     {"x":4,"y":3,"z":0,"tiles":[{"type":"FloorTile","slot":"FLOOR"}]},
-    {"x":4,"y":4,"z":0,"tiles":[{"type":"FloorTile","slot":"FLOOR"}]},
+    {"x":4,"y":4,"z":0,"tiles":[{"type":"FloorTile","slot":"FLOOR"},{"type":"DoorEastTile","slot":"WALL_EAST"}],"doorSlots":["WALL_EAST"]},
     {"x":4,"y":5,"z":0,"tiles":[{"type":"FloorTile","slot":"FLOOR"}]},
     {"x":4,"y":6,"z":0,"tiles":[{"type":"FloorTile","slot":"FLOOR"},{"type":"CeilingTile","slot":"CEILING"}]},
     {"x":4,"y":6,"z":1,"tiles":[{"type":"FloorTile","slot":"FLOOR"}]},
@@ -43,7 +43,7 @@
     {"x":4,"y":10,"z":0,"tiles":[{"type":"WallSouthTile","slot":"WALL_SOUTH"}]},
     {"x":5,"y":2,"z":0,"tiles":[{"type":"WallNorthTile","slot":"WALL_NORTH"}]},
     {"x":5,"y":3,"z":0,"tiles":[{"type":"FloorTile","slot":"FLOOR"}]},
-    {"x":5,"y":4,"z":0,"tiles":[{"type":"FloorTile","slot":"FLOOR"}]},
+    {"x":5,"y":4,"z":0,"tiles":[{"type":"FloorTile","slot":"FLOOR"}],"doorSlots":["WALL_WEST"],"manualDoorSlots":["WALL_WEST"]},
     {"x":5,"y":5,"z":0,"tiles":[{"type":"FloorTile","slot":"FLOOR"}]},
     {"x":5,"y":5,"z":2,"tiles":[{"type":"FloorTile","slot":"FLOOR"},{"type":"WallEastTile","slot":"WALL_EAST"}]},
     {"x":5,"y":6,"z":0,"tiles":[{"type":"FloorTile","slot":"FLOOR"},{"type":"CeilingTile","slot":"CEILING"}]},
@@ -95,6 +95,7 @@
   "props": [
   ],
   "lightSources": [
-    {"id":"b9de381b-1748-48aa-9684-5411fae5e97e","x":7.5,"y":8.5,"z":0.8,"intensity":5.0,"radius":5.0,"colorHex":"ffcc88"}
+    {"id":"b9de381b-1748-48aa-9684-5411fae5e97e","x":7.5,"y":8.5,"z":0.8,"intensity":5.0,"radius":5.0,"colorHex":"ffcc88"},
+    {"id":"a9a0df71-b5cb-49d8-939f-f3956aeaeddc","x":2.5,"y":4.5,"z":0.8,"intensity":5.0,"radius":5.0,"colorHex":"ffcc88"}
   ]
 }

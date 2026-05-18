@@ -71,11 +71,29 @@ class World(width: Int, height: Int, depth: Int) {
     }
 
     /**
-     * Checks whether movement from (fx,fy,fz) towards the given direction is blocked by a wall.
+     * Checks whether movement from (fx,fy,fz) towards the given direction is blocked by a wall.I *
+     * Handles the door asymmetry: a door tile is only placed on ONE side of a wall,
+     * but the door SLOT may be tagged on both adjacent nodes (via the MapEditor's
+     * two-sided tagging). When the current node has the slot tagged as a door but
+     * no tile in that slot, we check the adjacent node's opposite slot for the
+     * actual door tile.
      */
     fun isBlocked(x: Int, y: Int, z: Int, direction: TileSlot): Boolean {
         val node = getNode(x, y, z) ?: return true
-        return node.isWallBlocking(direction)
+        if (node.isWallBlocking(direction)) return true
+        // If this node tagged the slot as a door but has no tile, defer to the adjacent node.
+        if (node.isDoor(direction) && node.getTile(direction) == null) {
+            val (ax, ay, opp) = when (direction) {
+                TileSlot.WALL_NORTH -> Triple(x, y + 1, TileSlot.WALL_SOUTH)
+                TileSlot.WALL_SOUTH -> Triple(x, y - 1, TileSlot.WALL_NORTH)
+                TileSlot.WALL_EAST  -> Triple(x + 1, y, TileSlot.WALL_WEST)
+                TileSlot.WALL_WEST  -> Triple(x - 1, y, TileSlot.WALL_EAST)
+                else -> return false
+            }
+            val adj = getNode(ax, ay, z) ?: return false
+            return adj.isWallBlocking(opp)
+        }
+        return false
     }
 
     /**

@@ -59,6 +59,9 @@ class MovementSystem(private val world: World) {
             val step = Vec3(dir).scl(delta * speed)
             actor.facingDirection.set(dir.x, dir.y, 0f)
 
+            // Doors never auto-open on collision — they must be opened via
+            // explicit interaction (see InteractionSystem.interact).
+
             val nextX = actor.position.x + step.x
             val nextY = actor.position.y + step.y
             val onStairs = isOnStairs(actor)
@@ -502,14 +505,26 @@ class MovementSystem(private val world: World) {
                 val maxY = floor(top).toInt().coerceAtMost(world.height - 1)
                 for (iy in minY..maxY) {
                     val leftNode = world.getNode(ix, iy, z)
-                    if (leftNode != null && leftNode.isWallBlocking(TileSlot.WALL_EAST)) {
-                        if (log) println("[$LOG_TAG]   BLOCKED by EAST wall at node($ix,$iy,$z)")
-                        return false
+                    if (leftNode != null) {
+                        if (leftNode.isDoor(TileSlot.WALL_EAST)) {
+                            val tile = leftNode.getTile(TileSlot.WALL_EAST)
+                            println("[DoorCheck] leftNode($ix,$iy,$z).WALL_EAST isDoor=true tile=${tile?.javaClass?.simpleName} isBlocking=${tile?.isBlocking()} isWallBlocking=${leftNode.isWallBlocking(TileSlot.WALL_EAST)}")
+                        }
+                        if (leftNode.isWallBlocking(TileSlot.WALL_EAST)) {
+                            if (log) println("[$LOG_TAG]   BLOCKED by EAST wall at node($ix,$iy,$z)")
+                            return false
+                        }
                     }
                     val rightNode = world.getNode(ix + 1, iy, z)
-                    if (rightNode != null && rightNode.isWallBlocking(TileSlot.WALL_WEST)) {
-                        if (log) println("[$LOG_TAG]   BLOCKED by WEST wall at node(${ix+1},$iy,$z)")
-                        return false
+                    if (rightNode != null) {
+                        if (rightNode.isDoor(TileSlot.WALL_WEST)) {
+                            val tile = rightNode.getTile(TileSlot.WALL_WEST)
+                            println("[DoorCheck] rightNode(${ix+1},$iy,$z).WALL_WEST isDoor=true tile=${tile?.javaClass?.simpleName} isBlocking=${tile?.isBlocking()} isWallBlocking=${rightNode.isWallBlocking(TileSlot.WALL_WEST)}")
+                        }
+                        if (rightNode.isWallBlocking(TileSlot.WALL_WEST)) {
+                            if (log) println("[$LOG_TAG]   BLOCKED by WEST wall at node(${ix+1},$iy,$z)")
+                            return false
+                        }
                     }
                 }
             }

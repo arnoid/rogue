@@ -2,6 +2,10 @@ package com.roguelike.serialization
 
 import com.roguelike.core.model.*
 import com.roguelike.world.BaseTile
+import com.roguelike.world.DoorEastTile
+import com.roguelike.world.DoorNorthTile
+import com.roguelike.world.DoorSouthTile
+import com.roguelike.world.DoorWestTile
 import java.io.File
 
 object WorldIO {
@@ -56,6 +60,15 @@ object WorldIO {
                             tile.rotationX = tData.rotX
                             tile.rotationY = tData.rotY
                             tile.rotationZ = tData.rotZ
+                        }
+                        // Restore door open/closed state
+                        if (tData.isOpen != null) {
+                            when (tile) {
+                                is DoorNorthTile -> tile.isOpen = tData.isOpen!!
+                                is DoorSouthTile -> tile.isOpen = tData.isOpen!!
+                                is DoorEastTile  -> tile.isOpen = tData.isOpen!!
+                                is DoorWestTile  -> tile.isOpen = tData.isOpen!!
+                            }
                         }
                         node.setTile(tile)
                     }
@@ -141,8 +154,15 @@ object WorldIO {
                             x = x, y = y, z = z,
                             tags = ArrayList(node.tags.toList()),
                             tiles = ArrayList(node.tiles.map { tile ->
-                                if (tile is BaseTile) TileData(tile.type, tile.slot.name, tile.rotationX, tile.rotationY, tile.rotationZ)
-                                else TileData(tile.type, tile.slot.name)
+                                val openState: Boolean? = when (tile) {
+                                    is DoorNorthTile -> tile.isOpen
+                                    is DoorSouthTile -> tile.isOpen
+                                    is DoorEastTile  -> tile.isOpen
+                                    is DoorWestTile  -> tile.isOpen
+                                    else -> null
+                                }
+                                if (tile is BaseTile) TileData(tile.type, tile.slot.name, tile.rotationX, tile.rotationY, tile.rotationZ, openState)
+                                else TileData(tile.type, tile.slot.name, isOpen = openState)
                             }),
                             items = ArrayList(node.items.map { item ->
                                 ItemData(item.id, item.type, item.colorHex, item.name, ArrayList(item.tags.toList()))
@@ -220,6 +240,7 @@ internal object SimpleJsonParser {
                     if (t.rotX != 0f) sb.append(",\"rotX\":${t.rotX}")
                     if (t.rotY != 0f) sb.append(",\"rotY\":${t.rotY}")
                     if (t.rotZ != 0f) sb.append(",\"rotZ\":${t.rotZ}")
+                    if (t.isOpen != null) sb.append(",\"isOpen\":${t.isOpen}")
                     sb.append("}")
                     if (ti < n.tiles.size - 1) sb.append(",")
                 }
@@ -355,7 +376,8 @@ internal object SimpleJsonParser {
             val t = raw as? Map<*, *> ?: return@forEach
             tiles.add(TileData(
                 type = str(t, "type"), slot = str(t, "slot"),
-                rotX = fl(t, "rotX"), rotY = fl(t, "rotY"), rotZ = fl(t, "rotZ")
+                rotX = fl(t, "rotX"), rotY = fl(t, "rotY"), rotZ = fl(t, "rotZ"),
+                isOpen = t["isOpen"] as? Boolean
             ))
         }
         val items = ArrayList<ItemData>()

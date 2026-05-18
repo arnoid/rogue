@@ -5,6 +5,7 @@ import com.roguelike.core.model.Tile
 import com.roguelike.core.model.TileSlot
 import com.roguelike.core.model.WorldNode
 import com.roguelike.core.systems.MovementSystem
+import com.roguelike.core.systems.InteractionSystem
 import com.roguelike.input.InputSystem
 import com.roguelike.rendering.Camera
 import com.roguelike.rendering.DebugRenderer
@@ -28,6 +29,10 @@ private fun gameTileFactory(type: String): Tile? = when (type) {
     WallSouthTile.TYPE -> WallSouthTile()
     WallEastTile.TYPE -> WallEastTile()
     WallWestTile.TYPE -> WallWestTile()
+    DoorNorthTile.TYPE -> DoorNorthTile()
+    DoorSouthTile.TYPE -> DoorSouthTile()
+    DoorEastTile.TYPE -> DoorEastTile()
+    DoorWestTile.TYPE -> DoorWestTile()
     StairsTile.TYPE -> StairsTile()
     LadderTile.TYPE -> LadderTile()
     else -> null
@@ -46,6 +51,7 @@ class RoguelikeGame(
     private var world: World? = null
     private var player: Player? = null
     private var movementSystem: MovementSystem? = null
+    private var interactionSystem: InteractionSystem? = null
     private var inputHandler: InputHandler? = null
     private var lastFrameTime: Long = System.nanoTime()
 
@@ -56,6 +62,9 @@ class RoguelikeGame(
     private var wallMesh: MeshData? = null
     private var ladderMesh: MeshData? = null
     private var stairsMesh: MeshData? = null
+    private var doorClosedMesh: MeshData? = null
+    private var doorOpenMesh: MeshData? = null
+    private var doorFrameMesh: MeshData? = null
 
     // Debug renderer for spheres/wireframes
     private val debugRenderer = DebugRenderer(ui)
@@ -79,6 +88,9 @@ class RoguelikeGame(
         try { wallMesh = assetLoader.loadModel("wall", "models/vox/wall/wall.obj") } catch (_: Exception) {}
         try { ladderMesh = assetLoader.loadModel("ladder", "models/vox/stairs/ladder_vertical_n.obj") } catch (_: Exception) {}
         try { stairsMesh = assetLoader.loadModel("stairs", "models/vox/stairs/stairs_n.obj") } catch (_: Exception) {}
+        try { doorClosedMesh = assetLoader.loadModel("door_n_closed", "models/vox/door/door_n_closed.obj") } catch (_: Exception) {}
+        try { doorOpenMesh = assetLoader.loadModel("door_n_open", "models/vox/door/door_n_open.obj") } catch (_: Exception) {}
+        try { doorFrameMesh = assetLoader.loadModel("wall_doorway_n", "models/vox/wall/wall_doorway_n.obj") } catch (_: Exception) {}
 
         inputHandler = InputHandler(inputSystem)
         lastFrameTime = System.nanoTime()
@@ -95,6 +107,7 @@ class RoguelikeGame(
             if (loaded != null) {
                 world = loaded
                 movementSystem = MovementSystem(loaded)
+                interactionSystem = InteractionSystem(loaded) { tag, msg -> println("[$tag] $msg") }
 
                 // Find player_spawn tag or default to center
                 var spawnX = loaded.width / 2f
@@ -115,6 +128,7 @@ class RoguelikeGame(
                 }
 
                 player = Player().apply { position.set(spawnX, spawnY, spawnZ) }
+                interactionSystem?.actors?.add(player!!)
                 maxRenderZ = loaded.depth - 1
                 distance = max(loaded.width, loaded.height).toFloat() * 0.8f
                 worldLoaded = true
@@ -165,6 +179,17 @@ class RoguelikeGame(
             }
         }
 
+        // Interaction (F): toggle nearby manual doors / pick up items
+        if (input.isInteractionJustPressed()) {
+            val pos = p.position
+            println("[Interaction] F pressed at pos=(${pos.x},${pos.y},${pos.z}) facing=${p.facingDirection} interactionSystem=${interactionSystem != null}")
+            val result = interactionSystem?.interact(p, p.facingDirection)
+            println("[Interaction] interact() result=$result")
+        }
+
+        // Per-frame interaction tick: rescue trapped actors, process deferred door closes
+        interactionSystem?.update(delta)
+
         // Camera orbit controls (Shift + WASD for pitch/zoom, Q/E always for rotation)
         if (shiftHeld) {
             if (inputSystem.isKeyPressed(GLFW_KEY_W)) elevation = (elevation + 60f * delta).coerceAtMost(89f)
@@ -205,7 +230,7 @@ class RoguelikeGame(
         val sh = ui.screenHeight
         val posStr = "Pos: %.1f, %.1f, %.1f".format(p.position.x, p.position.y, p.position.z)
         ui.drawText(posStr, 10f, 10f, 0.7f, 0.7f, 0.8f, 1f, 1.1f)
-        ui.drawText("WASD: Move  Shift+WASD: Camera  Z/X: Zoom  ESC: Menu", 10f, sh - 30f, 0.5f, 0.55f, 0.65f, 0.8f, 1f)
+        ui.drawText("WASD: Move  Shift+WASD: Camera  Z/X: Zoom  F: Interact  ESC: Menu", 10f, sh - 30f, 0.5f, 0.55f, 0.65f, 0.8f, 1f)
 
         return true
     }
@@ -346,10 +371,10 @@ class RoguelikeGame(
 
                     if (hasFloor) floorMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetZ = -0.5f, r = floorR, g = floorG, b = floorB) }
                     if (hasCeiling) ceilingMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetZ = 0.5f, r = floorR, g = floorG, b = floorB) }
-                    if (hasWallN) wallMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetY = 0.5f, rotationYDeg = 0f, r = wallR, g = wallG, b = wallB) }
-                    if (hasWallS) wallMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetY = -0.5f, rotationYDeg = 0f, r = wallR, g = wallG, b = wallB) }
-                    if (hasWallE) wallMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = 0.5f, rotationYDeg = 90f, r = wallR, g = wallG, b = wallB) }
-                    if (hasWallW) wallMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = -0.5f, rotationYDeg = 90f, r = wallR, g = wallG, b = wallB) }
+                    if (hasWallN) drawWallOrDoor(node, TileSlot.WALL_NORTH, tbx, tby, tbz, offsetY = 0.5f, rotationYDeg = 0f, r = wallR, g = wallG, b = wallB)
+                    if (hasWallS) drawWallOrDoor(node, TileSlot.WALL_SOUTH, tbx, tby, tbz, offsetY = -0.5f, rotationYDeg = 180f, r = wallR, g = wallG, b = wallB)
+                    if (hasWallE) drawWallOrDoor(node, TileSlot.WALL_EAST, tbx, tby, tbz, offsetX = 0.5f, rotationYDeg = 90f, r = wallR, g = wallG, b = wallB)
+                    if (hasWallW) drawWallOrDoor(node, TileSlot.WALL_WEST, tbx, tby, tbz, offsetX = -0.5f, rotationYDeg = 270f, r = wallR, g = wallG, b = wallB)
                     if (hasStairs) {
                         val tile = node.getTile(TileSlot.STAIRS)
                         if (tile is StairsTile) {
@@ -364,6 +389,41 @@ class RoguelikeGame(
                 }
             }
         }
+    }
+
+    /**
+     * Draws either a wall mesh, or a doorway frame + door panel (closed or open)
+     * if the wall slot has a door tile.
+     */
+    private fun drawWallOrDoor(
+        node: com.roguelike.core.model.WorldNode,
+        slot: TileSlot,
+        tbx: Float, tby: Float, tbz: Float,
+        offsetX: Float = 0f, offsetY: Float = 0f,
+        rotationYDeg: Float,
+        r: Float, g: Float, b: Float
+    ) {
+        val tile = node.getTile(slot)
+        val isDoor = tile is DoorNorthTile || tile is DoorSouthTile || tile is DoorEastTile || tile is DoorWestTile
+        if (!isDoor) {
+            wallMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = offsetX, offsetY = offsetY, rotationYDeg = rotationYDeg, r = r, g = g, b = b) }
+            return
+        }
+        val isOpen = when (tile) {
+            is DoorNorthTile -> tile.isOpen
+            is DoorSouthTile -> tile.isOpen
+            is DoorEastTile  -> tile.isOpen
+            is DoorWestTile  -> tile.isOpen
+            else -> false
+        }
+        // Always draw the doorway frame
+        doorFrameMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = offsetX, offsetY = offsetY, rotationYDeg = rotationYDeg, r = r, g = g, b = b) }
+        // Draw the door panel (closed or open) with a slightly different color so it's distinguishable
+        val panelMesh = if (isOpen) doorOpenMesh else doorClosedMesh
+        val pr = if (isOpen) 0.35f else 0.55f
+        val pg = if (isOpen) 0.55f else 0.35f
+        val pb = 0.25f
+        panelMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = offsetX, offsetY = offsetY, rotationYDeg = rotationYDeg, r = pr, g = pg, b = pb) }
     }
 
     private fun drawModelAtNode(

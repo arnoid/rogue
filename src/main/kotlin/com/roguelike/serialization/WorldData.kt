@@ -34,7 +34,9 @@ data class TileData(
     var slot: String = "",
     var rotX: Float = 0f,
     var rotY: Float = 0f,
-    var rotZ: Float = 0f
+    var rotZ: Float = 0f,
+    /** For door tiles: whether they are currently open. Null = not applicable / default. */
+    var isOpen: Boolean? = null
 )
 
 

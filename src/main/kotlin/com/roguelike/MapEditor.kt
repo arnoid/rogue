@@ -23,6 +23,10 @@ private fun defaultTileFactory(type: String): com.roguelike.core.model.Tile? = w
     WallSouthTile.TYPE -> WallSouthTile()
     WallEastTile.TYPE -> WallEastTile()
     WallWestTile.TYPE -> WallWestTile()
+    DoorNorthTile.TYPE -> DoorNorthTile()
+    DoorSouthTile.TYPE -> DoorSouthTile()
+    DoorEastTile.TYPE -> DoorEastTile()
+    DoorWestTile.TYPE -> DoorWestTile()
     StairsTile.TYPE -> StairsTile()
     LadderTile.TYPE -> LadderTile()
     else -> null
@@ -56,6 +60,7 @@ class MapEditor(
     private var floorMesh: MeshData? = null
     private var ceilingMesh: MeshData? = null
     private var wallMesh: MeshData? = null
+    private var doorMesh: MeshData? = null
     private var ladderMesh: MeshData? = null
     private var stairsMesh: MeshData? = null
 
@@ -115,7 +120,7 @@ class MapEditor(
     private var currentTool: EditorTool? = EditorTool.FLOOR
     private var lastFrameTime: Long = System.nanoTime()
 
-    enum class EditorTool { FLOOR, CEILING, WALL, LADDER, STAIRS, LIGHT }
+    enum class EditorTool { FLOOR, CEILING, WALL, DOOR, LADDER, STAIRS, LIGHT }
 
     /** Current stairs rotation in degrees (0=N, 90=E, 180=S, 270=W). */
     private var stairsRotation = 0f
@@ -154,26 +159,12 @@ class MapEditor(
 
     fun show() {
         // Load structure model meshes
-         try {
-            floorMesh = assetLoader.loadModel("floor", "models/vox/floor/floor.obj")
-            println("[MapEditor] Loaded floor model: ${floorMesh!!.vertices.size / 6} verts, ${floorMesh!!.indices.size} indices, scale=${floorMesh!!.scale}, center=${floorMesh!!.center}")
-        } catch (e: Exception) { println("[MapEditor] Failed to load floor model: ${e.message}"); e.printStackTrace() }
-        try {
-            ceilingMesh = assetLoader.loadModel("ceiling", "models/vox/ceiling/ceiling.obj")
-            println("[MapEditor] Loaded ceiling model: ${ceilingMesh!!.vertices.size / 6} verts, ${ceilingMesh!!.indices.size} indices, scale=${ceilingMesh!!.scale}, center=${ceilingMesh!!.center}")
-        } catch (e: Exception) { println("[MapEditor] Failed to load ceiling model: ${e.message}"); e.printStackTrace() }
-        try {
-            wallMesh = assetLoader.loadModel("wall", "models/vox/wall/wall.obj")
-            println("[MapEditor] Loaded wall model: ${wallMesh!!.vertices.size / 6} verts, ${wallMesh!!.indices.size} indices, scale=${wallMesh!!.scale}, center=${wallMesh!!.center}")
-        } catch (e: Exception) { println("[MapEditor] Failed to load wall model: ${e.message}"); e.printStackTrace() }
-        try {
-            ladderMesh = assetLoader.loadModel("ladder", "models/vox/stairs/ladder_vertical_n.obj")
-            println("[MapEditor] Loaded ladder model: ${ladderMesh!!.vertices.size / 6} verts")
-        } catch (e: Exception) { println("[MapEditor] Failed to load ladder model: ${e.message}"); e.printStackTrace() }
-        try {
-            stairsMesh = assetLoader.loadModel("stairs", "models/vox/stairs/stairs_n.obj")
-            println("[MapEditor] Loaded stairs model: ${stairsMesh!!.vertices.size / 6} verts")
-        } catch (e: Exception) { println("[MapEditor] Failed to load stairs model: ${e.message}"); e.printStackTrace() }
+        try { floorMesh = assetLoader.loadModel("floor", "models/vox/floor/floor.obj") } catch (_: Exception) {}
+        try { ceilingMesh = assetLoader.loadModel("ceiling", "models/vox/ceiling/ceiling.obj") } catch (_: Exception) {}
+        try { wallMesh = assetLoader.loadModel("wall", "models/vox/wall/wall.obj") } catch (_: Exception) {}
+        try { doorMesh = assetLoader.loadModel("wall_doorway_n", "models/vox/wall/wall_doorway_n.obj") } catch (_: Exception) {}
+        try { ladderMesh = assetLoader.loadModel("ladder", "models/vox/stairs/ladder_vertical_n.obj") } catch (_: Exception) {}
+        try { stairsMesh = assetLoader.loadModel("stairs", "models/vox/stairs/stairs_n.obj") } catch (_: Exception) {}
 
         // Create or load a world
         val saveFile = File("saved-worlds/world.wld")
@@ -205,13 +196,10 @@ class MapEditor(
                 recentFiles.touch(file.canonicalPath)
                 rebuildFileMenu()
                 resetCamera()
-                println("[MapEditor] Loaded: ${file.path}")
             } else {
-                println("[MapEditor] loadWorld returned null")
                 newWorld()
             }
         } catch (e: Exception) {
-            println("[MapEditor] Failed to load: ${e.message}")
             newWorld()
         }
     }
@@ -224,9 +212,7 @@ class MapEditor(
             currentFilePath = file.canonicalPath
             recentFiles.touch(file.canonicalPath)
             rebuildFileMenu()
-            println("[MapEditor] Saved: ${file.path}")
         } catch (e: Exception) {
-            println("[MapEditor] Save failed: ${e.message}")
         }
     }
 
@@ -474,6 +460,28 @@ class MapEditor(
                                         else -> null
                                     }
                                     if (slot != null) node.untagLadder(slot)
+                                } else if (selectedTag == WorldNode.Tags.DOOR_MANUAL) {
+                                    // Remove manual door tag from hovered edge (and adjacent node's opposite wall)
+                                    val slot = when (hoveredFace) {
+                                        HoveredFace.EDGE_NORTH -> TileSlot.WALL_NORTH
+                                        HoveredFace.EDGE_SOUTH -> TileSlot.WALL_SOUTH
+                                        HoveredFace.EDGE_EAST -> TileSlot.WALL_EAST
+                                        HoveredFace.EDGE_WEST -> TileSlot.WALL_WEST
+                                        else -> null
+                                    }
+                                    if (slot != null) {
+                                        node.untagManualDoor(slot)
+                                        val (adjX, adjY, oppSlot) = when (slot) {
+                                            TileSlot.WALL_NORTH -> Triple(cursorX, cursorY + 1, TileSlot.WALL_SOUTH)
+                                            TileSlot.WALL_SOUTH -> Triple(cursorX, cursorY - 1, TileSlot.WALL_NORTH)
+                                            TileSlot.WALL_EAST -> Triple(cursorX + 1, cursorY, TileSlot.WALL_WEST)
+                                            TileSlot.WALL_WEST -> Triple(cursorX - 1, cursorY, TileSlot.WALL_EAST)
+                                            else -> Triple(-1, -1, slot)
+                                        }
+                                        if (adjX in 0 until w.width && adjY in 0 until w.height) {
+                                            w.getNode(adjX, adjY, currentZ)?.untagManualDoor(oppSlot)
+                                        }
+                                    }
                                 } else if (selectedTag != null) {
                                     node.tags.remove(selectedTag)
                                 } else {
@@ -498,7 +506,7 @@ class MapEditor(
                         if (selectedPaletteTab == PaletteTab.TAGS && selectedTag != null && inputSystem.isMouseButtonJustPressed(0)) {
                             val tag = selectedTag!!
                             if (tag == WorldNode.Tags.LADDER) {
-                                // Ladder tag is edge-based: use hovered face to determine edge
+                                // Ladder tag: only place on edge that has a LadderTile
                                 val slot = when (hoveredFace) {
                                     HoveredFace.EDGE_NORTH -> TileSlot.WALL_NORTH
                                     HoveredFace.EDGE_SOUTH -> TileSlot.WALL_SOUTH
@@ -506,8 +514,65 @@ class MapEditor(
                                     HoveredFace.EDGE_WEST -> TileSlot.WALL_WEST
                                     else -> null
                                 }
+                                if (slot != null && node.getTile(TileSlot.STAIRS) is LadderTile) {
+                                    // Verify ladder faces this direction
+                                    val ladderTile = node.getTile(TileSlot.STAIRS) as LadderTile
+                                    val facing = ladderTile.facingDirection()
+                                    if (facing == slot) {
+                                        node.tagAsLadder(slot)
+                                    }
+                                }
+                            } else if (tag == WorldNode.Tags.STAIRS) {
+                                // Stairs tag: only place if node has a StairsTile
+                                if (node.getTile(TileSlot.STAIRS) is StairsTile) {
+                                    if (!node.tags.contains(tag)) {
+                                        node.tags.add(tag)
+                                    }
+                                }
+                            } else if (tag == WorldNode.Tags.DOOR_MANUAL) {
+                                // Door manual tag: only place on edge that has a door tile
+                                val slot = when (hoveredFace) {
+                                    HoveredFace.EDGE_NORTH -> TileSlot.WALL_NORTH
+                                    HoveredFace.EDGE_SOUTH -> TileSlot.WALL_SOUTH
+                                    HoveredFace.EDGE_EAST -> TileSlot.WALL_EAST
+                                    HoveredFace.EDGE_WEST -> TileSlot.WALL_WEST
+                                    else -> null
+                                }
+                                System.out.println("[DOOR_MANUAL] click: pos=($cursorX,$cursorY,$currentZ) hoveredFace=$hoveredFace slot=$slot")
                                 if (slot != null) {
-                                    node.tagAsLadder(slot)
+                                    val tile = node.getTile(slot)
+                                    val hasDoor = node.isDoor(slot) || tile is DoorNorthTile || tile is DoorSouthTile || tile is DoorEastTile || tile is DoorWestTile
+                                    System.out.println("[DOOR_MANUAL]   tile=${tile?.javaClass?.simpleName} isDoor=${node.isDoor(slot)} hasDoor=$hasDoor tiles=${node.tiles.map { "${it.slot}=${it.javaClass.simpleName}" }} doorSlots=${node.doorSlots} manualDoorSlots=${node.manualDoorSlots}")
+                                    if (hasDoor) {
+                                        node.tagAsDoor(slot)
+                                        node.tagAsManualDoor(slot)
+                                        System.out.println("[DOOR_MANUAL]   SUCCESS -> doorSlots=${node.doorSlots} manualDoorSlots=${node.manualDoorSlots}")
+                                    } else {
+                                        // Check adjacent node's opposite wall (a door on east of (7,5) is also west of (8,5))
+                                        val (adjX, adjY, oppSlot) = when (slot) {
+                                            TileSlot.WALL_NORTH -> Triple(cursorX, cursorY + 1, TileSlot.WALL_SOUTH)
+                                            TileSlot.WALL_SOUTH -> Triple(cursorX, cursorY - 1, TileSlot.WALL_NORTH)
+                                            TileSlot.WALL_EAST -> Triple(cursorX + 1, cursorY, TileSlot.WALL_WEST)
+                                            TileSlot.WALL_WEST -> Triple(cursorX - 1, cursorY, TileSlot.WALL_EAST)
+                                            else -> Triple(-1, -1, slot)
+                                        }
+                                        val adjNode = if (adjX in 0 until w.width && adjY in 0 until w.height) w.getNode(adjX, adjY, currentZ) else null
+                                        val adjTile = adjNode?.getTile(oppSlot)
+                                        val adjHasDoor = adjNode != null && (adjNode.isDoor(oppSlot) || adjTile is DoorNorthTile || adjTile is DoorSouthTile || adjTile is DoorEastTile || adjTile is DoorWestTile)
+                                        System.out.println("[DOOR_MANUAL]   checking adj($adjX,$adjY) oppSlot=$oppSlot adjTile=${adjTile?.javaClass?.simpleName} adjHasDoor=$adjHasDoor")
+                                        if (adjHasDoor) {
+                                            // Tag both sides
+                                            adjNode!!.tagAsDoor(oppSlot)
+                                            adjNode.tagAsManualDoor(oppSlot)
+                                            node.tagAsDoor(slot)
+                                            node.tagAsManualDoor(slot)
+                                            System.out.println("[DOOR_MANUAL]   SUCCESS (via adj) -> node doorSlots=${node.doorSlots} manualDoorSlots=${node.manualDoorSlots}, adj doorSlots=${adjNode.doorSlots} manualDoorSlots=${adjNode.manualDoorSlots}")
+                                        } else {
+                                            System.out.println("[DOOR_MANUAL]   FAIL: no door at slot or adjacent")
+                                        }
+                                    }
+                                } else {
+                                    System.out.println("[DOOR_MANUAL]   FAIL: slot=null (hoveredFace=$hoveredFace not an edge)")
                                 }
                             } else {
                                 if (!node.tags.contains(tag)) {
@@ -526,6 +591,30 @@ class MapEditor(
                                     HoveredFace.EDGE_EAST -> node.setTile(WallEastTile())
                                     HoveredFace.EDGE_WEST -> node.setTile(WallWestTile())
                                     else -> {}
+                                }
+                            }
+                            EditorTool.DOOR -> {
+                                // Place door (doorway + door tile) along the hovered edge
+                                val slot = when (hoveredFace) {
+                                    HoveredFace.EDGE_NORTH -> TileSlot.WALL_NORTH
+                                    HoveredFace.EDGE_SOUTH -> TileSlot.WALL_SOUTH
+                                    HoveredFace.EDGE_EAST -> TileSlot.WALL_EAST
+                                    HoveredFace.EDGE_WEST -> TileSlot.WALL_WEST
+                                    else -> null
+                                }
+                                if (slot != null) {
+                                    val doorTile = when (slot) {
+                                        TileSlot.WALL_NORTH -> DoorNorthTile()
+                                        TileSlot.WALL_SOUTH -> DoorSouthTile()
+                                        TileSlot.WALL_EAST -> DoorEastTile()
+                                        TileSlot.WALL_WEST -> DoorWestTile()
+                                        else -> DoorNorthTile()
+                                    }
+                                    node.setTile(doorTile)
+                                    node.tagAsDoor(slot)
+                                    System.out.println("[DOOR_TOOL] placed: pos=($cursorX,$cursorY,$currentZ) hoveredFace=$hoveredFace slot=$slot tile=${doorTile.javaClass.simpleName} doorSlots=${node.doorSlots} manualDoorSlots=${node.manualDoorSlots}")
+                                } else {
+                                    System.out.println("[DOOR_TOOL] FAIL: hoveredFace=$hoveredFace not an edge")
                                 }
                             }
                             EditorTool.LADDER -> {
@@ -668,7 +757,6 @@ class MapEditor(
                         if (file.exists()) {
                             loadWorldFromFile(file)
                         } else {
-                            println("[MapEditor] Recent file not found: ${file.path}")
                         }
                     }
                 }
@@ -758,36 +846,10 @@ class MapEditor(
         val bz = currentZ.toFloat()
 
         // Also detect edges when placing ladder tags
-        val needsEdgeDetection = currentTool == EditorTool.WALL || currentTool == EditorTool.LADDER ||
-            (selectedPaletteTab == PaletteTab.TAGS && selectedTag == WorldNode.Tags.LADDER)
+        val needsEdgeDetection = currentTool == EditorTool.WALL || currentTool == EditorTool.DOOR || currentTool == EditorTool.LADDER ||
+            (selectedPaletteTab == PaletteTab.TAGS && (selectedTag == WorldNode.Tags.LADDER || selectedTag == WorldNode.Tags.DOOR_MANUAL))
 
         when {
-            currentTool == EditorTool.FLOOR -> {
-                // Highlight bottom face (z = bz plane)
-                if (abs(dir.z) > 1e-6f) {
-                    val t = (bz - nearWorld.z) / dir.z
-                    if (t > 0) {
-                        val hx = nearWorld.x + dir.x * t
-                        val hy = nearWorld.y + dir.y * t
-                        if (hx >= bx && hx <= bx + 1f && hy >= by && hy <= by + 1f) {
-                            hoveredFace = HoveredFace.BOTTOM
-                        }
-                    }
-                }
-            }
-            currentTool == EditorTool.CEILING -> {
-                // Highlight top face (z = bz + 1 plane)
-                if (abs(dir.z) > 1e-6f) {
-                    val t = (bz + 1f - nearWorld.z) / dir.z
-                    if (t > 0) {
-                        val hx = nearWorld.x + dir.x * t
-                        val hy = nearWorld.y + dir.y * t
-                        if (hx >= bx && hx <= bx + 1f && hy >= by && hy <= by + 1f) {
-                            hoveredFace = HoveredFace.TOP
-                        }
-                    }
-                }
-            }
             needsEdgeDetection -> {
                 // Determine which inner edge of the cursor node the mouse is closest to.
                 // Use the ray-floor intersection point to find the local position within the tile,
@@ -811,6 +873,32 @@ class MapEditor(
                             distS -> HoveredFace.EDGE_SOUTH
                             distE -> HoveredFace.EDGE_EAST
                             else -> HoveredFace.EDGE_WEST
+                        }
+                    }
+                }
+            }
+            currentTool == EditorTool.FLOOR -> {
+                // Highlight bottom face (z = bz plane)
+                if (abs(dir.z) > 1e-6f) {
+                    val t = (bz - nearWorld.z) / dir.z
+                    if (t > 0) {
+                        val hx = nearWorld.x + dir.x * t
+                        val hy = nearWorld.y + dir.y * t
+                        if (hx >= bx && hx <= bx + 1f && hy >= by && hy <= by + 1f) {
+                            hoveredFace = HoveredFace.BOTTOM
+                        }
+                    }
+                }
+            }
+            currentTool == EditorTool.CEILING -> {
+                // Highlight top face (z = bz + 1 plane)
+                if (abs(dir.z) > 1e-6f) {
+                    val t = (bz + 1f - nearWorld.z) / dir.z
+                    if (t > 0) {
+                        val hx = nearWorld.x + dir.x * t
+                        val hy = nearWorld.y + dir.y * t
+                        if (hx >= bx && hx <= bx + 1f && hy >= by && hy <= by + 1f) {
+                            hoveredFace = HoveredFace.TOP
                         }
                     }
                 }
@@ -1081,10 +1169,8 @@ class MapEditor(
 
         if (modelDrawLogCount < 5) {
             modelDrawLogCount++
-            println("[MapEditor] drawModelAtNode: node=($nodeX,$nodeY,$nodeZ) offset=($offsetX,$offsetY,$offsetZ) rot=$rotationYDeg scale=$scale center=($cx,$cy,$cz) verts=${verts.size/6} indices=${indices.size} triCount=${indices.size/3} color=($r,$g,$b,$a)")
             if (indices.isNotEmpty()) {
                 val vi0 = (indices[0].toInt() and 0xFFFF) * 6
-                println("[MapEditor]   first vertex raw: pos=(${verts[vi0]},${verts[vi0+1]},${verts[vi0+2]}) normal=(${verts[vi0+3]},${verts[vi0+4]},${verts[vi0+5]})")
             }
         }
 
@@ -1275,16 +1361,36 @@ class MapEditor(
                         ceilingMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetZ = 0.5f, r = floorR, g = floorG, b = floorB) }
                     }
                     if (hasWallN) {
-                        wallMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetY = 0.5f, rotationYDeg = 0f, r = wallR, g = wallG, b = wallB) }
+                        val isDoor = node.isDoor(TileSlot.WALL_NORTH)
+                        val mesh = if (isDoor) doorMesh else wallMesh
+                        val r = if (node.isManualDoor(TileSlot.WALL_NORTH)) 0.3f else wallR
+                        val g = if (node.isManualDoor(TileSlot.WALL_NORTH)) 0.6f else wallG
+                        val b = if (node.isManualDoor(TileSlot.WALL_NORTH)) 0.3f else wallB
+                        mesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetY = 0.5f, rotationYDeg = 0f, r = r, g = g, b = b) }
                     }
                     if (hasWallS) {
-                        wallMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetY = -0.5f, rotationYDeg = 0f, r = wallR, g = wallG, b = wallB) }
+                        val isDoor = node.isDoor(TileSlot.WALL_SOUTH)
+                        val mesh = if (isDoor) doorMesh else wallMesh
+                        val r = if (node.isManualDoor(TileSlot.WALL_SOUTH)) 0.3f else wallR
+                        val g = if (node.isManualDoor(TileSlot.WALL_SOUTH)) 0.6f else wallG
+                        val b = if (node.isManualDoor(TileSlot.WALL_SOUTH)) 0.3f else wallB
+                        mesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetY = -0.5f, rotationYDeg = 0f, r = r, g = g, b = b) }
                     }
                     if (hasWallE) {
-                        wallMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = 0.5f, rotationYDeg = 90f, r = wallR, g = wallG, b = wallB) }
+                        val isDoor = node.isDoor(TileSlot.WALL_EAST)
+                        val mesh = if (isDoor) doorMesh else wallMesh
+                        val r = if (node.isManualDoor(TileSlot.WALL_EAST)) 0.3f else wallR
+                        val g = if (node.isManualDoor(TileSlot.WALL_EAST)) 0.6f else wallG
+                        val b = if (node.isManualDoor(TileSlot.WALL_EAST)) 0.3f else wallB
+                        mesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = 0.5f, rotationYDeg = 90f, r = r, g = g, b = b) }
                     }
                     if (hasWallW) {
-                        wallMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = -0.5f, rotationYDeg = 90f, r = wallR, g = wallG, b = wallB) }
+                        val isDoor = node.isDoor(TileSlot.WALL_WEST)
+                        val mesh = if (isDoor) doorMesh else wallMesh
+                        val r = if (node.isManualDoor(TileSlot.WALL_WEST)) 0.3f else wallR
+                        val g = if (node.isManualDoor(TileSlot.WALL_WEST)) 0.6f else wallG
+                        val b = if (node.isManualDoor(TileSlot.WALL_WEST)) 0.3f else wallB
+                        mesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = -0.5f, rotationYDeg = 90f, r = r, g = g, b = b) }
                     }
                     if (hasStairs) {
                         val tile = node.getTile(TileSlot.STAIRS)
@@ -1305,7 +1411,6 @@ class MapEditor(
 
         if (renderLogFrames < 3) {
             renderLogFrames++
-            println("[MapEditor] renderGrid: modelNodeCount=$modelNodeCount floorMesh=${floorMesh != null} ceilingMesh=${ceilingMesh != null} wallMesh=${wallMesh != null} gpuRenderingEnabled=$gpuRenderingEnabled")
         }
         // Draw tag indicators on nodes (small spheres + labels) — always visible
         for (z in 0..currentZ) {
@@ -1346,6 +1451,23 @@ class MapEditor(
                             val tw = ui.textWidth(label) * 1.0f
                             ui.drawRect(screenPos.x - tw / 2f - 2f, screenPos.y - 1f, tw + 4f, 14f, 0f, 0f, 0f, 0.5f)
                             ui.drawText(label, screenPos.x - tw / 2f, screenPos.y, 0.3f, 0.95f, 0.4f, 1f, 1.0f)
+                        }
+                    }
+
+                    // Draw manual door edge tags (orange spheres on edges)
+                    for (slot in node.manualDoorSlots) {
+                        val wx = x + 0.5f + when (slot) { TileSlot.WALL_EAST -> 0.45f; TileSlot.WALL_WEST -> -0.45f; else -> 0f }
+                        val wy = y + 0.5f + when (slot) { TileSlot.WALL_NORTH -> 0.45f; TileSlot.WALL_SOUTH -> -0.45f; else -> 0f }
+                        val wz = z + 0.7f
+                        debugRenderer.drawFilledSphere(wx, wy, wz, 0.09f, camera, 1f, 0.55f, 0.1f, 0.9f)
+                        debugRenderer.drawWireframeSphere(wx, wy, wz, 0.09f, camera, 1f, 0.7f, 0.2f, 0.9f, 6, 1.5f)
+                        val worldPos = org.joml.Vector3f(wx, wy, wz + 0.14f)
+                        val screenPos = camera.project(worldPos, sw, sh)
+                        if (screenPos.z in 0f..1f) {
+                            val label = "MANUAL ${slot.name.removePrefix("WALL_")}"
+                            val tw = ui.textWidth(label) * 1.0f
+                            ui.drawRect(screenPos.x - tw / 2f - 2f, screenPos.y - 1f, tw + 4f, 14f, 0f, 0f, 0f, 0.5f)
+                            ui.drawText(label, screenPos.x - tw / 2f, screenPos.y, 1f, 0.7f, 0.2f, 1f, 1.0f)
                         }
                     }
                 }
@@ -1861,6 +1983,18 @@ class MapEditor(
                 ui.drawRect(palX + 8f, by, btnW, 1f, 0.3f, 0.35f, 0.45f, 0.4f)
                 by += 8f
 
+                // --- Door section ---
+                ui.drawText("Door", palX + 10f, by, 0.6f, 0.65f, 0.8f, 0.9f, 1.1f)
+                by += 18f
+
+                drawModelPreviewButton(palX + 8f, by, btnW.coerceAtMost(previewSize + 16f), previewSize, doorMesh,
+                    EditorTool.DOOR, "Door", 0.45f, 0.50f, 0.35f, mx, my)
+                by += previewSize + previewPad
+
+                // Separator
+                ui.drawRect(palX + 8f, by, btnW, 1f, 0.3f, 0.35f, 0.45f, 0.4f)
+                by += 8f
+
                 // --- Ladder section ---
                 ui.drawText("Ladder", palX + 10f, by, 0.6f, 0.65f, 0.8f, 0.9f, 1.1f)
                 by += 18f
@@ -2084,7 +2218,11 @@ class MapEditor(
 
         for (tag in allTags) {
             val isSelected = selectedTag == tag
-            val nodeHasTag = currentNode?.tags?.contains(tag) == true
+            val nodeHasTag = when (tag) {
+                WorldNode.Tags.DOOR_MANUAL -> currentNode?.manualDoorSlots?.isNotEmpty() == true
+                WorldNode.Tags.LADDER -> currentNode?.ladderSlots?.isNotEmpty() == true
+                else -> currentNode?.tags?.contains(tag) == true
+            }
             val hovered = mx >= palX + 8f && mx < palX + 8f + btnW && my >= by && my < by + btnH
 
             // Draw tag button — highlight if selected as active brush
@@ -2236,9 +2374,9 @@ class MapEditor(
             val rx = wx * cosA + wy * sinA
             val ry = -wx * sinA + wy * cosA
             val fz = ry * sinE + wz * cosE
-            // Map to preview rect (centered)
+
             val screenX = px + pw / 2f + rx * pw * 0.7f
-            val screenY = py + ph / 2f - fz * ph * 0.7f
+            val screenY = py + ph / 2f - fz * ph * 0.7f  // Y-up on screen → subtract
             return screenX to screenY
         }
 
@@ -2256,7 +2394,7 @@ class MapEditor(
                 if (drawnEdges.add(edgeKey)) {
                     val (x1, y1) = projectVert(a)
                     val (x2, y2) = projectVert(b2)
-                    // Use palette color of first vertex if available
+                    // Use palette color of first vertex if available, otherwise use flat color
                     val er = if (meshColors != null) meshColors[a * 3] else r + 0.2f
                     val eg = if (meshColors != null) meshColors[a * 3 + 1] else g + 0.2f
                     val eb = if (meshColors != null) meshColors[a * 3 + 2] else b + 0.2f
