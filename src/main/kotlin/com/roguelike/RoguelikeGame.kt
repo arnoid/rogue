@@ -6,6 +6,7 @@ import com.roguelike.core.model.TileSlot
 import com.roguelike.core.model.WorldNode
 import com.roguelike.core.systems.MovementSystem
 import com.roguelike.core.systems.InteractionSystem
+import com.roguelike.generation.ProceduralMapManager
 import com.roguelike.input.InputSystem
 import com.roguelike.rendering.Camera
 import com.roguelike.rendering.DebugRenderer
@@ -82,6 +83,12 @@ class RoguelikeGame(
     private val fileDialog = FileDialog(ui, inputSystem)
     private var worldLoaded = false
 
+    // Procedural map manager — drives Arena world generation from socket-based templates.
+    private val proceduralManager = ProceduralMapManager(
+        tileFactory = ::gameTileFactory,
+        worldFactory = { w, h, d -> World(w, h, d) }
+    )
+
     // Rendering Z limit
     private var maxRenderZ = 0
 
@@ -99,9 +106,64 @@ class RoguelikeGame(
         inputHandler = InputHandler(inputSystem)
         lastFrameTime = System.nanoTime()
 
-        // Open file picker immediately
-        fileDialog.open(FileDialog.Mode.OPEN, File("saved-worlds")) { file ->
-            if (file != null) loadWorldFile(file)
+        // Pre-load every reusable submap template so the generator has a pool
+        // to draw from before the player picks a starting submap.
+        proceduralManager.loadTemplates("src/main/resources/world-submaps/submaps")
+
+        // Open the starting-submap picker. The picked .wld becomes the seed
+        // room; the procedural generator grows outward from there.
+        val startDir = File("src/main/resources/world-submaps/starting-submaps")
+            .takeIf { it.exists() } ?: File("saved-worlds")
+        fileDialog.open(FileDialog.Mode.OPEN, startDir) { file ->
+            if (file != null) loadInitialSubmap(file)
+        }
+    }
+
+    /**
+     * Initialise the procedural map manager from a starting submap. The
+     * returned world is the live, grow-on-demand Arena world.
+     */
+    private fun loadInitialSubmap(file: File) {
+        try {
+            val loaded = proceduralManager.initialize(file.path)
+            if (loaded != null) {
+                world = loaded
+                movementSystem = MovementSystem(loaded)
+                interactionSystem = InteractionSystem(loaded) { tag, msg -> println("[$tag] $msg") }
+
+                // Find player_spawn tag inside the freshly-stamped initial submap.
+                var spawnX = loaded.width / 2f
+                var spawnY = loaded.height / 2f
+                var spawnZ = 0f
+                outer@ for (z in 0 until loaded.depth) {
+                    for (x in 0 until loaded.width) {
+                        for (y in 0 until loaded.height) {
+                            val node = loaded.getNode(x, y, z) ?: continue
+                            if (node.tags.contains(WorldNode.Tags.PLAYER_SPAWN)) {
+                                spawnX = x + 0.5f
+                                spawnY = y + 0.5f
+                                spawnZ = z.toFloat()
+                                break@outer
+                            }
+                        }
+                    }
+                }
+
+                player = Player().apply { position.set(spawnX, spawnY, spawnZ) }
+                interactionSystem?.actors?.add(player!!)
+                maxRenderZ = loaded.depth - 1
+                distance = max(loaded.width, loaded.height).toFloat() * 0.8f
+                worldLoaded = true
+                println("[Game] Procedural arena initialised from ${file.path} (world=${loaded.width}x${loaded.height}x${loaded.depth})")
+            } else {
+                // Fall back to plain world loading (e.g. user picked a saved
+                // world without a player_spawn or no templates loaded).
+                println("[Game] Procedural init failed, falling back to raw world load")
+                loadWorldFile(file)
+            }
+        } catch (e: Exception) {
+            println("[Game] Failed to initialise procedural arena: ${e.message}")
+            e.printStackTrace()
         }
     }
 
@@ -193,6 +255,12 @@ class RoguelikeGame(
 
         // Per-frame interaction tick: rescue trapped actors, process deferred door closes
         interactionSystem?.update(delta)
+
+        // Notify procedural manager so it can lazily generate adjacent submaps
+        // when the player crosses into a new region. New submaps are stamped
+        // into `w` in-place, which may also grow the world's dimensions.
+        proceduralManager.onPlayerMove(p.position.x, p.position.y, p.position.z)
+        if (w.depth - 1 > maxRenderZ) maxRenderZ = w.depth - 1
 
         // Camera orbit controls (Shift + WASD for pitch/zoom, Q/E always for rotation)
         if (shiftHeld) {
@@ -710,6 +778,7 @@ class RoguelikeGame(
     }
 
     fun dispose() {
+        proceduralManager.dispose()
         world = null
         player = null
     }
