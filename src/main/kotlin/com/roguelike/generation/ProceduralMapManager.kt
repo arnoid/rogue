@@ -81,7 +81,17 @@ class ProceduralMapManager(
             return
         }
 
-        dir.walkTopDown().filter { it.isFile && it.extension == "wld" }.forEach { file ->
+        loadTemplateFiles(dir.walkTopDown().filter { it.isFile && it.extension == "wld" }.toList())
+    }
+
+    /**
+     * Loads a curated list of .wld template files (e.g. the set referenced
+     * by a biome definition). Mirrors [loadTemplates] but skips directory
+     * walking — the caller has already decided which files belong to the
+     * active biome's pool.
+     */
+    fun loadTemplateFiles(files: Iterable<File>) {
+        for (file in files) {
             val world = WorldIO.loadWorld(
                 file.absolutePath,
                 worldFactory,

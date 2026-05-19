@@ -1,0 +1,73 @@
+{
+  "metadata": {
+    "biome": "default",
+    "description": "Default biome submap templates used by the procedural map generator.",
+    "version": 1
+  },
+  "submaps-entry": [
+    {
+      "file": "./submaps-entry/player-start-3x3x3.wld",
+      "name": "player-start-3x3x3",
+      "dimensions": { "width": 3, "height": 3, "depth": 3 },
+      "baseUnitFootprint": { "x": 1, "y": 1, "z": 1 },
+      "playerSpawn": { "x": 1, "y": 1, "z": 1 },
+      "sockets": [
+        { "x": 0, "y": 1, "z": 1, "slot": "WALL_WEST",  "direction": "WEST",  "tag": "default" },
+        { "x": 1, "y": 0, "z": 1, "slot": "WALL_SOUTH", "direction": "SOUTH", "tag": "default" },
+        { "x": 1, "y": 2, "z": 1, "slot": "WALL_NORTH", "direction": "NORTH", "tag": "default" },
+        { "x": 2, "y": 1, "z": 1, "slot": "WALL_EAST",  "direction": "EAST",  "tag": "default" }
+      ]
+    }
+  ],
+  "submaps": [
+    {
+      "file": "./submaps/crossing-3x3x3.wld",
+      "name": "crossing-3x3x3",
+      "dimensions": { "width": 3, "height": 3, "depth": 3 },
+      "baseUnitFootprint": { "x": 1, "y": 1, "z": 1 },
+      "sockets": [
+        { "x": 0, "y": 1, "z": 1, "slot": "WALL_WEST",  "direction": "WEST",  "tag": "default" },
+        { "x": 1, "y": 0, "z": 1, "slot": "WALL_SOUTH", "direction": "SOUTH", "tag": "default" },
+        { "x": 1, "y": 2, "z": 1, "slot": "WALL_NORTH", "direction": "NORTH", "tag": "default" },
+        { "x": 2, "y": 1, "z": 1, "slot": "WALL_EAST",  "direction": "EAST",  "tag": "default" }
+      ]
+    },
+    {
+      "file": "./submaps/crossing-with-light-3x3x3.wld",
+      "name": "crossing-with-light-3x3x3",
+      "dimensions": { "width": 3, "height": 3, "depth": 3 },
+      "baseUnitFootprint": { "x": 1, "y": 1, "z": 1 },
+      "sockets": [
+        { "x": 0, "y": 1, "z": 1, "slot": "WALL_WEST",  "direction": "WEST",  "tag": "default" },
+        { "x": 1, "y": 0, "z": 1, "slot": "WALL_SOUTH", "direction": "SOUTH", "tag": "default" },
+        { "x": 1, "y": 2, "z": 1, "slot": "WALL_NORTH", "direction": "NORTH", "tag": "default" },
+        { "x": 2, "y": 1, "z": 1, "slot": "WALL_EAST",  "direction": "EAST",  "tag": "default" }
+      ]
+    },
+    {
+      "file": "./submaps/large-strange-12x12.wld",
+      "name": "large-strange-12x12",
+      "dimensions": { "width": 12, "height": 12, "depth": 3 },
+      "baseUnitFootprint": { "x": 4, "y": 4, "z": 1 },
+      "sockets": [
+        { "x":  0, "y": 10, "z": 1, "slot": "WALL_WEST",  "direction": "WEST",  "tag": "default" },
+        { "x":  1, "y": 11, "z": 1, "slot": "WALL_NORTH", "direction": "NORTH", "tag": "default" },
+        { "x": 10, "y":  0, "z": 1, "slot": "WALL_SOUTH", "direction": "SOUTH", "tag": "default" },
+        { "x": 11, "y":  1, "z": 1, "slot": "WALL_EAST",  "direction": "EAST",  "tag": "default" }
+      ]
+    },
+    {
+      "file": "./submaps/double-staircase-3x3x6.wld",
+      "name": "double-staircase-3x3x6",
+      "dimensions": { "width": 3, "height": 3, "depth": 6 },
+      "baseUnitFootprint": { "x": 1, "y": 1, "z": 2 },
+      "sockets": [
+        { "x": 0, "y": 1, "z": 1, "slot": "WALL_WEST", "direction": "WEST", "tag": "default" },
+        { "x": 0, "y": 1, "z": 4, "slot": "WALL_WEST", "direction": "WEST", "tag": "default" },
+        { "x": 2, "y": 1, "z": 1, "slot": "WALL_EAST", "direction": "EAST", "tag": "default" },
+        { "x": 2, "y": 1, "z": 4, "slot": "WALL_EAST", "direction": "EAST", "tag": "default" }
+      ]
+    }
+  ]
+}
+

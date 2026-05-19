@@ -1,0 +1,14 @@
+{
+  "metadata": {
+    "description": "Index of all available biome definitions. Each entry points to a biome.json file describing the biome's submap templates and starting submap entries.",
+    "version": 1
+  },
+  "biomes": [
+    {
+      "name": "default",
+      "type": "default",
+      "file": "./default/biome.json"
+    }
+  ]
+}
+

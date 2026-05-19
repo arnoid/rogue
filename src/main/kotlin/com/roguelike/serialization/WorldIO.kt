@@ -215,8 +215,23 @@ object WorldIO {
 
 /**
  * Minimal JSON parser/serializer for WorldData.
+ *
+ * Also exposes a generic [parseAny] entry point used by lightweight loaders
+ * (e.g. biome index files) that don't need the full WorldData mapping.
  */
-internal object SimpleJsonParser {
+object SimpleJsonParser {
+
+    /**
+     * Parses an arbitrary JSON document and returns the root value as a
+     * tree of Map / List / String / Number (Double) / Boolean / null.
+     * Returns `null` if parsing fails.
+     */
+    fun parseAny(text: String): Any? = try {
+        JsonTokenizer(text).parseValue()
+    } catch (e: Exception) {
+        System.err.println("[SimpleJsonParser] parseAny error: ${e.message}")
+        null
+    }
 
     // ====================== SERIALIZATION ======================
 

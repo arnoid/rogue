@@ -6,6 +6,7 @@ import com.roguelike.core.model.TileSlot
 import com.roguelike.core.model.WorldNode
 import com.roguelike.core.systems.MovementSystem
 import com.roguelike.core.systems.InteractionSystem
+import com.roguelike.generation.BiomeDefinition
 import com.roguelike.generation.ProceduralMapManager
 import com.roguelike.input.InputSystem
 import com.roguelike.rendering.Camera
@@ -83,6 +84,16 @@ class RoguelikeGame(
     private val fileDialog = FileDialog(ui, inputSystem)
     private var worldLoaded = false
 
+    /**
+     * Active biome chosen in the [BiomePickerScreen] before entering the
+     * arena. When non-null, [show] loads templates exclusively from this
+     * biome's `submaps` list and opens the starting-submap picker on this
+     * biome's `submaps-entry` list. When null, the legacy behaviour kicks
+     * in: every `.wld` under `submaps/` is loaded and the starting picker
+     * defaults to the `starting-submaps/` folder.
+     */
+    var biome: BiomeDefinition? = null
+
     // Procedural map manager — drives Arena world generation from socket-based templates.
     private val proceduralManager = ProceduralMapManager(
         tileFactory = ::gameTileFactory,
@@ -107,15 +118,36 @@ class RoguelikeGame(
         lastFrameTime = System.nanoTime()
 
         // Pre-load every reusable submap template so the generator has a pool
-        // to draw from before the player picks a starting submap.
-        proceduralManager.loadTemplates("src/main/resources/world-submaps/submaps")
+        // to draw from before the player picks a starting submap. When a
+        // biome is active we restrict the pool to that biome's `submaps`
+        // section; otherwise we walk the full default templates folder.
+        val activeBiome = biome
+        if (activeBiome != null) {
+            println("[Game] Using biome '${activeBiome.entry.name}' (type=${activeBiome.entry.type}): " +
+                    "${activeBiome.submaps.size} pool submap(s), ${activeBiome.startingSubmaps.size} starting submap(s)")
+            proceduralManager.loadTemplateFiles(activeBiome.submaps.map { it.worldFile })
+        } else {
+            proceduralManager.loadTemplates("src/main/resources/world-submaps/submaps")
+        }
 
         // Open the starting-submap picker. The picked .wld becomes the seed
-        // room; the procedural generator grows outward from there.
-        val startDir = File("src/main/resources/world-submaps/starting-submaps")
-            .takeIf { it.exists() } ?: File("saved-worlds")
-        fileDialog.open(FileDialog.Mode.OPEN, startDir) { file ->
-            if (file != null) loadInitialSubmap(file)
+        // room; the procedural generator grows outward from there. When a
+        // biome is active, pick a RANDOM entry from its `submaps-entry`
+        // section and skip the file dialog entirely — the biome already
+        // declares which submaps are valid spawn seeds, so there's nothing
+        // for the player to choose.
+        val startingSubmaps = activeBiome?.startingSubmaps.orEmpty()
+        if (startingSubmaps.isNotEmpty()) {
+            val pick = startingSubmaps.random()
+            println("[Game] Randomly picked starting submap '${pick.name}' from biome '${activeBiome?.entry?.name}' " +
+                    "(${startingSubmaps.size} candidate(s))")
+            loadInitialSubmap(pick.worldFile)
+        } else {
+            val startDir = File("src/main/resources/world-submaps/starting-submaps")
+                .takeIf { it.exists() } ?: File("saved-worlds")
+            fileDialog.open(FileDialog.Mode.OPEN, startDir) { file ->
+                if (file != null) loadInitialSubmap(file)
+            }
         }
     }
 
