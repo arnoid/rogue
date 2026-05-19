@@ -1462,7 +1462,7 @@ class MapEditor(
                             if (node.hasTile(TileSlot.STAIRS)) {
                                 val tile = node.getTile(TileSlot.STAIRS)
                                 if (tile is StairsTile) {
-                                    stairsMesh?.let { cellTriCount += collectShadowTriangles(it, x.toFloat(), y.toFloat(), z.toFloat(), 0f, 0f, 0f, tile.rotationY + 180f, shadowTriangles) }
+                                    stairsMesh?.let { cellTriCount += collectShadowTriangles(it, x.toFloat(), y.toFloat(), z.toFloat(), 0f, 0f, 0f, stairsRenderRotation(tile.rotationY), shadowTriangles) }
                                 } else if (tile is LadderTile) {
                                     val rotY = tile.rotationY
                                     val offX = when (rotY) { 90f -> 0.5f; 270f -> -0.5f; else -> 0f }
@@ -1569,7 +1569,7 @@ class MapEditor(
                     if (hasStairs) {
                         val tile = node.getTile(TileSlot.STAIRS)
                         if (tile is StairsTile) {
-                            stairsMesh?.let { drawModelAtNode(it, tbx, tby, tbz, rotationYDeg = tile.rotationY + 180f, r = 0.45f, g = 0.40f, b = 0.35f) }
+                            stairsMesh?.let { drawModelAtNode(it, tbx, tby, tbz, rotationYDeg = stairsRenderRotation(tile.rotationY), r = 0.45f, g = 0.40f, b = 0.35f) }
                             drawDirectionArrow(tbx, tby, tbz, tile.rotationY)
                         } else if (tile is LadderTile) {
                             val rot = tile.rotationY

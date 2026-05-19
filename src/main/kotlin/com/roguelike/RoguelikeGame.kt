@@ -503,7 +503,7 @@ class RoguelikeGame(
                         if (tile is StairsTile) {
                             stairsMesh?.let {
                                 val first = shadowTriangles.size / 9
-                                val n = collectShadowTriangles(it, x.toFloat(), y.toFloat(), z.toFloat(), 0f, 0f, 0f, tile.rotationY + 180f, shadowTriangles)
+                                val n = collectShadowTriangles(it, x.toFloat(), y.toFloat(), z.toFloat(), 0f, 0f, 0f, stairsRenderRotation(tile.rotationY), shadowTriangles)
                                 for (k in 0 until n) perCellTris[wIdx].add(first + k)
                             }
                         } else if (tile is LadderTile) {
@@ -827,7 +827,7 @@ class RoguelikeGame(
                     if (hasStairs) {
                         val tile = node.getTile(TileSlot.STAIRS)
                         if (tile is StairsTile) {
-                            stairsMesh?.let { drawModelAtNode(it, tbx, tby, tbz, rotationYDeg = tile.rotationY + 180f, r = 0.45f, g = 0.40f, b = 0.35f) }
+                            stairsMesh?.let { drawModelAtNode(it, tbx, tby, tbz, rotationYDeg = stairsRenderRotation(tile.rotationY), r = 0.45f, g = 0.40f, b = 0.35f) }
                         } else if (tile is LadderTile) {
                             val rot = tile.rotationY
                             val offX = when (rot) { 90f -> 0.5f; 270f -> -0.5f; else -> 0f }
@@ -1002,4 +1002,24 @@ class RoguelikeGame(
         world = null
         player = null
     }
+}
+
+/**
+ * Maps a stairs tile's logical [tileRotationY] (0°=N, 90°=E, 180°=S,
+ * 270°=W — same convention as the in-world arrow indicator) to the
+ * world-space Y rotation we have to apply to the `stairs_n.obj` mesh
+ * so its visible ramp ascends in the indicated direction.
+ *
+ * Why this isn't just `+ 180f`: the source mesh ascends toward −obj-Z,
+ * which becomes world −Y (south) after the renderer's axis swap. For
+ * N/S tiles we add 180° so the mesh's ascent ends up aligned with the
+ * arrow indicator. For E/W tiles the tile rotation already swings the
+ * mesh 90°/270° around Z; adding another 180° on top would land the
+ * ramp facing the opposite cardinal, so we leave it alone.
+ */
+internal fun stairsRenderRotation(tileRotationY: Float): Float {
+    val normalized = ((tileRotationY % 360f) + 360f) % 360f
+    val isNorthSouth = normalized < 45f || normalized >= 315f ||
+            (normalized in 135f..225f)
+    return if (isNorthSouth) tileRotationY + 180f else tileRotationY
 }
