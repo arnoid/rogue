@@ -5,7 +5,7 @@
   "nodes": [
     {"x":0,"y":0,"z":1,"tiles":[{"type":"FloorTile","slot":"FLOOR"},{"type":"WallSouthTile","slot":"WALL_SOUTH"},{"type":"WallWestTile","slot":"WALL_WEST"}]},
     {"x":0,"y":0,"z":2,"tiles":[{"type":"WallSouthTile","slot":"WALL_SOUTH"},{"type":"WallWestTile","slot":"WALL_WEST"},{"type":"FloorTile","slot":"FLOOR"}]},
-    {"x":0,"y":0,"z":3,"tiles":[{"type":"WallWestTile","slot":"WALL_WEST"},{"type":"WallSouthTile","slot":"WALL_SOUTH"},{"type":"WallEastTile","slot":"WALL_EAST"}]},
+    {"x":0,"y":0,"z":3,"tiles":[{"type":"WallWestTile","slot":"WALL_WEST"},{"type":"WallSouthTile","slot":"WALL_SOUTH"}]},
     {"x":0,"y":0,"z":4,"tiles":[{"type":"WallSouthTile","slot":"WALL_SOUTH"},{"type":"WallWestTile","slot":"WALL_WEST"},{"type":"CeilingTile","slot":"CEILING"},{"type":"FloorTile","slot":"FLOOR"}]},
     {"x":0,"y":1,"z":1,"tiles":[{"type":"FloorTile","slot":"FLOOR"}],"socketSlots":["WALL_WEST"]},
     {"x":0,"y":1,"z":2,"tags":["stairs"],"tiles":[{"type":"WallWestTile","slot":"WALL_WEST"},{"type":"StairsTile","slot":"STAIRS"},{"type":"WallEastTile","slot":"WALL_EAST"},{"type":"FloorTile","slot":"FLOOR"}]},
@@ -36,7 +36,7 @@
     {"x":2,"y":1,"z":4,"tiles":[{"type":"FloorTile","slot":"FLOOR"},{"type":"CeilingTile","slot":"CEILING"}],"socketSlots":["WALL_EAST"]},
     {"x":2,"y":2,"z":1,"tiles":[{"type":"FloorTile","slot":"FLOOR"},{"type":"WallNorthTile","slot":"WALL_NORTH"},{"type":"WallEastTile","slot":"WALL_EAST"}]},
     {"x":2,"y":2,"z":2,"tiles":[{"type":"WallEastTile","slot":"WALL_EAST"},{"type":"WallNorthTile","slot":"WALL_NORTH"},{"type":"FloorTile","slot":"FLOOR"}]},
-    {"x":2,"y":2,"z":3,"tiles":[{"type":"WallEastTile","slot":"WALL_EAST"},{"type":"WallNorthTile","slot":"WALL_NORTH"},{"type":"WallWestTile","slot":"WALL_WEST"}]},
+    {"x":2,"y":2,"z":3,"tiles":[{"type":"WallEastTile","slot":"WALL_EAST"},{"type":"WallNorthTile","slot":"WALL_NORTH"}]},
     {"x":2,"y":2,"z":4,"tiles":[{"type":"WallNorthTile","slot":"WALL_NORTH"},{"type":"WallEastTile","slot":"WALL_EAST"},{"type":"CeilingTile","slot":"CEILING"},{"type":"FloorTile","slot":"FLOOR"}]}
   ],
   "associations": [

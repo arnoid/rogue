@@ -174,8 +174,11 @@ bool isOccluded(vec3 from, vec3 to) {
     float tDeltaY = abs(dir.y) > 1e-6 ? float(sy) / dir.y : 1e30;
     float tDeltaZ = abs(dir.z) > 1e-6 ? float(sz) / dir.z : 1e30;
 
-    // March through voxels (max 64 steps to avoid infinite loops)
-    for (int step = 0; step < 64; step++) {
+    // March through voxels. The host-side tile horizon limits any visible
+    // ray to ≤ 20 cells, so 40 DDA steps comfortably covers diagonal worst
+    // cases (≈ 35 steps for a 20×20×0 ray). The previous 64-step ceiling
+    // was carried over from an earlier, unbounded-world build.
+    for (int step = 0; step < 40; step++) {
         // Reached the target voxel — no occlusion
         if (ix == ex && iy == ey && iz == ez) return false;
 

@@ -118,21 +118,39 @@ class RoguelikeGame(
     private companion object {
         const val TILE_FADE_START = 10   // alpha 1.0 inside this radius
         const val TILE_FADE_END   = 20   // alpha 0.0 beyond this radius
+        // Pre-computed inverse fade band width — used in the per-cell hot
+        // loop to avoid a per-call integer division (`/(END-START)`).
+        const val INV_FADE_BAND = 1f / (TILE_FADE_END - TILE_FADE_START).toFloat()
     }
 
+    // Player tile coords cached at the top of each render frame so the
+    // per-cell distance test in `renderWorld` / `uploadLighting` doesn't
+    // pay for a null check, three field loads, and three `floor()` calls
+    // on every one of ~10 000 cell visits. Refreshed once in `render()`.
+    private var playerTileX: Int = 0
+    private var playerTileY: Int = 0
+    private var playerTileZ: Int = 0
+
     /**
-     * Chebyshev distance in tiles from the player's current cell to
-     * `(cx, cy, cz)`. Returns `Int.MAX_VALUE` when there is no player.
+     * Chebyshev distance in tiles from the player's cached tile coords to
+     * `(cx, cy, cz)`. Call [refreshPlayerTileCoords] once per frame before
+     * using this in hot loops.
      */
     private fun tileDistanceToPlayer(cx: Int, cy: Int, cz: Int): Int {
-        val p = player ?: return Int.MAX_VALUE
-        val pxi = kotlin.math.floor(p.position.x).toInt()
-        val pyi = kotlin.math.floor(p.position.y).toInt()
-        val pzi = kotlin.math.floor(p.position.z).toInt()
-        val dx = if (cx > pxi) cx - pxi else pxi - cx
-        val dy = if (cy > pyi) cy - pyi else pyi - cy
-        val dz = if (cz > pzi) cz - pzi else pzi - cz
+        val dx = if (cx > playerTileX) cx - playerTileX else playerTileX - cx
+        val dy = if (cy > playerTileY) cy - playerTileY else playerTileY - cy
+        val dz = if (cz > playerTileZ) cz - playerTileZ else playerTileZ - cz
         return max(max(dx, dy), dz)
+    }
+
+    /** Refresh [playerTileX]/[playerTileY]/[playerTileZ] from the player's
+     *  current world position. Called once per frame before any tile-distance
+     *  test runs. */
+    private fun refreshPlayerTileCoords() {
+        val p = player ?: return
+        playerTileX = kotlin.math.floor(p.position.x).toInt()
+        playerTileY = kotlin.math.floor(p.position.y).toInt()
+        playerTileZ = kotlin.math.floor(p.position.z).toInt()
     }
 
     /**
@@ -142,7 +160,7 @@ class RoguelikeGame(
     private fun fadeAlpha(d: Int): Float = when {
         d <= TILE_FADE_START -> 1f
         d >= TILE_FADE_END -> 0f
-        else -> (TILE_FADE_END - d).toFloat() / (TILE_FADE_END - TILE_FADE_START).toFloat()
+        else -> (TILE_FADE_END - d).toFloat() * INV_FADE_BAND
     }
 
     // ── Reusable lighting/shadow upload scratch buffers ──────────────────
@@ -166,6 +184,11 @@ class RoguelikeGame(
      *  each frame rather than re-allocating. */
     private var perCellTris: Array<IntArray> = emptyArray()
     private var perCellTriCount: IntArray = IntArray(0)
+
+    /** Reusable per-cell occupancy flags buffer for [uploadLighting]. Grown
+     *  on demand to the current window size and zeroed in-place each frame
+     *  instead of allocating a fresh `IntArray(cellCount)` per call. */
+    private var occupancyBuf: IntArray = IntArray(0)
 
     /** One-shot warning latch: too many shadow triangles in one frame. */
     private var shadowTriOverflowWarned = false
@@ -384,6 +407,10 @@ class RoguelikeGame(
         val now = System.nanoTime()
         val delta = ((now - lastFrameTime) / 1_000_000_000.0).toFloat().coerceIn(0f, 0.1f)
         lastFrameTime = now
+
+        // Cache the player's tile coords for this frame so the per-cell
+        // distance gates don't keep re-reading & re-floor()-ing them.
+        refreshPlayerTileCoords()
 
         // Handle movement (WASD) — only when Shift is NOT held
         val shiftHeld = inputSystem.isKeyPressed(GLFW_KEY_LEFT_SHIFT) || inputSystem.isKeyPressed(GLFW_KEY_RIGHT_SHIFT)
@@ -605,9 +632,9 @@ class RoguelikeGame(
         // distance will render this frame, so there's nothing to shade. A
         // tighter window means a smaller `IntArray(cellCount)` allocation
         // and fewer per-cell triangle list visits inside the hot loop.
-        val pXi = kotlin.math.floor(player?.position?.x ?: 0f).toInt()
-        val pYi = kotlin.math.floor(player?.position?.y ?: 0f).toInt()
-        val pZi = kotlin.math.floor(player?.position?.z ?: 0f).toInt()
+        val pXi = playerTileX
+        val pYi = playerTileY
+        val pZi = playerTileZ
         val originX = rawOriginX.coerceAtLeast(pXi - TILE_FADE_END)
         val originY = rawOriginY.coerceAtLeast(pYi - TILE_FADE_END)
         val originZ = rawOriginZ.coerceAtLeast(pZi - TILE_FADE_END)
@@ -618,7 +645,15 @@ class RoguelikeGame(
         val gridH = endY - originY
         val gridD = endZ - originZ
         val cellCount = gridW * gridH * gridD
-        val occupancy = IntArray(cellCount)
+        // Reuse the persistent occupancy buffer — grow it on demand, then
+        // zero just the active prefix. Avoids a per-frame allocation +
+        // implicit zero-fill of a potentially 10k-element IntArray.
+        if (occupancyBuf.size < cellCount) {
+            occupancyBuf = IntArray(cellCount)
+        } else {
+            java.util.Arrays.fill(occupancyBuf, 0, cellCount, 0)
+        }
+        val occupancy = occupancyBuf
         // Reset scratch buffers — outer arrays are reused across frames.
         shadowTriBuf.reset()
         expandedTriBuf.reset()
@@ -1126,14 +1161,30 @@ class RoguelikeGame(
         // (≤ 41×41) AABB around the player regardless of world size, and
         // the frustum cull then trims that down to what's actually on
         // screen. Two cheap integer gates do the work of an unbounded loop.
+        // Cap the rendered Z range two ways:
+        //   1. `topZ` — never render layers above the player (existing rule:
+        //      upper floors would occlude the view down into the room the
+        //      player stands in).
+        //   2. `zLo`  — also clamp the *bottom* of the iteration to the
+        //      tile horizon. Previously we rendered every layer from z=0
+        //      to `playerZ` inclusive; at z=10 that's 11 layers × 41×41
+        //      cells = ~18k cell visits, and even a modest model-vertex
+        //      count per cell easily blows past SimpleUI's `maxGpuVertices`
+        //      cap (≈ 98k). When that happens triangles get silently
+        //      dropped — visually the player's own floor disappears and
+        //      with it any surface a light could shade, so the scene
+        //      appears completely unlit. The per-cell Chebyshev gate
+        //      below would already skip far cells but it can't help if
+        //      the buffer is exhausted before we reach the player's row.
         val topZ = playerZ.coerceIn(0, (w.depth - 1).coerceAtLeast(0))
-        val pXi = kotlin.math.floor(player?.position?.x ?: 0f).toInt()
-        val pYi = kotlin.math.floor(player?.position?.y ?: 0f).toInt()
+        val zLo = (playerZ - TILE_FADE_END).coerceAtLeast(0)
+        val pXi = playerTileX
+        val pYi = playerTileY
         val xLo = (pXi - TILE_FADE_END).coerceAtLeast(0)
         val yLo = (pYi - TILE_FADE_END).coerceAtLeast(0)
         val xHi = (pXi + TILE_FADE_END).coerceAtMost(w.width - 1)
         val yHi = (pYi + TILE_FADE_END).coerceAtMost(w.height - 1)
-        for (z in 0..topZ) {
+        for (z in zLo..topZ) {
             for (x in xLo..xHi) {
                 for (y in yLo..yHi) {
                     // Tile-distance gate (Chebyshev). Cells past
@@ -1274,6 +1325,16 @@ class RoguelikeGame(
         )
     }
 
+    // Reusable per-triangle scratch buffers for `drawModelAtNode`. Each
+    // call writes 3 transformed vertices into these arrays instead of
+    // allocating fresh `FloatArray(6)` instances — that allocation churn
+    // was ~6 floats × 3 verts × every triangle × 60 fps = millions of
+    // short-lived heap objects per second on a busy frame, which
+    // dominated GC time.
+    private val xformV0 = FloatArray(6)
+    private val xformV1 = FloatArray(6)
+    private val xformV2 = FloatArray(6)
+
     private fun drawModelAtNode(
         mesh: MeshData, nodeX: Float, nodeY: Float, nodeZ: Float,
         offsetX: Float = 0f, offsetY: Float = 0f, offsetZ: Float = 0f,
@@ -1287,36 +1348,52 @@ class RoguelikeGame(
         val cx = pivotLocalX ?: mesh.center.x
         val cy = pivotLocalY ?: mesh.center.y
         val cz = pivotLocalZ ?: mesh.center.z
+        val rotated = rotationYDeg != 0f
         val radY = Math.toRadians(rotationYDeg.toDouble()).toFloat()
-        val cosY = cos(radY); val sinY = sin(radY)
+        val cosY = if (rotated) cos(radY) else 1f
+        val sinY = if (rotated) sin(radY) else 0f
+        val baseX = nodeX + 0.5f + offsetX
+        val baseY = nodeY + 0.5f + offsetY
+        val baseZ = nodeZ + 0.5f + offsetZ
 
-        fun xform(idx: Int): FloatArray {
+        // Local helper that fills one of the three reusable vertex slots.
+        // Inlined manually (instead of a captured closure) so the JIT sees
+        // plain field accesses and the values stay in registers.
+        fun xformInto(idx: Int, out: FloatArray) {
             val vi = idx * 6
             val mx = (verts[vi] - cx) * scale
             val my = (verts[vi + 1] - cy) * scale
             val mz = (verts[vi + 2] - cz) * scale
             val mnx = verts[vi + 3]; val mny = verts[vi + 4]; val mnz = verts[vi + 5]
+            // The mesh space is Y-up; swap to engine Z-up.
             var px = mx; var py = mz; var pz = my
             var nx = mnx; var ny = mnz; var nz = mny
-            if (rotationYDeg != 0f) {
-                val rpx = px * cosY - py * sinY; val rpy = px * sinY + py * cosY; px = rpx; py = rpy
-                val rnx = nx * cosY - ny * sinY; val rny = nx * sinY + ny * cosY; nx = rnx; ny = rny
+            if (rotated) {
+                val rpx = px * cosY - py * sinY
+                val rpy = px * sinY + py * cosY
+                px = rpx; py = rpy
+                val rnx = nx * cosY - ny * sinY
+                val rny = nx * sinY + ny * cosY
+                nx = rnx; ny = rny
             }
-            px += nodeX + 0.5f + offsetX
-            py += nodeY + 0.5f + offsetY
-            pz += nodeZ + 0.5f + offsetZ
-            return floatArrayOf(px, py, pz, nx, ny, nz)
+            out[0] = px + baseX
+            out[1] = py + baseY
+            out[2] = pz + baseZ
+            out[3] = nx
+            out[4] = ny
+            out[5] = nz
         }
 
         var i = 0
         val colors = mesh.colors
+        val v0 = xformV0; val v1 = xformV1; val v2 = xformV2
         while (i < indices.size - 2) {
             val idx0 = indices[i].toInt() and 0xFFFF
             val idx1 = indices[i + 1].toInt() and 0xFFFF
             val idx2 = indices[i + 2].toInt() and 0xFFFF
-            val v0 = xform(idx0)
-            val v1 = xform(idx1)
-            val v2 = xform(idx2)
+            xformInto(idx0, v0)
+            xformInto(idx1, v1)
+            xformInto(idx2, v2)
             if (colors != null) {
                 // Use per-vertex palette colors sampled from the model's PNG texture
                 val cr0 = colors[idx0 * 3]; val cg0 = colors[idx0 * 3 + 1]; val cb0 = colors[idx0 * 3 + 2]
