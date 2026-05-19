@@ -117,6 +117,9 @@ class RoguelikeLauncher(
         // Cleanup old state
         when (state) {
             AppState.GAME -> {
+                // Release the captured cursor before tearing the game down
+                // so the user can interact with the menu / window controls.
+                inputSystem.setCursorCaptured(false)
                 game?.dispose()
                 game = null
             }
@@ -151,6 +154,7 @@ class RoguelikeLauncher(
     }
 
     fun cleanup() {
+        inputSystem.setCursorCaptured(false)
         game?.dispose()
         editor?.dispose()
         state = AppState.SHUTDOWN

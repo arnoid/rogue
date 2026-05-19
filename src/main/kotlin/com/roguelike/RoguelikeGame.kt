@@ -78,10 +78,25 @@ class RoguelikeGame(
     // Debug renderer for spheres/wireframes
     private val debugRenderer = DebugRenderer(ui)
 
-    // Orbital camera following player
-    private var azimuth = 0f
-    private var elevation = 55f
-    private var distance = 12f
+    // First-person camera state.
+    //
+    // `yaw` is the horizontal rotation in degrees, measured CCW from the
+    // world +X axis (so yaw = 90° points along +Y). `pitch` is the
+    // vertical rotation in degrees, clamped to ±89° to avoid gimbal flip
+    // when looking straight up or down. The camera is positioned at the
+    // player's eye height above the floor cell they stand on.
+    private var yaw: Float = 90f
+    private var pitch: Float = 0f
+    private var fov: Float = 67f
+
+    private companion object {
+        /** Camera offset above the player's floor cell. */
+        const val EYE_HEIGHT: Float = 0.7f
+        /** Degrees of yaw/pitch produced per pixel of raw mouse motion. */
+        const val MOUSE_SENSITIVITY: Float = 0.12f
+        /** Degrees per second turn rate for the Q/E keyboard fallback. */
+        const val KEYBOARD_TURN_RATE: Float = 120f
+    }
 
     // File dialog
     private val fileDialog = FileDialog(ui, inputSystem)
@@ -106,63 +121,6 @@ class RoguelikeGame(
     // Rendering Z limit
     private var maxRenderZ = 0
 
-    // ── Tile-distance horizon for rendering/lighting culling ──────────────
-    //
-    // Anything beyond `TILE_FADE_END` Chebyshev (L∞) tiles from the player
-    // is skipped entirely — no draw call, no shadow contribution, no light
-    // upload. Between `TILE_FADE_START` and `TILE_FADE_END` we render with
-    // a linearly fading alpha so distant rooms don't pop in/out as the
-    // player moves. The L∞ metric (`max(|dx|, |dy|, |dz|)`) is two `max`
-    // ops vs. a `sqrt` for Euclidean, and for an axis-aligned tile grid it
-    // gives a cube-shaped horizon that maps 1-to-1 onto "N tiles away".
-    private companion object {
-        const val TILE_FADE_START = 10   // alpha 1.0 inside this radius
-        const val TILE_FADE_END   = 20   // alpha 0.0 beyond this radius
-        // Pre-computed inverse fade band width — used in the per-cell hot
-        // loop to avoid a per-call integer division (`/(END-START)`).
-        const val INV_FADE_BAND = 1f / (TILE_FADE_END - TILE_FADE_START).toFloat()
-    }
-
-    // Player tile coords cached at the top of each render frame so the
-    // per-cell distance test in `renderWorld` / `uploadLighting` doesn't
-    // pay for a null check, three field loads, and three `floor()` calls
-    // on every one of ~10 000 cell visits. Refreshed once in `render()`.
-    private var playerTileX: Int = 0
-    private var playerTileY: Int = 0
-    private var playerTileZ: Int = 0
-
-    /**
-     * Chebyshev distance in tiles from the player's cached tile coords to
-     * `(cx, cy, cz)`. Call [refreshPlayerTileCoords] once per frame before
-     * using this in hot loops.
-     */
-    private fun tileDistanceToPlayer(cx: Int, cy: Int, cz: Int): Int {
-        val dx = if (cx > playerTileX) cx - playerTileX else playerTileX - cx
-        val dy = if (cy > playerTileY) cy - playerTileY else playerTileY - cy
-        val dz = if (cz > playerTileZ) cz - playerTileZ else playerTileZ - cz
-        return max(max(dx, dy), dz)
-    }
-
-    /** Refresh [playerTileX]/[playerTileY]/[playerTileZ] from the player's
-     *  current world position. Called once per frame before any tile-distance
-     *  test runs. */
-    private fun refreshPlayerTileCoords() {
-        val p = player ?: return
-        playerTileX = kotlin.math.floor(p.position.x).toInt()
-        playerTileY = kotlin.math.floor(p.position.y).toInt()
-        playerTileZ = kotlin.math.floor(p.position.z).toInt()
-    }
-
-    /**
-     * Fade alpha for a cell at tile distance [d]. 1.0 up to [TILE_FADE_START],
-     * linear ramp to 0.0 at [TILE_FADE_END], 0.0 beyond.
-     */
-    private fun fadeAlpha(d: Int): Float = when {
-        d <= TILE_FADE_START -> 1f
-        d >= TILE_FADE_END -> 0f
-        else -> (TILE_FADE_END - d).toFloat() * INV_FADE_BAND
-    }
-
     // ── Reusable lighting/shadow upload scratch buffers ──────────────────
     //
     // Previously rebuilt each frame via `mutableListOf<Float>()` and
@@ -184,11 +142,6 @@ class RoguelikeGame(
      *  each frame rather than re-allocating. */
     private var perCellTris: Array<IntArray> = emptyArray()
     private var perCellTriCount: IntArray = IntArray(0)
-
-    /** Reusable per-cell occupancy flags buffer for [uploadLighting]. Grown
-     *  on demand to the current window size and zeroed in-place each frame
-     *  instead of allocating a fresh `IntArray(cellCount)` per call. */
-    private var occupancyBuf: IntArray = IntArray(0)
 
     /** One-shot warning latch: too many shadow triangles in one frame. */
     private var shadowTriOverflowWarned = false
@@ -333,7 +286,6 @@ class RoguelikeGame(
                 player = Player().apply { position.set(spawnX, spawnY, spawnZ) }
                 interactionSystem?.actors?.add(player!!)
                 maxRenderZ = loaded.depth - 1
-                distance = max(loaded.width, loaded.height).toFloat() * 0.8f
                 worldLoaded = true
                 println("[Game] Procedural arena initialised from ${file.path} (world=${loaded.width}x${loaded.height}x${loaded.depth})")
             } else {
@@ -377,7 +329,6 @@ class RoguelikeGame(
                 player = Player().apply { position.set(spawnX, spawnY, spawnZ) }
                 interactionSystem?.actors?.add(player!!)
                 maxRenderZ = loaded.depth - 1
-                distance = max(loaded.width, loaded.height).toFloat() * 0.8f
                 worldLoaded = true
                 println("[Game] Loaded world: ${file.path} (${loaded.width}x${loaded.height}x${loaded.depth})")
             }
@@ -408,31 +359,31 @@ class RoguelikeGame(
         val delta = ((now - lastFrameTime) / 1_000_000_000.0).toFloat().coerceIn(0f, 0.1f)
         lastFrameTime = now
 
-        // Cache the player's tile coords for this frame so the per-cell
-        // distance gates don't keep re-reading & re-floor()-ing them.
-        refreshPlayerTileCoords()
-
-        // Handle movement (WASD) — only when Shift is NOT held
-        val shiftHeld = inputSystem.isKeyPressed(GLFW_KEY_LEFT_SHIFT) || inputSystem.isKeyPressed(GLFW_KEY_RIGHT_SHIFT)
-        if (!shiftHeld) {
+        // Handle movement (WASD). In first-person mode the camera and the
+        // player share the same yaw, so movement is always taken relative
+        // to where the player is looking — no Shift gate needed.
+        run {
             val moveDir = input.getMovementDirection()
             if (!moveDir.isZero) {
                 moveDir.nor()
-                // Rotate movement by camera azimuth so W = forward relative to view
-                val azRad = Math.toRadians(azimuth.toDouble()).toFloat()
-                val cosA = cos(azRad); val sinA = sin(azRad)
-                val fx = -cosA; val fy = -sinA
-                val rx = fy; val ry = -fx
+                // moveDir.y > 0 (W) → forward along the yaw vector.
+                // moveDir.x > 0 (D) → strafe right, 90° CW from forward.
+                // Both stay in the XY plane so vertical look doesn't slow
+                // horizontal travel.
+                val yawRad = Math.toRadians(yaw.toDouble()).toFloat()
+                val cosY = cos(yawRad); val sinY = sin(yawRad)
+                val fx = cosY;  val fy = sinY        // forward
+                val rx = sinY;  val ry = -cosY       // right (90° CW of forward)
                 val worldDirX = moveDir.x * rx + moveDir.y * fx
                 val worldDirY = moveDir.x * ry + moveDir.y * fy
                 moveDir.set(worldDirX, worldDirY, 0f).nor()
                 // Substep movement so that on long frames (e.g. a hitch
                 // caused by a heavy lighting upload) the player still cannot
-                // tunnel through walls/props. With max speed 7 units/s and
+                // tunnel through walls/props. With max speed 5 units/s and
                 // a collision radius of ~0.15, each substep must cover less
                 // than ~0.02s of travel to be safe. We cap substep duration
                 // at 0.02s and run as many as needed to consume `delta`.
-                val moveSpeed = 7f
+                val moveSpeed = 5f
                 val maxSubstep = 0.02f
                 var remaining = delta
                 while (remaining > 0f) {
@@ -464,32 +415,43 @@ class RoguelikeGame(
         proceduralManager.onPlayerMove(p.position.x, p.position.y, p.position.z)
         if (w.depth - 1 > maxRenderZ) maxRenderZ = w.depth - 1
 
-        // Camera orbit controls (Shift + WASD for pitch/zoom, Q/E always for rotation)
-        if (shiftHeld) {
-            if (inputSystem.isKeyPressed(GLFW_KEY_W)) elevation = (elevation + 60f * delta).coerceAtMost(89f)
-            if (inputSystem.isKeyPressed(GLFW_KEY_S)) elevation = (elevation - 60f * delta).coerceAtLeast(10f)
-        }
-        if (inputSystem.isKeyPressed(GLFW_KEY_Q)) azimuth -= 90f * delta
-        if (inputSystem.isKeyPressed(GLFW_KEY_E)) azimuth += 90f * delta
+        // First-person camera controls.
+        //
+        // Mouse motion drives yaw (horizontal) and pitch (vertical). The
+        // cursor is captured while the game is active so the OS pointer
+        // can't drift off-window and motion is delivered as raw deltas.
+        // Q/E act as keyboard fallbacks for turning. The scroll wheel
+        // adjusts FOV (zoom). Pitch is clamped to ±89° to avoid the view
+        // flipping when looking straight up or down.
+        if (!inputSystem.isCursorCaptured()) inputSystem.setCursorCaptured(true)
+        yaw -= inputSystem.getMouseDeltaX() * MOUSE_SENSITIVITY
+        pitch = (pitch - inputSystem.getMouseDeltaY() * MOUSE_SENSITIVITY).coerceIn(-89f, 89f)
+        if (inputSystem.isKeyPressed(GLFW_KEY_Q)) yaw += KEYBOARD_TURN_RATE * delta
+        if (inputSystem.isKeyPressed(GLFW_KEY_E)) yaw -= KEYBOARD_TURN_RATE * delta
 
-        // Zoom
         val scroll = inputSystem.getScrollDelta()
-        if (scroll != 0f) distance = (distance - scroll * 2f).coerceIn(4f, 40f)
+        if (scroll != 0f) fov = (fov - scroll * 2f).coerceIn(40f, 100f)
         val zoomChange = input.getZoomChange(delta)
-        if (zoomChange != 0f) distance = (distance + zoomChange).coerceIn(4f, 40f)
+        if (zoomChange != 0f) fov = (fov + zoomChange).coerceIn(40f, 100f)
 
-        // Update camera to follow player
-        updateOrbitalCamera(p.position)
+        // Sync the player's logical facing direction with the camera yaw
+        // so the interaction system raycasts in the same direction the
+        // player is looking.
+        run {
+            val yawRad = Math.toRadians(yaw.toDouble()).toFloat()
+            p.facingDirection.set(cos(yawRad), sin(yawRad), 0f)
+        }
 
-        // Upload lighting. Lights are pre-filtered by *room distance* so
-        // that fixtures sitting more than 3 rooms away from the player
-        // never reach the GPU — that cap matches the player's perceptual
-        // horizon (you can't directly see into rooms further than a couple
-        // of hops anyway) and keeps the shader workload bounded as the
-        // procedural world grows.
+        // Update camera position + orientation to the player's eye.
+        updateFirstPersonCamera(p.position)
+
+        // Upload every light reachable through the room graph — no
+        // distance cap. With the renderer no longer culling by player
+        // distance we want every visible fixture to participate in
+        // shading, regardless of how many rooms away it is.
         val candidateLights = proceduralManager.collectVisibleRoomLights(
             p.position.x, p.position.y, p.position.z,
-            maxRoomDistance = 3
+            maxRoomDistance = 1_000_000
         )
         uploadLighting(w, candidateLights)
 
@@ -501,12 +463,10 @@ class RoguelikeGame(
         // Render world
         renderWorld(w)
 
-        // Draw player as blue sphere
-        val playerDrawX = p.position.x
-        val playerDrawY = p.position.y
-        val playerDrawZ = p.position.z + 0.4f
-        debugRenderer.drawFilledSphere(playerDrawX, playerDrawY, playerDrawZ, 0.2f, camera, 0.2f, 0.4f, 1.0f, 0.9f)
-        debugRenderer.drawWireframeSphere(playerDrawX, playerDrawY, playerDrawZ, 0.2f, camera, 0.3f, 0.5f, 1.0f, 0.9f, 10, 1.5f)
+        // In first-person mode the camera sits inside the player, so we
+        // intentionally don't draw the player avatar — it would just
+        // fill the screen with sphere mesh. A future cosmetic pass could
+        // add view-model hands / weapons here.
 
         // HUD
         val sw = ui.screenWidth
@@ -517,36 +477,36 @@ class RoguelikeGame(
         ui.drawText("FPS: %.0f".format(smoothedFps), 10f, 10f, 1f, 1f, 0.4f, 1f, 1.2f)
         val posStr = "Pos: %.1f, %.1f, %.1f".format(p.position.x, p.position.y, p.position.z)
         ui.drawText(posStr, 10f, 32f, 0.7f, 0.7f, 0.8f, 1f, 1.1f)
-        ui.drawText("WASD: Move  Shift+WASD: Camera  Z/X: Zoom  F: Interact  ESC: Menu", 10f, sh - 30f, 0.5f, 0.55f, 0.65f, 0.8f, 1f)
+        // Simple crosshair (two short bars centred on screen).
+        val cx = sw * 0.5f; val cy = sh * 0.5f
+        ui.drawRect(cx - 6f, cy - 1f, 12f, 2f, 1f, 1f, 1f, 0.8f)
+        ui.drawRect(cx - 1f, cy - 6f, 2f, 12f, 1f, 1f, 1f, 0.8f)
+        ui.drawText("Mouse: Look  WASD: Move  Q/E: Turn  Scroll: Zoom  F: Interact  ESC: Menu", 10f, sh - 30f, 0.5f, 0.55f, 0.65f, 0.8f, 1f)
 
         return true
     }
 
-    private fun updateOrbitalCamera(target: Vec3) {
-        val tx = target.x
-        val ty = target.y
-        val tz = target.z
-        val azRad = Math.toRadians(azimuth.toDouble()).toFloat()
-        val elRad = Math.toRadians(elevation.toDouble()).toFloat()
-        val cosEl = cos(elRad)
-        camera.position.set(
-            tx + distance * cosEl * cos(azRad),
-            ty + distance * cosEl * sin(azRad),
-            tz + distance * sin(elRad)
-        )
-        camera.direction.set(tx - camera.position.x, ty - camera.position.y, tz - camera.position.z).normalize()
+    /**
+     * Place the camera at the player's eye position and orient it from
+     * [yaw] / [pitch]. World convention: +X east, +Y north, +Z up. Yaw
+     * is measured CCW from +X (so yaw = 0° looks east, 90° looks north).
+     */
+    private fun updateFirstPersonCamera(target: Vec3) {
+        val yawRad = Math.toRadians(yaw.toDouble()).toFloat()
+        val pitchRad = Math.toRadians(pitch.toDouble()).toFloat()
+        val cosP = cos(pitchRad)
+        val dirX = cos(yawRad) * cosP
+        val dirY = sin(yawRad) * cosP
+        val dirZ = sin(pitchRad)
+        camera.position.set(target.x, target.y, target.z + EYE_HEIGHT)
+        camera.direction.set(dirX, dirY, dirZ).normalize()
         camera.up.set(0f, 0f, 1f)
+        camera.fov = fov
         camera.update()
     }
 
     private fun uploadLighting(w: World, candidateLights: List<com.roguelike.core.model.LightSource>) {
         // ── 1. Frustum-cull light sources ──────────────────────────────────
-        // First drop any light whose centre sits beyond the tile horizon —
-        // these can't reach any geometry we're going to render this frame
-        // and would otherwise waste a UBO slot. The integer Chebyshev test
-        // is two `max` operations per light, so the gate is essentially free
-        // and runs before the more expensive frustum/sphere test below.
-        //
         // Each light's influence is a sphere (centre = position, radius =
         // light radius). Skip uploading any light whose sphere can't touch
         // the view frustum — these can never contribute a visible photon and
@@ -554,12 +514,7 @@ class RoguelikeGame(
         // (whose lights would be culled in-shader to nothing) to go dark.
         // The input set is already room-distance-bounded by the caller.
         val frustumLights = candidateLights.filter { ls ->
-            val d = tileDistanceToPlayer(
-                kotlin.math.floor(ls.x).toInt(),
-                kotlin.math.floor(ls.y).toInt(),
-                kotlin.math.floor(ls.z).toInt()
-            )
-            d <= TILE_FADE_END && camera.isSphereInFrustum(ls.x, ls.y, ls.z, ls.radius)
+            camera.isSphereInFrustum(ls.x, ls.y, ls.z, ls.radius)
         }
 
         // ── 2. Prioritise lights by room distance, then by Euclidean ─────
@@ -620,40 +575,17 @@ class RoguelikeGame(
             if (lyi + r > maxY) maxY = lyi + r
             if (lzi + r > maxZ) maxZ = lzi + r
         }
-        val rawOriginX = minX.coerceIn(0, worldW - 1)
-        val rawOriginY = minY.coerceIn(0, worldH - 1)
-        val rawOriginZ = minZ.coerceIn(0, worldD - 1)
-        val rawEndX = (maxX + 1).coerceIn(rawOriginX + 1, worldW)
-        val rawEndY = (maxY + 1).coerceIn(rawOriginY + 1, worldH)
-        val rawEndZ = (maxZ + 1).coerceIn(rawOriginZ + 1, worldD)
-        // Additionally clamp the occupancy/shadow window to the player's
-        // tile horizon. Even if a light radius would otherwise extend the
-        // window past [TILE_FADE_END] tiles, no geometry beyond that
-        // distance will render this frame, so there's nothing to shade. A
-        // tighter window means a smaller `IntArray(cellCount)` allocation
-        // and fewer per-cell triangle list visits inside the hot loop.
-        val pXi = playerTileX
-        val pYi = playerTileY
-        val pZi = playerTileZ
-        val originX = rawOriginX.coerceAtLeast(pXi - TILE_FADE_END)
-        val originY = rawOriginY.coerceAtLeast(pYi - TILE_FADE_END)
-        val originZ = rawOriginZ.coerceAtLeast(pZi - TILE_FADE_END)
-        val endX = rawEndX.coerceAtMost(pXi + TILE_FADE_END + 1).coerceAtLeast(originX + 1)
-        val endY = rawEndY.coerceAtMost(pYi + TILE_FADE_END + 1).coerceAtLeast(originY + 1)
-        val endZ = rawEndZ.coerceAtMost(pZi + TILE_FADE_END + 1).coerceAtLeast(originZ + 1)
+        val originX = minX.coerceIn(0, worldW - 1)
+        val originY = minY.coerceIn(0, worldH - 1)
+        val originZ = minZ.coerceIn(0, worldD - 1)
+        val endX = (maxX + 1).coerceIn(originX + 1, worldW)
+        val endY = (maxY + 1).coerceIn(originY + 1, worldH)
+        val endZ = (maxZ + 1).coerceIn(originZ + 1, worldD)
         val gridW = endX - originX
         val gridH = endY - originY
         val gridD = endZ - originZ
         val cellCount = gridW * gridH * gridD
-        // Reuse the persistent occupancy buffer — grow it on demand, then
-        // zero just the active prefix. Avoids a per-frame allocation +
-        // implicit zero-fill of a potentially 10k-element IntArray.
-        if (occupancyBuf.size < cellCount) {
-            occupancyBuf = IntArray(cellCount)
-        } else {
-            java.util.Arrays.fill(occupancyBuf, 0, cellCount, 0)
-        }
-        val occupancy = occupancyBuf
+        val occupancy = IntArray(cellCount)
         // Reset scratch buffers — outer arrays are reused across frames.
         shadowTriBuf.reset()
         expandedTriBuf.reset()
@@ -709,10 +641,6 @@ class RoguelikeGame(
                     occupancy[wIdx] = flags
 
                     if (!cellTouchedByAnyLight(x, y, z)) continue
-                    // Tile-horizon early-out: cells beyond [TILE_FADE_END]
-                    // produce no visible geometry this frame, so don't waste
-                    // the per-cell shadow triangle emission on them either.
-                    if (tileDistanceToPlayer(x, y, z) > TILE_FADE_END) continue
 
                     if (node.hasTile(TileSlot.STAIRS)) {
                         val tile = node.getTile(TileSlot.STAIRS)
@@ -1143,7 +1071,6 @@ class RoguelikeGame(
     private fun renderWorld(w: World) {
         val floorR = 0.25f; val floorG = 0.30f; val floorB = 0.40f
         val wallR  = 0.55f; val wallG  = 0.42f; val wallB  = 0.30f
-        val playerZ = kotlin.math.floor(player?.position?.z ?: 0f).toInt()
 
         // Render the player's current Z layer and every layer beneath it.
         // Anything above the player is hidden so upper floors never occlude
@@ -1152,48 +1079,17 @@ class RoguelikeGame(
         // grid bounds.
         //
         // CRITICAL: iterate only the cells that actually fall inside the
-        // camera frustum AND within the tile-distance horizon. As the
-        // procedural world expands past ~60×60 cells, iterating the full
-        // grid floods `drawGpuTriangle` with vertices, hits
-        // `maxGpuVertices` mid-frame, and the remaining triangles are
+        // camera frustum. As the procedural world expands past ~60×60 cells,
+        // iterating the full grid floods `drawGpuTriangle` with vertices,
+        // hits `maxGpuVertices` mid-frame, and the remaining triangles are
         // silently dropped — producing the "lighting breaks the further you
-        // walk" symptom. The tile horizon clamps the (x,y) scan to a small
-        // (≤ 41×41) AABB around the player regardless of world size, and
-        // the frustum cull then trims that down to what's actually on
-        // screen. Two cheap integer gates do the work of an unbounded loop.
-        // Cap the rendered Z range two ways:
-        //   1. `topZ` — never render layers above the player (existing rule:
-        //      upper floors would occlude the view down into the room the
-        //      player stands in).
-        //   2. `zLo`  — also clamp the *bottom* of the iteration to the
-        //      tile horizon. Previously we rendered every layer from z=0
-        //      to `playerZ` inclusive; at z=10 that's 11 layers × 41×41
-        //      cells = ~18k cell visits, and even a modest model-vertex
-        //      count per cell easily blows past SimpleUI's `maxGpuVertices`
-        //      cap (≈ 98k). When that happens triangles get silently
-        //      dropped — visually the player's own floor disappears and
-        //      with it any surface a light could shade, so the scene
-        //      appears completely unlit. The per-cell Chebyshev gate
-        //      below would already skip far cells but it can't help if
-        //      the buffer is exhausted before we reach the player's row.
-        val topZ = playerZ.coerceIn(0, (w.depth - 1).coerceAtLeast(0))
-        val zLo = (playerZ - TILE_FADE_END).coerceAtLeast(0)
-        val pXi = playerTileX
-        val pYi = playerTileY
-        val xLo = (pXi - TILE_FADE_END).coerceAtLeast(0)
-        val yLo = (pYi - TILE_FADE_END).coerceAtLeast(0)
-        val xHi = (pXi + TILE_FADE_END).coerceAtMost(w.width - 1)
-        val yHi = (pYi + TILE_FADE_END).coerceAtMost(w.height - 1)
-        for (z in zLo..topZ) {
-            for (x in xLo..xHi) {
-                for (y in yLo..yHi) {
-                    // Tile-distance gate (Chebyshev). Cells past
-                    // [TILE_FADE_END] are completely invisible.
-                    val tileDist = tileDistanceToPlayer(x, y, z)
-                    if (tileDist > TILE_FADE_END) continue
-                    val alpha = fadeAlpha(tileDist)
-                    if (alpha <= 0f) continue
-
+        // walk" symptom. Frustum culling keeps the per-frame vertex count
+        // bounded to roughly what's actually visible.
+        // Render every Z layer in the world — no player-relative cap.
+        // Frustum culling alone decides what's drawn.
+        for (z in 0 until w.depth) {
+            for (x in 0 until w.width) {
+                for (y in 0 until w.height) {
                     // Cell AABB in world space is (x..x+1, y..y+1, z..z+1).
                     // Inflate slightly so meshes that overhang the cell
                     // (e.g. doorframes, ladders) aren't false-culled.
@@ -1204,7 +1100,7 @@ class RoguelikeGame(
                     ) continue
                     val node = w.getNode(x, y, z) ?: continue
                     val hasFloor = node.hasTile(TileSlot.FLOOR)
-                    val hasCeiling = node.hasTile(TileSlot.CEILING) && z < playerZ
+                    val hasCeiling = node.hasTile(TileSlot.CEILING)
                     val hasWallN = node.hasTile(TileSlot.WALL_NORTH)
                     val hasWallS = node.hasTile(TileSlot.WALL_SOUTH)
                     val hasWallE = node.hasTile(TileSlot.WALL_EAST)
@@ -1214,21 +1110,21 @@ class RoguelikeGame(
 
                     val tbx = x.toFloat(); val tby = y.toFloat(); val tbz = z.toFloat()
 
-                    if (hasFloor) floorMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetZ = -0.5f, r = floorR, g = floorG, b = floorB, a = alpha) }
-                    if (hasCeiling) ceilingMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetZ = 0.5f, r = floorR, g = floorG, b = floorB, a = alpha) }
-                    if (hasWallN) drawWallOrDoor(node, TileSlot.WALL_NORTH, tbx, tby, tbz, offsetY = 0.5f, rotationYDeg = 0f, r = wallR, g = wallG, b = wallB, a = alpha)
-                    if (hasWallS) drawWallOrDoor(node, TileSlot.WALL_SOUTH, tbx, tby, tbz, offsetY = -0.5f, rotationYDeg = 180f, r = wallR, g = wallG, b = wallB, a = alpha)
-                    if (hasWallE) drawWallOrDoor(node, TileSlot.WALL_EAST, tbx, tby, tbz, offsetX = 0.5f, rotationYDeg = 90f, r = wallR, g = wallG, b = wallB, a = alpha)
-                    if (hasWallW) drawWallOrDoor(node, TileSlot.WALL_WEST, tbx, tby, tbz, offsetX = -0.5f, rotationYDeg = 270f, r = wallR, g = wallG, b = wallB, a = alpha)
+                    if (hasFloor) floorMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetZ = -0.5f, r = floorR, g = floorG, b = floorB) }
+                    if (hasCeiling) ceilingMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetZ = 0.5f, r = floorR, g = floorG, b = floorB) }
+                    if (hasWallN) drawWallOrDoor(node, TileSlot.WALL_NORTH, tbx, tby, tbz, offsetY = 0.5f, rotationYDeg = 0f, r = wallR, g = wallG, b = wallB)
+                    if (hasWallS) drawWallOrDoor(node, TileSlot.WALL_SOUTH, tbx, tby, tbz, offsetY = -0.5f, rotationYDeg = 180f, r = wallR, g = wallG, b = wallB)
+                    if (hasWallE) drawWallOrDoor(node, TileSlot.WALL_EAST, tbx, tby, tbz, offsetX = 0.5f, rotationYDeg = 90f, r = wallR, g = wallG, b = wallB)
+                    if (hasWallW) drawWallOrDoor(node, TileSlot.WALL_WEST, tbx, tby, tbz, offsetX = -0.5f, rotationYDeg = 270f, r = wallR, g = wallG, b = wallB)
                     if (hasStairs) {
                         val tile = node.getTile(TileSlot.STAIRS)
                         if (tile is StairsTile) {
-                            stairsMesh?.let { drawModelAtNode(it, tbx, tby, tbz, rotationYDeg = stairsRenderRotation(tile.rotationY), r = 0.45f, g = 0.40f, b = 0.35f, a = alpha) }
+                            stairsMesh?.let { drawModelAtNode(it, tbx, tby, tbz, rotationYDeg = stairsRenderRotation(tile.rotationY), r = 0.45f, g = 0.40f, b = 0.35f) }
                         } else if (tile is LadderTile) {
                             val rot = tile.rotationY
                             val offX = when (rot) { 90f -> 0.5f; 270f -> -0.5f; else -> 0f }
                             val offY = when (rot) { 0f -> 0.5f; 180f -> -0.5f; else -> 0f }
-                            ladderMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = offX, offsetY = offY, rotationYDeg = rot, r = 0.50f, g = 0.38f, b = 0.25f, a = alpha) }
+                            ladderMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = offX, offsetY = offY, rotationYDeg = rot, r = 0.50f, g = 0.38f, b = 0.25f) }
                         }
                     }
                 }
@@ -1246,8 +1142,7 @@ class RoguelikeGame(
         tbx: Float, tby: Float, tbz: Float,
         offsetX: Float = 0f, offsetY: Float = 0f,
         rotationYDeg: Float,
-        r: Float, g: Float, b: Float,
-        a: Float = 1f
+        r: Float, g: Float, b: Float
     ) {
         val tile = node.getTile(slot)
         val isDoor = tile is DoorNorthTile || tile is DoorSouthTile || tile is DoorEastTile || tile is DoorWestTile
@@ -1255,11 +1150,11 @@ class RoguelikeGame(
         if (isDoorwayWall) {
             // Render the doorway frame mesh in place of a normal wall slab —
             // no swinging door panel.
-            doorFrameMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = offsetX, offsetY = offsetY, rotationYDeg = rotationYDeg, r = r, g = g, b = b, a = a) }
+            doorFrameMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = offsetX, offsetY = offsetY, rotationYDeg = rotationYDeg, r = r, g = g, b = b) }
             return
         }
         if (!isDoor) {
-            wallMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = offsetX, offsetY = offsetY, rotationYDeg = rotationYDeg, r = r, g = g, b = b, a = a) }
+            wallMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = offsetX, offsetY = offsetY, rotationYDeg = rotationYDeg, r = r, g = g, b = b) }
             return
         }
         val isOpen = when (tile) {
@@ -1270,7 +1165,7 @@ class RoguelikeGame(
             else -> false
         }
         // Always draw the doorway frame (centered on the wall like a normal wall slab)
-        doorFrameMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = offsetX, offsetY = offsetY, rotationYDeg = rotationYDeg, r = r, g = g, b = b, a = a) }
+        doorFrameMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = offsetX, offsetY = offsetY, rotationYDeg = rotationYDeg, r = r, g = g, b = b) }
 
         // Door panel rendering.
         //
@@ -1290,7 +1185,7 @@ class RoguelikeGame(
                 panelMesh, tbx, tby, tbz,
                 offsetX = offsetX, offsetY = offsetY,
                 rotationYDeg = rotationYDeg,
-                r = 0.55f, g = 0.35f, b = 0.25f, a = a
+                r = 0.55f, g = 0.35f, b = 0.25f
             )
             return
         }
@@ -1321,19 +1216,9 @@ class RoguelikeGame(
             panelMesh, tbx, tby, tbz,
             offsetX = openOffX, offsetY = openOffY,
             rotationYDeg = rotationYDeg + openExtraDeg,
-            r = 0.35f, g = 0.55f, b = 0.25f, a = a
+            r = 0.35f, g = 0.55f, b = 0.25f
         )
     }
-
-    // Reusable per-triangle scratch buffers for `drawModelAtNode`. Each
-    // call writes 3 transformed vertices into these arrays instead of
-    // allocating fresh `FloatArray(6)` instances — that allocation churn
-    // was ~6 floats × 3 verts × every triangle × 60 fps = millions of
-    // short-lived heap objects per second on a busy frame, which
-    // dominated GC time.
-    private val xformV0 = FloatArray(6)
-    private val xformV1 = FloatArray(6)
-    private val xformV2 = FloatArray(6)
 
     private fun drawModelAtNode(
         mesh: MeshData, nodeX: Float, nodeY: Float, nodeZ: Float,
@@ -1348,52 +1233,36 @@ class RoguelikeGame(
         val cx = pivotLocalX ?: mesh.center.x
         val cy = pivotLocalY ?: mesh.center.y
         val cz = pivotLocalZ ?: mesh.center.z
-        val rotated = rotationYDeg != 0f
         val radY = Math.toRadians(rotationYDeg.toDouble()).toFloat()
-        val cosY = if (rotated) cos(radY) else 1f
-        val sinY = if (rotated) sin(radY) else 0f
-        val baseX = nodeX + 0.5f + offsetX
-        val baseY = nodeY + 0.5f + offsetY
-        val baseZ = nodeZ + 0.5f + offsetZ
+        val cosY = cos(radY); val sinY = sin(radY)
 
-        // Local helper that fills one of the three reusable vertex slots.
-        // Inlined manually (instead of a captured closure) so the JIT sees
-        // plain field accesses and the values stay in registers.
-        fun xformInto(idx: Int, out: FloatArray) {
+        fun xform(idx: Int): FloatArray {
             val vi = idx * 6
             val mx = (verts[vi] - cx) * scale
             val my = (verts[vi + 1] - cy) * scale
             val mz = (verts[vi + 2] - cz) * scale
             val mnx = verts[vi + 3]; val mny = verts[vi + 4]; val mnz = verts[vi + 5]
-            // The mesh space is Y-up; swap to engine Z-up.
             var px = mx; var py = mz; var pz = my
             var nx = mnx; var ny = mnz; var nz = mny
-            if (rotated) {
-                val rpx = px * cosY - py * sinY
-                val rpy = px * sinY + py * cosY
-                px = rpx; py = rpy
-                val rnx = nx * cosY - ny * sinY
-                val rny = nx * sinY + ny * cosY
-                nx = rnx; ny = rny
+            if (rotationYDeg != 0f) {
+                val rpx = px * cosY - py * sinY; val rpy = px * sinY + py * cosY; px = rpx; py = rpy
+                val rnx = nx * cosY - ny * sinY; val rny = nx * sinY + ny * cosY; nx = rnx; ny = rny
             }
-            out[0] = px + baseX
-            out[1] = py + baseY
-            out[2] = pz + baseZ
-            out[3] = nx
-            out[4] = ny
-            out[5] = nz
+            px += nodeX + 0.5f + offsetX
+            py += nodeY + 0.5f + offsetY
+            pz += nodeZ + 0.5f + offsetZ
+            return floatArrayOf(px, py, pz, nx, ny, nz)
         }
 
         var i = 0
         val colors = mesh.colors
-        val v0 = xformV0; val v1 = xformV1; val v2 = xformV2
         while (i < indices.size - 2) {
             val idx0 = indices[i].toInt() and 0xFFFF
             val idx1 = indices[i + 1].toInt() and 0xFFFF
             val idx2 = indices[i + 2].toInt() and 0xFFFF
-            xformInto(idx0, v0)
-            xformInto(idx1, v1)
-            xformInto(idx2, v2)
+            val v0 = xform(idx0)
+            val v1 = xform(idx1)
+            val v2 = xform(idx2)
             if (colors != null) {
                 // Use per-vertex palette colors sampled from the model's PNG texture
                 val cr0 = colors[idx0 * 3]; val cg0 = colors[idx0 * 3 + 1]; val cb0 = colors[idx0 * 3 + 2]

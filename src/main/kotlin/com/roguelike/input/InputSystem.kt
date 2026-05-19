@@ -14,8 +14,17 @@ class InputSystem {
 
     private var mouseX: Float = 0f
     private var mouseY: Float = 0f
+    private var lastMouseX: Float = 0f
+    private var lastMouseY: Float = 0f
+    private var mouseDeltaXAccum: Float = 0f
+    private var mouseDeltaYAccum: Float = 0f
+    private var mouseDeltaX: Float = 0f
+    private var mouseDeltaY: Float = 0f
+    private var firstMouseSample: Boolean = true
     private var scrollDelta: Float = 0f
     private var scrollAccumulator: Float = 0f
+    private var window: Long = 0L
+    private var cursorCaptured: Boolean = false
 
     // Character input buffer (for text fields)
     private val charBuffer = mutableListOf<Char>()
@@ -26,7 +35,39 @@ class InputSystem {
     fun isMouseButtonJustPressed(button: Int): Boolean = button in mouseButtonJustPressed.indices && mouseButtonJustPressed[button]
     fun getMouseX(): Float = mouseX
     fun getMouseY(): Float = mouseY
+    /** Horizontal mouse motion since the previous frame, in pixels. */
+    fun getMouseDeltaX(): Float = mouseDeltaX
+    /** Vertical mouse motion since the previous frame, in pixels. */
+    fun getMouseDeltaY(): Float = mouseDeltaY
     fun getScrollDelta(): Float = scrollDelta
+
+    /**
+     * Capture the cursor: hides the OS pointer and locks it to the window
+     * centre, with raw motion delivered through [getMouseDeltaX] /
+     * [getMouseDeltaY]. Required for first-person mouse-look so the
+     * cursor can never leave the window or stop generating motion at the
+     * screen edge.
+     *
+     * No-op when called repeatedly with the same state.
+     */
+    fun setCursorCaptured(captured: Boolean) {
+        if (window == 0L || captured == cursorCaptured) return
+        cursorCaptured = captured
+        if (captured) {
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED)
+            if (glfwRawMouseMotionSupported()) {
+                glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE)
+            }
+            // Suppress the next sample's delta so the cursor-jump that
+            // happens when GLFW recentres doesn't translate into a giant
+            // yaw/pitch kick on the first captured frame.
+            firstMouseSample = true
+        } else {
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL)
+        }
+    }
+
+    fun isCursorCaptured(): Boolean = cursorCaptured
 
     /** Return and clear all characters typed this frame. */
     fun consumeTypedChars(): List<Char> {
@@ -40,6 +81,7 @@ class InputSystem {
      * Install GLFW callbacks on the given window.
      */
     fun install(window: Long) {
+        this.window = window
         glfwSetKeyCallback(window) { _, key, _, action, _ ->
             if (key in keyState.indices) {
                 when (action) {
@@ -69,8 +111,21 @@ class InputSystem {
         }
 
         glfwSetCursorPosCallback(window) { _, xpos, ypos ->
-            mouseX = xpos.toFloat()
-            mouseY = ypos.toFloat()
+            val x = xpos.toFloat()
+            val y = ypos.toFloat()
+            if (firstMouseSample) {
+                // First sample (or first sample after capture) — only
+                // record the absolute position so we don't emit a giant
+                // delta on the cursor's "jump" to centre.
+                firstMouseSample = false
+            } else {
+                mouseDeltaXAccum += x - lastMouseX
+                mouseDeltaYAccum += y - lastMouseY
+            }
+            lastMouseX = x
+            lastMouseY = y
+            mouseX = x
+            mouseY = y
         }
 
         glfwSetScrollCallback(window) { _, _, yoffset ->
@@ -90,6 +145,10 @@ class InputSystem {
         mouseButtonJustPressed.fill(false)
         scrollDelta = scrollAccumulator
         scrollAccumulator = 0f
+        mouseDeltaX = mouseDeltaXAccum
+        mouseDeltaY = mouseDeltaYAccum
+        mouseDeltaXAccum = 0f
+        mouseDeltaYAccum = 0f
     }
 }
 
