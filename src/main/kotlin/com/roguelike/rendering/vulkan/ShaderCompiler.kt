@@ -6,9 +6,6 @@ import org.lwjgl.util.shaderc.Shaderc
 import org.lwjgl.vulkan.VK10.*
 import org.lwjgl.vulkan.VkDevice
 import org.lwjgl.vulkan.VkShaderModuleCreateInfo
-import java.nio.ByteBuffer
-import java.nio.file.Files
-import java.nio.file.Path
 
 /**
  * Compiles GLSL shaders to SPIR-V at runtime (dev mode) or loads pre-compiled .spv files (release mode).
@@ -17,18 +14,25 @@ import java.nio.file.Path
 object ShaderCompiler {
 
     /**
-     * Load a shader module from a pre-compiled .spv file on the classpath.
-     * Falls back to runtime compilation from .glsl source if .spv not found.
+     * Load a shader module from the disk cache, a pre-compiled `.spv` on the
+     * classpath, or by runtime-compiling the GLSL source. The runtime compile
+     * path also writes the result back into [ShaderCache] so subsequent
+     * launches stay fast.
      */
     fun loadShaderModule(device: VkDevice, resourcePath: String): Long {
-        // Try pre-compiled .spv first
+        // 1. Disk cache (filled by [ShaderCache.compileAll] during startup
+        //    splash, or by the runtime-compile fallback below).
+        ShaderCache.readCachedSpirv(resourcePath)?.let { return createShaderModule(device, it) }
+
+        // 2. Pre-baked .spv next to the GLSL on the classpath (release builds).
         val spvPath = resourcePath.removeSuffix(".glsl") + ".spv"
         val spvBytes = javaClass.classLoader.getResourceAsStream(spvPath)?.readBytes()
         if (spvBytes != null) {
             return createShaderModule(device, spvBytes)
         }
 
-        // Fall back to runtime compilation
+        // 3. Fall back to runtime compilation. This branch is mostly hit
+        //    when [ShaderCache] is bypassed (tests, headless tools, etc).
         val glslSource = javaClass.classLoader.getResourceAsStream(resourcePath)?.bufferedReader()?.readText()
             ?: throw RuntimeException("Shader not found: $resourcePath")
 
@@ -44,6 +48,11 @@ object ShaderCompiler {
 
     /**
      * Compile GLSL source to SPIR-V bytecode using shaderc.
+     *
+     * Targets the highest Vulkan API version supported by the current loader
+     * (see [VulkanVersion]) and requests `shaderc_optimization_level_performance`
+     * so the driver's backend receives already-DCE'd / inlined / constant-folded
+     * SPIR-V instead of debug-grade output.
      */
     fun compileGlslToSpirv(source: String, shaderKind: Int, fileName: String): ByteArray {
         val compiler = Shaderc.shaderc_compiler_initialize()
@@ -54,7 +63,11 @@ object ShaderCompiler {
             Shaderc.shaderc_compile_options_set_target_env(
                 options,
                 Shaderc.shaderc_target_env_vulkan,
-                Shaderc.shaderc_env_version_vulkan_1_0
+                VulkanVersion.shadercTargetEnv
+            )
+            Shaderc.shaderc_compile_options_set_optimization_level(
+                options,
+                Shaderc.shaderc_optimization_level_performance
             )
 
             val result = Shaderc.shaderc_compile_into_spv(

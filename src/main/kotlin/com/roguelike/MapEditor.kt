@@ -1751,17 +1751,19 @@ class MapEditor(
                 continue
             }
 
-            // Draw wireframe edges on top of model faces
-            if (lightPreviewEnabled && w.lightSources.isNotEmpty()) {
-                debugRenderer.drawLitWireframeCube(
-                    tbx, tby, tbz, 1f, camera,
-                    0.15f * layerDim, 0.18f * layerDim, 0.22f * layerDim, 0.7f, 1.5f
-                )
-            } else {
-                debugRenderer.drawWireframeCube(
-                    tbx, tby, tbz, 1f, camera,
-                    0.15f * layerDim, 0.18f * layerDim, 0.22f * layerDim, 0.7f
-                )
+            // Draw wireframe edges on top of model faces (only when wireframes are enabled)
+            if (showWireframes) {
+                if (lightPreviewEnabled && w.lightSources.isNotEmpty()) {
+                    debugRenderer.drawLitWireframeCube(
+                        tbx, tby, tbz, 1f, camera,
+                        0.15f * layerDim, 0.18f * layerDim, 0.22f * layerDim, 0.7f, 1.5f
+                    )
+                } else {
+                    debugRenderer.drawWireframeCube(
+                        tbx, tby, tbz, 1f, camera,
+                        0.15f * layerDim, 0.18f * layerDim, 0.22f * layerDim, 0.7f
+                    )
+                }
             }
         }
 
@@ -2617,12 +2619,33 @@ class MapEditor(
         val rowH = 22f
         val labelW = 18f
         val valueW = 36f
-        val trackX = palX + 10f + labelW + 4f
+        val stepBtnW = 18f
+        val stepBtnH = 18f
+        val stepBtnY = by + 2f
+        val minusX = palX + 10f + labelW + 4f
+        val trackX = minusX + stepBtnW + 4f
         val trackY = by + 8f
-        val trackW = btnW - labelW - valueW - 16f
+        // Reserve room for: label, minus btn, track, plus btn, value text
+        val trackW = btnW - labelW - valueW - stepBtnW * 2f - 24f
+        val plusX = trackX + trackW + 4f
         val trackH = 6f
         val sliderMin = 1
         val sliderMax = 255
+
+        // Snap helper: nearest positive multiple of 3
+        fun snapTo3(v: Int): Int = ((v + 1) / 3).coerceAtLeast(1) * 3
+
+        // -- "-" button: decrement by 3 --
+        if (ui.button("-", minusX, stepBtnY, stepBtnW, stepBtnH, inputSystem)) {
+            val newVal = snapTo3((currentValue - 3).coerceAtLeast(sliderMin))
+            val newW = if (axis == 'X') newVal else w0.width
+            val newH = if (axis == 'Y') newVal else w0.height
+            val newD = if (axis == 'Z') newVal else w0.depth
+            try { w0.setSize(newW, newH, newD) } catch (_: Exception) {}
+            cursorX = cursorX.coerceAtMost(w0.width - 1)
+            cursorY = cursorY.coerceAtMost(w0.height - 1)
+            currentZ = currentZ.coerceAtMost(w0.depth - 1)
+        }
 
         // Track background
         ui.drawRect(trackX, trackY, trackW, trackH, 0.12f, 0.14f, 0.18f, 0.9f)
@@ -2648,7 +2671,7 @@ class MapEditor(
         }
 
         // Snap to nearest positive multiple of 3 (World requires this).
-        val snapped = ((targetValue + 1) / 3).coerceAtLeast(1) * 3
+        val snapped = snapTo3(targetValue)
 
         // Apply size change immediately
         if (snapped != currentValue) {
@@ -2672,12 +2695,27 @@ class MapEditor(
         val hr = if (handleHovered || draggingWorldSlider == axis) 0.6f else 0.45f
         ui.drawRect(handleX, handleY, handleW, handleH, hr, hr + 0.05f, hr + 0.15f, 1f)
 
+        // -- "+" button: increment by 3 --
+        // Read the (possibly updated) current size for this axis so the
+        // click reflects what the user sees.
+        val postCurrent = when (axis) { 'X' -> w0.width; 'Y' -> w0.height; else -> w0.depth }
+        if (ui.button("+", plusX, stepBtnY, stepBtnW, stepBtnH, inputSystem)) {
+            val newVal = snapTo3((postCurrent + 3).coerceAtMost(sliderMax))
+            val newW = if (axis == 'X') newVal else w0.width
+            val newH = if (axis == 'Y') newVal else w0.height
+            val newD = if (axis == 'Z') newVal else w0.depth
+            try { w0.setSize(newW, newH, newD) } catch (_: Exception) {}
+            cursorX = cursorX.coerceAtMost(w0.width - 1)
+            cursorY = cursorY.coerceAtMost(w0.height - 1)
+            currentZ = currentZ.coerceAtMost(w0.depth - 1)
+        }
+
         // Label and value text
         ui.drawText(label, palX + 10f, by + 4f, 0.85f, 0.85f, 0.9f, 1f, 1f)
         val shown = when (axis) {
             'X' -> w0.width; 'Y' -> w0.height; else -> w0.depth
         }
-        ui.drawText(shown.toString(), trackX + trackW + 6f, by + 4f, 0.85f, 0.85f, 0.9f, 1f, 1f)
+        ui.drawText(shown.toString(), plusX + stepBtnW + 6f, by + 4f, 0.85f, 0.85f, 0.9f, 1f, 1f)
 
         return by + rowH
     }

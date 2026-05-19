@@ -67,7 +67,10 @@ class VulkanContext private constructor(
                     .applicationVersion(VK_MAKE_VERSION(1, 0, 0))
                     .pEngineName(stack.UTF8("Custom Vulkan Engine"))
                     .engineVersion(VK_MAKE_VERSION(1, 0, 0))
-                    .apiVersion(VK_API_VERSION_1_0)
+                    // Target the highest Vulkan version the loader supports
+                    // (capped at 1.3) so shaderc can emit modern SPIR-V and
+                    // the driver can enable newer optimisation paths.
+                    .apiVersion(VulkanVersion.instanceApiVersion)
 
                 val glfwExtensions = GLFWVulkan.glfwGetRequiredInstanceExtensions()
                     ?: throw RuntimeException("Vulkan not supported by GLFW")

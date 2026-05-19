@@ -27,10 +27,37 @@ class SimpleUI(
 
         // LightingUBO size in bytes — kept in sync with `LightingUBO` in
         // shaders/world_lit.frag.glsl. Layout:
-        //   4 ints (16 B) + ambientParams vec4 (16 B) + gridOrigin vec4 (16 B) = 48 B
-        //   + MAX_LIGHTS * vec4 lightPosIntensity                              = MAX_LIGHTS * 16
-        //   + MAX_LIGHTS * vec4 lightColorRadius                               = MAX_LIGHTS * 16
-        const val LIGHTING_UBO_SIZE: Int = 48 + MAX_LIGHTS * 16 + MAX_LIGHTS * 16
+        //   4 ints (16 B) + ambientParams vec4 (16 B) + gridOrigin vec4 (16 B)
+        //                 + screenParams vec4 (16 B)                             = 64 B
+        //   + MAX_LIGHTS * vec4 lightPosIntensity                                = MAX_LIGHTS * 16
+        //   + MAX_LIGHTS * vec4 lightColorRadius                                 = MAX_LIGHTS * 16
+        const val LIGHTING_UBO_SIZE: Int = 64 + MAX_LIGHTS * 16 + MAX_LIGHTS * 16
+
+        /**
+         * Hard cap on shadow triangles uploaded per frame. The SSBO is
+         * allocated once at this size; the per-frame update is a pure
+         * memcpy of the active range. Avoids the per-frame
+         * vmaDestroyBuffer/vmaCreateBuffer round-trip that used to
+         * stall the GPU pipeline whenever the visible triangle count
+         * changed — the main cause of "going through the pixels"
+         * stutter with many lights.
+         */
+        const val MAX_SHADOW_TRIANGLES: Int = 0xFFFF
+
+        /** Hard cap on occupancy cells uploaded per frame. 96³ ≈ 880 K
+         *  cells covers any realistic shadow window. */
+        const val MAX_OCCUPANCY_CELLS: Int = 96 * 96 * 96
+
+        // ── Forward+ tile binning ────────────────────────────────────
+        // Per-fragment lighting otherwise loops over every uploaded
+        // light. We bin lights into fixed-size screen tiles on the CPU
+        // each frame; the fragment shader then iterates only the
+        // handful that overlap its tile. Combined with the in-shader
+        // top-K cap this bounds per-pixel cost regardless of scene
+        // light count.
+        const val LIGHT_TILE_SIZE: Int = 16
+        const val MAX_LIGHTS_PER_TILE: Int = 32
+        const val MAX_LIGHT_TILES: Int = 128 * 128
     }
 
     private var pipeline: Long = VK_NULL_HANDLE
@@ -58,6 +85,13 @@ class SimpleUI(
     private var shadowTriSsboBuffer: Long = VK_NULL_HANDLE
     private var shadowTriSsboAlloc: Long = VK_NULL_HANDLE
     private var shadowTriSsboSize: Long = 0
+    // Forward+ per-tile light bins (binding 3 = counts, binding 4 = indices).
+    private var tileLightCountSsboBuffer: Long = VK_NULL_HANDLE
+    private var tileLightCountSsboAlloc: Long = VK_NULL_HANDLE
+    private var tileLightCountSsboSize: Long = 0
+    private var tileLightIndexSsboBuffer: Long = VK_NULL_HANDLE
+    private var tileLightIndexSsboAlloc: Long = VK_NULL_HANDLE
+    private var tileLightIndexSsboSize: Long = 0
 
     // --- GPU-rasterized 3D pipeline (depth-buffered, VP transform on GPU) ---
     private var gpuPipeline: Long = VK_NULL_HANDLE
@@ -588,11 +622,17 @@ class SimpleUI(
 
     private fun createLitDescriptors() {
         MemoryStack.stackPush().use { stack ->
-            // Layout: binding 0 = UBO (lighting data), binding 1 = SSBO (occupancy grid)
-            val bindings = VkDescriptorSetLayoutBinding.calloc(3, stack)
+            // Layout: binding 0 = UBO (lighting + screen/tile params)
+            //         binding 1 = SSBO (occupancy grid)
+            //         binding 2 = SSBO (shadow triangles)
+            //         binding 3 = SSBO (Forward+ per-tile light count)
+            //         binding 4 = SSBO (Forward+ per-tile light indices)
+            val bindings = VkDescriptorSetLayoutBinding.calloc(5, stack)
             bindings.get(0).binding(0).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT)
             bindings.get(1).binding(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT)
             bindings.get(2).binding(2).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT)
+            bindings.get(3).binding(3).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT)
+            bindings.get(4).binding(4).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT)
 
             val layoutCI = VkDescriptorSetLayoutCreateInfo.calloc(stack)
                 .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO)
@@ -601,10 +641,10 @@ class SimpleUI(
             vkCreateDescriptorSetLayout(context.vkDevice, layoutCI, null, pLayout)
             litDescriptorSetLayout = pLayout.get(0)
 
-            // Pool
+            // Pool — 1 UBO + 4 SSBOs.
             val poolSizes = VkDescriptorPoolSize.calloc(2, stack)
             poolSizes.get(0).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1)
-            poolSizes.get(1).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(2)
+            poolSizes.get(1).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(4)
             val poolCI = VkDescriptorPoolCreateInfo.calloc(stack)
                 .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO)
                 .maxSets(1)
@@ -641,8 +681,11 @@ class SimpleUI(
             lightingUboBuffer = pBuf.get(0)
             lightingUboAlloc = pAlloc.get(0)
 
-            // Occupancy SSBO: initial size = 4 bytes (empty grid)
-            occupancySsboSize = 4
+            // Occupancy SSBO: persistent — allocated once at the
+            // MAX_OCCUPANCY_CELLS cap so the per-frame update is a pure
+            // memcpy. The shader bounds-checks via gridW/H/D from the
+            // UBO so unused tail bytes are harmless.
+            occupancySsboSize = MAX_OCCUPANCY_CELLS.toLong() * 4L
             val ssboCI = VkBufferCreateInfo.calloc(stack)
                 .sType(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO)
                 .size(occupancySsboSize)
@@ -652,8 +695,10 @@ class SimpleUI(
             occupancySsboBuffer = pBuf.get(0)
             occupancySsboAlloc = pAlloc.get(0)
 
-            // Shadow triangle SSBO: initial size = 16 bytes (empty)
-            shadowTriSsboSize = 16
+            // Shadow triangle SSBO: persistent — sized once at the
+            // MAX_SHADOW_TRIANGLES cap (3 vec4s per triangle, 48 B each)
+            // so `updateShadowTriangles` is a pure memcpy on the hot path.
+            shadowTriSsboSize = MAX_SHADOW_TRIANGLES.toLong() * 3L * 16L
             val shadowCI = VkBufferCreateInfo.calloc(stack)
                 .sType(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO)
                 .size(shadowTriSsboSize)
@@ -663,13 +708,36 @@ class SimpleUI(
             shadowTriSsboBuffer = pBuf.get(0)
             shadowTriSsboAlloc = pAlloc.get(0)
 
+            // Forward+ tile light count SSBO: one uint per screen tile.
+            tileLightCountSsboSize = MAX_LIGHT_TILES.toLong() * 4L
+            val countCI = VkBufferCreateInfo.calloc(stack)
+                .sType(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO)
+                .size(tileLightCountSsboSize)
+                .usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)
+                .sharingMode(VK_SHARING_MODE_EXCLUSIVE)
+            check(vmaCreateBuffer(context.allocator, countCI, allocCI, pBuf, pAlloc, null) == VK_SUCCESS)
+            tileLightCountSsboBuffer = pBuf.get(0)
+            tileLightCountSsboAlloc = pAlloc.get(0)
+
+            // Forward+ tile light index SSBO: MAX_LIGHTS_PER_TILE uints per
+            // tile. Slot `t * MAX_LIGHTS_PER_TILE + i` = i'th light for tile t.
+            tileLightIndexSsboSize = MAX_LIGHT_TILES.toLong() * MAX_LIGHTS_PER_TILE.toLong() * 4L
+            val indexCI = VkBufferCreateInfo.calloc(stack)
+                .sType(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO)
+                .size(tileLightIndexSsboSize)
+                .usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)
+                .sharingMode(VK_SHARING_MODE_EXCLUSIVE)
+            check(vmaCreateBuffer(context.allocator, indexCI, allocCI, pBuf, pAlloc, null) == VK_SUCCESS)
+            tileLightIndexSsboBuffer = pBuf.get(0)
+            tileLightIndexSsboAlloc = pAlloc.get(0)
+
             updateLitDescriptorSet(uboSize.toLong())
         }
     }
 
     private fun updateLitDescriptorSet(uboSize: Long) {
         MemoryStack.stackPush().use { stack ->
-            val writes = VkWriteDescriptorSet.calloc(3, stack)
+            val writes = VkWriteDescriptorSet.calloc(5, stack)
 
             val uboBI = VkDescriptorBufferInfo.calloc(1, stack)
             uboBI.get(0).buffer(lightingUboBuffer).offset(0).range(uboSize)
@@ -700,6 +768,26 @@ class SimpleUI(
                 .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
                 .descriptorCount(1)
                 .pBufferInfo(shadowBI)
+
+            val countBI = VkDescriptorBufferInfo.calloc(1, stack)
+            countBI.get(0).buffer(tileLightCountSsboBuffer).offset(0).range(tileLightCountSsboSize)
+            writes.get(3)
+                .sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
+                .dstSet(litDescriptorSet)
+                .dstBinding(3)
+                .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+                .descriptorCount(1)
+                .pBufferInfo(countBI)
+
+            val indexBI = VkDescriptorBufferInfo.calloc(1, stack)
+            indexBI.get(0).buffer(tileLightIndexSsboBuffer).offset(0).range(tileLightIndexSsboSize)
+            writes.get(4)
+                .sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
+                .dstSet(litDescriptorSet)
+                .dstBinding(4)
+                .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+                .descriptorCount(1)
+                .pBufferInfo(indexBI)
 
             vkUpdateDescriptorSets(context.vkDevice, writes, null)
         }
@@ -767,6 +855,14 @@ class SimpleUI(
             buf.putFloat(gridOriginY.toFloat())
             buf.putFloat(gridOriginZ.toFloat())
             buf.putFloat(0f)
+            // screenParams vec4 — populated by [updateLightTiles]. We
+            // re-emit them here from the cached values so the UBO layout
+            // stays in lockstep even if the caller updates lighting
+            // without updating tiles this frame.
+            buf.putFloat(cachedScreenW)
+            buf.putFloat(cachedScreenH)
+            buf.putFloat(LIGHT_TILE_SIZE.toFloat())
+            buf.putFloat(cachedTilesX.toFloat())
 
             // lightPosIntensity[MAX_LIGHTS] — vec4 each
             val floatBuf = buf.asFloatBuffer()
@@ -791,45 +887,90 @@ class SimpleUI(
             vmaUnmapMemory(context.allocator, lightingUboAlloc)
         }
 
-        // Update occupancy SSBO — recreate if size changed
-        val requiredSize = (gridW * gridH * gridD * 4).toLong().coerceAtLeast(4L)
-        if (requiredSize != occupancySsboSize) {
-            // Destroy old SSBO
-            if (occupancySsboBuffer != VK_NULL_HANDLE) {
-                vmaDestroyBuffer(context.allocator, occupancySsboBuffer, occupancySsboAlloc)
-            }
-            occupancySsboSize = requiredSize
+        // Update occupancy SSBO — buffer is persistent (allocated once at
+        // MAX_OCCUPANCY_CELLS), so no destroy/recreate or descriptor
+        // rewrite per frame. Just memcpy the active range; the shader
+        // bounds-checks via gridW/H/D from the UBO so unused tail bytes
+        // don't matter.
+        val activeCellCount = (gridW * gridH * gridD).coerceAtLeast(0)
+        if (activeCellCount > MAX_OCCUPANCY_CELLS) {
+            System.err.println(
+                "[SimpleUI] occupancy grid ${gridW}x${gridH}x${gridD}=" +
+                    "$activeCellCount cells exceeds MAX_OCCUPANCY_CELLS=$MAX_OCCUPANCY_CELLS — truncating"
+            )
+        }
+        val uploadCells = minOf(activeCellCount, MAX_OCCUPANCY_CELLS)
+        if (uploadCells > 0) {
             MemoryStack.stackPush().use { stack ->
-                val ssboCI = VkBufferCreateInfo.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO)
-                    .size(occupancySsboSize)
-                    .usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)
-                    .sharingMode(VK_SHARING_MODE_EXCLUSIVE)
-                val allocCI = VmaAllocationCreateInfo.calloc(stack).usage(VMA_MEMORY_USAGE_CPU_TO_GPU)
-                val pBuf = stack.mallocLong(1)
-                val pAlloc = stack.mallocPointer(1)
-                check(vmaCreateBuffer(context.allocator, ssboCI, allocCI, pBuf, pAlloc, null) == VK_SUCCESS)
-                occupancySsboBuffer = pBuf.get(0)
-                occupancySsboAlloc = pAlloc.get(0)
+                val ppData = stack.mallocPointer(1)
+                vmaMapMemory(context.allocator, occupancySsboAlloc, ppData)
+                val byteBuffer = ppData.getByteBuffer(0, uploadCells * 4)
+                val intBuffer = byteBuffer.asIntBuffer()
+                val take = minOf(occupancyGrid.size, uploadCells)
+                intBuffer.put(occupancyGrid, 0, take)
+                vmaUnmapMemory(context.allocator, occupancySsboAlloc)
             }
-            // Re-bind descriptor
-            val uboSize = LIGHTING_UBO_SIZE.toLong()
-            updateLitDescriptorSet(uboSize)
+        }
+    }
+
+    // Cached screen / tile params written into the LightingUBO. Updated by
+    // [updateLightTiles] so a follow-on [updateLighting] call doesn't
+    // clobber them. Default to 0 so the shader's per-tile path safely
+    // short-circuits before the first tile upload.
+    private var cachedScreenW: Float = 0f
+    private var cachedScreenH: Float = 0f
+    private var cachedTilesX: Int = 0
+    private var cachedTilesY: Int = 0
+
+    /**
+     * Upload Forward+ per-tile light bins. Counts and indices are
+     * memcpy'd into persistent SSBOs (binding 3 = counts, binding 4 =
+     * indices). The fragment shader reads the tile-local light list
+     * keyed by `gl_FragCoord.xy / LIGHT_TILE_SIZE` and iterates only
+     * the lights that overlap the tile.
+     *
+     * Slot layout for [tileLightIndices]: `tileLightIndices[t * MAX_LIGHTS_PER_TILE + i]`
+     * holds the i'th light index for tile `t = ty * tilesX + tx`.
+     *
+     * @param tileLightCount per-tile light count (size >= tilesX*tilesY)
+     * @param tileLightIndices flat per-tile index array (size >= tilesX*tilesY*MAX_LIGHTS_PER_TILE)
+     */
+    fun updateLightTiles(
+        tileLightCount: IntArray,
+        tileLightIndices: IntArray,
+        tilesX: Int, tilesY: Int,
+        screenWidth: Float, screenHeight: Float
+    ) {
+        cachedScreenW = screenWidth
+        cachedScreenH = screenHeight
+        cachedTilesX = tilesX
+        cachedTilesY = tilesY
+
+        val tileCount = tilesX * tilesY
+        if (tileCount <= 0 || tileCount > MAX_LIGHT_TILES) {
+            if (tileCount > MAX_LIGHT_TILES) {
+                System.err.println(
+                    "[SimpleUI] tile count $tileCount exceeds MAX_LIGHT_TILES=$MAX_LIGHT_TILES — Forward+ disabled this frame"
+                )
+            }
+            return
         }
 
-        // Upload occupancy data — clear entire buffer first, then write
         MemoryStack.stackPush().use { stack ->
             val ppData = stack.mallocPointer(1)
-            vmaMapMemory(context.allocator, occupancySsboAlloc, ppData)
-            val byteBuffer = ppData.getByteBuffer(0, occupancySsboSize.toInt())
-            // Zero entire buffer to clear stale data
-            for (i in 0 until occupancySsboSize.toInt()) {
-                byteBuffer.put(i, 0)
-            }
-            val buf = byteBuffer.asIntBuffer()
-            val count = minOf(occupancyGrid.size, gridW * gridH * gridD)
-            buf.put(occupancyGrid, 0, count)
-            vmaUnmapMemory(context.allocator, occupancySsboAlloc)
+            vmaMapMemory(context.allocator, tileLightCountSsboAlloc, ppData)
+            val countBuf = ppData.getByteBuffer(0, tileCount * 4).asIntBuffer()
+            countBuf.put(tileLightCount, 0, tileCount)
+            vmaUnmapMemory(context.allocator, tileLightCountSsboAlloc)
+        }
+
+        val indexSlots = tileCount * MAX_LIGHTS_PER_TILE
+        MemoryStack.stackPush().use { stack ->
+            val ppData = stack.mallocPointer(1)
+            vmaMapMemory(context.allocator, tileLightIndexSsboAlloc, ppData)
+            val idxBuf = ppData.getByteBuffer(0, indexSlots * 4).asIntBuffer()
+            idxBuf.put(tileLightIndices, 0, indexSlots)
+            vmaUnmapMemory(context.allocator, tileLightIndexSsboAlloc)
         }
     }
 
@@ -844,49 +985,37 @@ class SimpleUI(
      * @param triangles Flat array of triangle vertex data [v0x, v0y, v0z, v1x, v1y, v1z, v2x, v2y, v2z, ...]
      */
     fun updateShadowTriangles(triangles: FloatArray) {
-        // Each triangle = 9 floats = 36 bytes. Pad to vec4 alignment: 3 vec4s = 48 bytes per triangle
-        // Layout: vec4(v0.xyz, 0), vec4(v1.xyz, 0), vec4(v2.xyz, 0) per triangle
-        val triCount = triangles.size / 9
-        val requiredSize = (triCount * 3 * 16).toLong().coerceAtLeast(16L) // 3 vec4s per triangle, 16 bytes each
-        if (requiredSize != shadowTriSsboSize) {
-            if (shadowTriSsboBuffer != VK_NULL_HANDLE) {
-                vmaDestroyBuffer(context.allocator, shadowTriSsboBuffer, shadowTriSsboAlloc)
-            }
-            shadowTriSsboSize = requiredSize
-            MemoryStack.stackPush().use { stack ->
-                val ssboCI = VkBufferCreateInfo.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO)
-                    .size(shadowTriSsboSize)
-                    .usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)
-                    .sharingMode(VK_SHARING_MODE_EXCLUSIVE)
-                val allocCI = VmaAllocationCreateInfo.calloc(stack).usage(VMA_MEMORY_USAGE_CPU_TO_GPU)
-                val pBuf = stack.mallocLong(1)
-                val pAlloc = stack.mallocPointer(1)
-                check(vmaCreateBuffer(context.allocator, ssboCI, allocCI, pBuf, pAlloc, null) == VK_SUCCESS)
-                shadowTriSsboBuffer = pBuf.get(0)
-                shadowTriSsboAlloc = pAlloc.get(0)
-            }
-            val uboSize = LIGHTING_UBO_SIZE.toLong()
-            updateLitDescriptorSet(uboSize)
-        }
+        updateShadowTriangles(triangles, triangles.size / 9)
+    }
 
-        // Upload triangle data as vec4 array
-        if (triCount > 0) {
-            MemoryStack.stackPush().use { stack ->
-                val ppData = stack.mallocPointer(1)
-                vmaMapMemory(context.allocator, shadowTriSsboAlloc, ppData)
-                val buf = ppData.getByteBuffer(0, shadowTriSsboSize.toInt()).asFloatBuffer()
-                for (t in 0 until triCount) {
-                    val base = t * 9
-                    // vec4(v0.xyz, 0)
-                    buf.put(triangles[base + 0]); buf.put(triangles[base + 1]); buf.put(triangles[base + 2]); buf.put(0f)
-                    // vec4(v1.xyz, 0)
-                    buf.put(triangles[base + 3]); buf.put(triangles[base + 4]); buf.put(triangles[base + 5]); buf.put(0f)
-                    // vec4(v2.xyz, 0)
-                    buf.put(triangles[base + 6]); buf.put(triangles[base + 7]); buf.put(triangles[base + 8]); buf.put(0f)
-                }
-                vmaUnmapMemory(context.allocator, shadowTriSsboAlloc)
+    /**
+     * Overload that lets the caller pass a reusable FloatArray that may
+     * be larger than the currently-active triangle range, plus the
+     * active triangle count — the hot-path entry point. The SSBO is
+     * persistent (allocated once at MAX_SHADOW_TRIANGLES capacity), so
+     * this call is a pure memcpy without buffer recreation.
+     */
+    fun updateShadowTriangles(triangles: FloatArray, triCount: Int) {
+        if (triCount <= 0) return
+        if (triCount > MAX_SHADOW_TRIANGLES) {
+            System.err.println(
+                "[SimpleUI] shadow triangle count $triCount exceeds " +
+                    "MAX_SHADOW_TRIANGLES=$MAX_SHADOW_TRIANGLES — truncating"
+            )
+        }
+        val uploadCount = minOf(triCount, MAX_SHADOW_TRIANGLES)
+
+        MemoryStack.stackPush().use { stack ->
+            val ppData = stack.mallocPointer(1)
+            vmaMapMemory(context.allocator, shadowTriSsboAlloc, ppData)
+            val buf = ppData.getByteBuffer(0, uploadCount * 48).asFloatBuffer()
+            for (t in 0 until uploadCount) {
+                val base = t * 9
+                buf.put(triangles[base + 0]); buf.put(triangles[base + 1]); buf.put(triangles[base + 2]); buf.put(0f)
+                buf.put(triangles[base + 3]); buf.put(triangles[base + 4]); buf.put(triangles[base + 5]); buf.put(0f)
+                buf.put(triangles[base + 6]); buf.put(triangles[base + 7]); buf.put(triangles[base + 8]); buf.put(0f)
             }
+            vmaUnmapMemory(context.allocator, shadowTriSsboAlloc)
         }
     }
 
@@ -1367,6 +1496,8 @@ class SimpleUI(
         if (lightingUboBuffer != VK_NULL_HANDLE) vmaDestroyBuffer(context.allocator, lightingUboBuffer, lightingUboAlloc)
         if (occupancySsboBuffer != VK_NULL_HANDLE) vmaDestroyBuffer(context.allocator, occupancySsboBuffer, occupancySsboAlloc)
         if (shadowTriSsboBuffer != VK_NULL_HANDLE) vmaDestroyBuffer(context.allocator, shadowTriSsboBuffer, shadowTriSsboAlloc)
+        if (tileLightCountSsboBuffer != VK_NULL_HANDLE) vmaDestroyBuffer(context.allocator, tileLightCountSsboBuffer, tileLightCountSsboAlloc)
+        if (tileLightIndexSsboBuffer != VK_NULL_HANDLE) vmaDestroyBuffer(context.allocator, tileLightIndexSsboBuffer, tileLightIndexSsboAlloc)
         if (litDescriptorPool != VK_NULL_HANDLE) vkDestroyDescriptorPool(context.vkDevice, litDescriptorPool, null)
         if (litDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(context.vkDevice, litDescriptorSetLayout, null)
         if (litPipeline != VK_NULL_HANDLE) vkDestroyPipeline(context.vkDevice, litPipeline, null)

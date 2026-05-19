@@ -8,6 +8,11 @@ layout(location = 2) in vec3 v_normal;
 // Keep MAX_LIGHTS in sync with `SimpleUI.MAX_LIGHTS` on the host side.
 #define MAX_LIGHTS 128
 
+// ── Forward+ tile binning ────────────────────────────────────────────
+// Must match `SimpleUI.LIGHT_TILE_SIZE` and `MAX_LIGHTS_PER_TILE`.
+#define LIGHT_TILE_SIZE 16
+#define MAX_LIGHTS_PER_TILE 32
+
 layout(set = 0, binding = 0) uniform LightingUBO {
     int lightCount;
     int gridW;
@@ -21,6 +26,13 @@ layout(set = 0, binding = 0) uniform LightingUBO {
     // window track the player lets the host upload only the geometry near
     // the visible lights instead of the whole world.
     vec4 gridOrigin;
+    // Fourth 16-byte header slot — Forward+ screen/tile parameters:
+    //   x = screen width in pixels
+    //   y = screen height in pixels
+    //   z = tile size in pixels (== LIGHT_TILE_SIZE, kept for sanity check)
+    //   w = number of tile columns (tilesX) — used to index into
+    //       `tileLightCount` / `tileLightIndices` without per-frame divides
+    vec4 screenParams;
     vec4 lightPosIntensity[MAX_LIGHTS];   // xyz = position, w = intensity
     vec4 lightColorRadius[MAX_LIGHTS];    // rgb = color, a = radius
 } lighting;
@@ -39,6 +51,20 @@ layout(set = 0, binding = 1) readonly buffer OccupancyGrid {
 layout(set = 0, binding = 2) readonly buffer ShadowTriangles {
     vec4 tris[];
 } shadowTris;
+
+// Forward+ per-tile light count (binding 3) and indices (binding 4).
+// `tileLightCount[t]` = number of lights overlapping tile t.
+// `tileLightIndices[t * MAX_LIGHTS_PER_TILE + i]` = i'th light index for
+// tile t = ty * tilesX + tx, where tx = int(gl_FragCoord.x / LIGHT_TILE_SIZE)
+// and ty = int(gl_FragCoord.y / LIGHT_TILE_SIZE). Iterating only this
+// per-tile list bounds the per-fragment light loop regardless of how
+// many lights the host uploaded this frame.
+layout(set = 0, binding = 3) readonly buffer TileLightCount {
+    uint counts[];
+} tileLightCount;
+layout(set = 0, binding = 4) readonly buffer TileLightIndices {
+    uint indices[];
+} tileLightIndices;
 
 layout(location = 0) out vec4 outColor;
 
@@ -243,26 +269,123 @@ void main() {
     float ambient = lighting.ambientParams.x;
     vec3 totalLight = vec3(ambient);
 
-    for (int i = 0; i < numLights && i < MAX_LIGHTS; i++) {
+    // ── Top-K light selection ────────────────────────────────────────────
+    //
+    // Even with the host-side room/frustum cull, a busy scene can still
+    // ship 30+ lights to the GPU; without a per-pixel cap each one would
+    // trigger a full DDA + shadow-mesh ray-march, and cost grows linearly
+    // with light count. Empirically, almost every fragment is dominated
+    // by at most a handful of nearby lights — fixtures further away
+    // contribute fractions of a percent due to the `1/(1+0.05·d²)`
+    // attenuation. So we:
+    //
+    //   1. Score every light with a cheap *upper bound* of its possible
+    //      contribution: NdotL × window(d/r) / (1 + 0.05·d²). No shadow
+    //      ray needed yet.
+    //   2. Keep only the top MAX_PER_PIXEL_LIGHTS scores.
+    //   3. Pay the expensive `isOccluded` ray-march only for those.
+    //
+    // With MAX_PER_PIXEL_LIGHTS = 6, fragment cost is bounded regardless
+    // of `numLights` — adding more distant lights to the scene no longer
+    // tanks frame time.
+    const int MAX_PER_PIXEL_LIGHTS = 6;
+    int   topIdx  [MAX_PER_PIXEL_LIGHTS];
+    float topScore[MAX_PER_PIXEL_LIGHTS];
+    for (int s = 0; s < MAX_PER_PIXEL_LIGHTS; s++) {
+        topIdx[s] = -1;
+        topScore[s] = 0.0;
+    }
+
+    // ── Forward+ tile lookup ────────────────────────────────────────────
+    // Pull the per-tile light count and starting index out of the SSBOs
+    // keyed by gl_FragCoord. If screenParams hasn't been set yet (host
+    // hasn't called updateLightTiles) we fall back to iterating the full
+    // lightCount, which keeps the shader correct during the first frame
+    // and any path that bypasses Forward+.
+    int tilesX = int(lighting.screenParams.w);
+    int tileSize = int(lighting.screenParams.z);
+    int tileLightN;
+    int tileLightBase;
+    if (tilesX > 0 && tileSize > 0) {
+        int tx = int(gl_FragCoord.x) / tileSize;
+        int ty = int(gl_FragCoord.y) / tileSize;
+        int tIdx = ty * tilesX + tx;
+        tileLightN = int(tileLightCount.counts[tIdx]);
+        tileLightBase = tIdx * MAX_LIGHTS_PER_TILE;
+    } else {
+        tileLightN = numLights;
+        tileLightBase = -1; // sentinel for "ignore tileLightIndices; iterate sequentially"
+    }
+
+    for (int k = 0; k < tileLightN && k < MAX_LIGHTS; k++) {
+        int i = (tileLightBase >= 0)
+            ? int(tileLightIndices.indices[tileLightBase + k])
+            : k;
+        if (i < 0 || i >= numLights) continue;
+
         vec3 lightPos = lighting.lightPosIntensity[i].xyz;
         float intensity = lighting.lightPosIntensity[i].w;
-        vec3 lightColor = lighting.lightColorRadius[i].rgb;
         float radius = lighting.lightColorRadius[i].a;
 
         vec3 toLight = lightPos - surfacePos;
         float distSq = dot(toLight, toLight);
         if (distSq < 0.001) continue;
         float dist = sqrt(distSq);
-
-        // Skip if beyond radius
         if (dist > radius) continue;
 
         vec3 L = toLight / dist;
         float NdotL = max(dot(N, L), 0.0);
         if (NdotL <= 0.0) continue;
 
-        // Shadow ray-march per pixel from offset surface position
-        if (isOccluded(surfacePos, lightPos)) continue;
+        // Same attenuation curve as the lit pass below — cheap to evaluate
+        // and matches the actual contribution rank.
+        float kAtt = clamp(1.0 - pow(dist / radius, 4.0), 0.0, 1.0);
+        float window = kAtt * kAtt;
+        float score = NdotL * intensity * window / (1.0 + distSq * 0.05);
+        if (score <= 0.0) continue;
+
+        // Insertion sort into the top-K array (K is tiny, so this is
+        // cheaper than any branchless alternative).
+        int insertAt = -1;
+        float minScore = topScore[0];
+        int minSlot = 0;
+        for (int s = 0; s < MAX_PER_PIXEL_LIGHTS; s++) {
+            if (topIdx[s] < 0) { insertAt = s; break; }
+            if (topScore[s] < minScore) {
+                minScore = topScore[s];
+                minSlot = s;
+            }
+        }
+        if (insertAt < 0 && score > minScore) insertAt = minSlot;
+        if (insertAt >= 0) {
+            topIdx[insertAt] = i;
+            topScore[insertAt] = score;
+        }
+    }
+
+    // ── Shade with the surviving lights only ────────────────────────────
+    for (int s = 0; s < MAX_PER_PIXEL_LIGHTS; s++) {
+        int i = topIdx[s];
+        if (i < 0) continue;
+
+        vec3 lightPos = lighting.lightPosIntensity[i].xyz;
+        float intensity = lighting.lightPosIntensity[i].w;
+        vec3 lightColor = lighting.lightColorRadius[i].rgb;
+        float radius = lighting.lightColorRadius[i].a;
+
+        vec3 toLight = lightPos - surfacePos;
+        float dist = length(toLight);
+        vec3 L = toLight / dist;
+        float NdotL = max(dot(N, L), 0.0);
+
+        // Same-cell shortcut: skip the DDA when the light sits inside the
+        // fragment's own voxel — it can never be self-occluded by mesh
+        // geometry of its own cell at < 1 voxel distance.
+        bool sameCell =
+            int(floor(surfacePos.x)) == int(floor(lightPos.x)) &&
+            int(floor(surfacePos.y)) == int(floor(lightPos.y)) &&
+            int(floor(surfacePos.z)) == int(floor(lightPos.z));
+        if (!sameCell && isOccluded(surfacePos, lightPos)) continue;
 
         // Distance attenuation.
         //
@@ -271,20 +394,10 @@ void main() {
         // radius=20 light barely lit the far half of a 12×12 room before
         // the hard `dist > radius` cutoff. We now combine a gentle
         // inverse-square term with a "windowed" falloff that drives the
-        // contribution smoothly to zero exactly at `radius`:
-        //
-        //   window      = saturate(1 - (dist/radius)^4)^2
-        //   attenuation = intensity * window / (1 + distSq * 0.05)
-        //
-        // The `* 0.05` coefficient (gentler than the old 0.1) keeps
-        // mid-range distances bright enough to actually illuminate the
-        // far side of a large room, while `window` guarantees the light
-        // fades smoothly to zero at the declared radius rather than
-        // popping at the hard cutoff. Existing `intensity` values stay
-        // useful — a light tuned for the old curve still produces
-        // similar near-field brightness.
-        float k = clamp(1.0 - pow(dist / radius, 4.0), 0.0, 1.0);
-        float window = k * k;
+        // contribution smoothly to zero exactly at `radius`.
+        float distSq = dist * dist;
+        float kAtt = clamp(1.0 - pow(dist / radius, 4.0), 0.0, 1.0);
+        float window = kAtt * kAtt;
         float attenuation = intensity * window / (1.0 + distSq * 0.05);
         totalLight += lightColor * attenuation * NdotL;
     }

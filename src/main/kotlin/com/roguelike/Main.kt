@@ -2,6 +2,8 @@ package com.roguelike
 
 import com.roguelike.input.InputSystem
 import com.roguelike.rendering.Camera
+import com.roguelike.rendering.vulkan.ShaderCache
+import com.roguelike.rendering.vulkan.ShaderCompileSplash
 import com.roguelike.rendering.vulkan.SwapChain
 import com.roguelike.rendering.vulkan.VulkanContext
 import org.lwjgl.glfw.Callbacks
@@ -58,9 +60,11 @@ fun main() {
     val camera = Camera()
     camera.resize(swapChain.width, swapChain.height)
 
-    // Create launcher (state machine)
+    // Create launcher (state machine) — `init()` constructs SimpleUI which
+    // loads all GLSL shaders. Defer that call until the on-disk shader cache
+    // is fully populated, otherwise the runtime-compile fallback would stall
+    // the main thread inside the SimpleUI constructor with no UI feedback.
     val launcher = RoguelikeLauncher(vulkanContext, swapChain, inputSystem, camera)
-    launcher.init()
 
     // Create synchronization objects
     val imageAvailableSemaphore: Long
@@ -112,6 +116,35 @@ fun main() {
             camera.resize(width, height)
         }
     }
+
+    // ── Shader cache bootstrap ───────────────────────────────────────────
+    // Check the on-disk SPIR-V cache against the current GLSL sources, the
+    // targeted Vulkan API version and the shaderc optimisation level. Any
+    // shader whose source has changed (or that has never been compiled on
+    // this machine) goes through a background compile while a splash screen
+    // blocks user input. Once the cache is fully populated, SimpleUI's
+    // constructor just memory-maps the cached `.spv` and the renderer is
+    // ready to go.
+    val stale = ShaderCache.staleShaders()
+    if (stale.isNotEmpty()) {
+        println("[Main] shader cache has ${stale.size} stale shader(s); compiling…")
+        ShaderCompileSplash.run(
+            window = window,
+            context = vulkanContext,
+            swapChain = swapChain,
+            commandBuffer = commandBuffer,
+            imageAvailableSemaphore = imageAvailableSemaphore,
+            renderFinishedSemaphore = renderFinishedSemaphore,
+            inFlightFence = inFlightFence,
+            stale = stale
+        )
+        println("[Main] shader compilation complete")
+    } else {
+        println("[Main] shader cache is up to date — skipping compile splash")
+    }
+
+    // Now that every SPIR-V module is on disk, building the renderer is fast.
+    launcher.init()
 
     // Main game loop
     while (!glfwWindowShouldClose(window)) {

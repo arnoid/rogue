@@ -67,6 +67,22 @@
         { "x": 2, "y": 1, "z": 1, "slot": "WALL_EAST", "direction": "EAST", "tag": "default" },
         { "x": 2, "y": 1, "z": 4, "slot": "WALL_EAST", "direction": "EAST", "tag": "default" }
       ]
+    },
+    {
+      "file": "./submaps/large-stairs-6x6x6.wld",
+      "name": "large-stairs-6x6x6",
+      "dimensions": { "width": 6, "height": 6, "depth": 6 },
+      "baseUnitFootprint": { "x": 2, "y": 2, "z": 2 },
+      "sockets": [
+        { "x": 0, "y": 1, "z": 3, "slot": "WALL_WEST",  "direction": "WEST",  "tag": "default" },
+        { "x": 0, "y": 4, "z": 0, "slot": "WALL_WEST",  "direction": "WEST",  "tag": "default" },
+        { "x": 1, "y": 0, "z": 0, "slot": "WALL_SOUTH", "direction": "SOUTH", "tag": "default" },
+        { "x": 4, "y": 0, "z": 3, "slot": "WALL_SOUTH", "direction": "SOUTH", "tag": "default" },
+        { "x": 1, "y": 5, "z": 3, "slot": "WALL_NORTH", "direction": "NORTH", "tag": "default" },
+        { "x": 4, "y": 5, "z": 0, "slot": "WALL_NORTH", "direction": "NORTH", "tag": "default" },
+        { "x": 5, "y": 1, "z": 0, "slot": "WALL_EAST",  "direction": "EAST",  "tag": "default" },
+        { "x": 5, "y": 4, "z": 3, "slot": "WALL_EAST",  "direction": "EAST",  "tag": "default" }
+      ]
     }
   ]
 }
