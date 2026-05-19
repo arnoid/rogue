@@ -114,14 +114,11 @@ class WorldStamper(
             ))
         }
 
-        // Copy light sources with offset
-        for (ls in source.lightSources) {
-            target.lightSources.add(ls.copy(
-                x = ls.x + origin.x,
-                y = ls.y + origin.y,
-                z = ls.z + origin.z
-            ))
-        }
+         // NOTE: light sources are intentionally NOT copied here. Each room
+        // (PlacedSubmap) owns its own translated [PlacedSubmap.lightSources]
+        // list; the procedural manager is responsible for surfacing those
+        // into `World.lightSources` when stamping a room (and could remove
+        // them again if a room ever needs to be unloaded).
     }
 
     /**

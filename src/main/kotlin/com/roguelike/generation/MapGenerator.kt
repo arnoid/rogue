@@ -23,6 +23,16 @@ class MapGenerator(
     val decisionChannel = Channel<DebugDecision>(Channel.RENDEZVOUS)
     var listener: GenerationListener? = null
 
+    /**
+     * Monitor protecting [placedSubmaps] and [occupiedGrid] from
+     * concurrent access. The render thread reads these collections every
+     * frame (e.g. via [roomsAdjacentTo] / [getSubmapAt]) while background
+     * coroutines mutate them inside [generateNeighbors]. Use
+     * `synchronized(stateLock) { ... }` around any read that iterates
+     * [placedSubmaps] or any write that appends to it.
+     */
+    private val stateLock = Any()
+
     fun placeInitial(template: SubmapTemplate, origin: Vector3Int = Vector3Int.ZERO): PlacedSubmap {
         val placed = placeSubmap(template, origin)
         listener?.onSubmapPlaced(placed)
@@ -131,11 +141,56 @@ class MapGenerator(
     }
 
     /**
+     * Recursive variant of [generateNeighbors]: after each child submap is
+     * placed, queue it for its own neighbour expansion. The traversal is
+     * breadth-first so the world grows in concentric rings around [target].
+     *
+     * @param target Submap whose open sockets seed the expansion.
+     * @param maxDepth How many rings outward to grow. `0` = no expansion,
+     *                 `1` = same as [generateNeighbors], `2` = also expand
+     *                 each freshly-placed neighbour once, etc.
+     */
+    suspend fun generateNeighborsRecursive(target: PlacedSubmap, maxDepth: Int) {
+        if (maxDepth <= 0) return
+        // BFS queue of (submap, depth) — process the seed first, then everything
+        // we placed while expanding it, and so on. Each PlacedSubmap is added at
+        // most once thanks to the `seen` set keyed on the unique origin.
+        val queue: ArrayDeque<Pair<PlacedSubmap, Int>> = ArrayDeque()
+        val seen = HashSet<Vector3Int>()
+        queue.addLast(target to 0)
+        seen.add(target.origin)
+
+        while (queue.isNotEmpty()) {
+            val (current, depth) = queue.removeFirst()
+            if (depth >= maxDepth) continue
+
+            // Snapshot the placed-submaps count before expansion so we can
+            // pick up every newly-placed child below.
+            val placedBefore = placedSubmaps.size
+            generateNeighbors(current)
+
+            // Anything appended to placedSubmaps during the call above is a
+            // direct child of `current` — enqueue them for further growth.
+            for (i in placedBefore until placedSubmaps.size) {
+                val child = placedSubmaps[i]
+                if (seen.add(child.origin)) {
+                    queue.addLast(child to (depth + 1))
+                }
+            }
+        }
+    }
+
+    /**
      * After placing a new submap, checks if any of its OPEN sockets are adjacent to
      * existing submaps' OPEN sockets. If so, with (1 - adjacentSealProbability) chance
      * they are connected; otherwise both are sealed.
      */
     private fun resolveAdjacentSockets(newlyPlaced: PlacedSubmap) {
+        // Snapshot under the lock so a concurrent placeSubmap can't mutate
+        // the list while we iterate it. Socket state mutations inside the
+        // body operate on objects already present in the snapshot, so they
+        // remain visible to subsequent reads.
+        val others = synchronized(stateLock) { placedSubmaps.toList() }
         for (socket in newlyPlaced.sockets) {
             if (socket.state != SocketState.OPEN) continue
 
@@ -145,7 +200,7 @@ class MapGenerator(
 
             // Find an existing placed submap (not this one) that has an OPEN socket
             // at the neighbor position facing back toward us
-            for (other in placedSubmaps) {
+            for (other in others) {
                 if (other === newlyPlaced) continue
                 for (otherSocket in other.sockets) {
                     if (otherSocket.state != SocketState.OPEN) continue
@@ -179,12 +234,14 @@ class MapGenerator(
         }
         val bu = template.baseUnitFootprint
         val baseOrigin = Vector3Int(origin.x / 3, origin.y / 3, origin.z / 3)
-        for (bx in 0 until bu.x) {
-            for (by in 0 until bu.y) {
-                for (bz in 0 until bu.z) {
-                    if (Vector3Int(baseOrigin.x + bx, baseOrigin.y + by, baseOrigin.z + bz) in occupiedGrid) {
-                        println("[MapGenerator]     canPlace REJECTED '${template.name}' at $origin: occupied at base unit (${baseOrigin.x + bx},${baseOrigin.y + by},${baseOrigin.z + bz})")
-                        return false
+        synchronized(stateLock) {
+            for (bx in 0 until bu.x) {
+                for (by in 0 until bu.y) {
+                    for (bz in 0 until bu.z) {
+                        if (Vector3Int(baseOrigin.x + bx, baseOrigin.y + by, baseOrigin.z + bz) in occupiedGrid) {
+                            println("[MapGenerator]     canPlace REJECTED '${template.name}' at $origin: occupied at base unit (${baseOrigin.x + bx},${baseOrigin.y + by},${baseOrigin.z + bz})")
+                            return false
+                        }
                     }
                 }
             }
@@ -194,14 +251,53 @@ class MapGenerator(
 
     private fun placeSubmap(template: SubmapTemplate, origin: Vector3Int): PlacedSubmap {
         val freshSockets = template.sockets.map { it.copy(state = SocketState.OPEN) }
-        val placed = PlacedSubmap(template, origin, freshSockets)
-        occupiedGrid.addAll(placed.occupiedBaseUnits())
-        placedSubmaps.add(placed)
+        // Bake the template's lights into world-space coordinates and hand
+        // them to the room so callers can address "this room's lights"
+        // without scanning the template again.
+        val roomLights = template.worldData.lightSources.map { ls ->
+            ls.copy(
+                x = ls.x + origin.x,
+                y = ls.y + origin.y,
+                z = ls.z + origin.z
+            )
+        }
+        val placed = PlacedSubmap(template, origin, freshSockets, roomLights)
+        synchronized(stateLock) {
+            occupiedGrid.addAll(placed.occupiedBaseUnits())
+            placedSubmaps.add(placed)
+        }
         return placed
     }
 
+    /**
+     * Returns every room directly connected to [room] through a CONNECTED
+     * socket (i.e. one room "hop" away along the placed-room socket graph).
+     * Used by the procedural manager to decide which rooms should be
+     * expanded based on the player's current location.
+     */
+    fun roomsAdjacentTo(room: PlacedSubmap): List<PlacedSubmap> {
+        val snapshot = synchronized(stateLock) { placedSubmaps.toList() }
+        val out = mutableListOf<PlacedSubmap>()
+        for (socket in room.sockets) {
+            if (socket.state != SocketState.CONNECTED) continue
+            val neighborPos = room.absoluteSocketPosition(socket) + socket.direction
+            val other = snapshot.firstOrNull { it !== room && containsAbsolute(it, neighborPos) }
+            if (other != null && other !in out) out.add(other)
+        }
+        return out
+    }
+
+    private fun containsAbsolute(room: PlacedSubmap, pos: Vector3Int): Boolean {
+        val o = room.origin
+        val f = room.template.footprint
+        return pos.x in o.x until (o.x + f.x) &&
+               pos.y in o.y until (o.y + f.y) &&
+               pos.z in o.z until (o.z + f.z)
+    }
+
     private fun findNextOpenSocket(): Pair<PlacedSubmap, Socket>? {
-        for (placed in placedSubmaps) {
+        val snapshot = synchronized(stateLock) { placedSubmaps.toList() }
+        for (placed in snapshot) {
             for (socket in placed.sockets) {
                 if (socket.state == SocketState.OPEN) return placed to socket
             }
@@ -210,7 +306,8 @@ class MapGenerator(
     }
 
     fun getSubmapAt(absolutePosition: Vector3Int): PlacedSubmap? {
-        return placedSubmaps.find { placed ->
+        val snapshot = synchronized(stateLock) { placedSubmaps.toList() }
+        return snapshot.find { placed ->
             val origin = placed.origin
             val foot = placed.template.footprint
             absolutePosition.x in origin.x until (origin.x + foot.x) &&
@@ -218,6 +315,15 @@ class MapGenerator(
             absolutePosition.z in origin.z until (origin.z + foot.z)
         }
     }
+
+    /**
+     * Thread-safe snapshot of [placedSubmaps] for external readers (the
+     * render thread, the procedural manager's stamping pass, etc.). Always
+     * use this instead of touching `placedSubmaps` directly when not
+     * already holding `stateLock`.
+     */
+    fun placedSubmapsSnapshot(): List<PlacedSubmap> =
+        synchronized(stateLock) { placedSubmaps.toList() }
 }
 
 data class DebugCandidate(

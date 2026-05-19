@@ -6,6 +6,8 @@ import com.roguelike.core.model.World
 import com.roguelike.core.model.WorldNode
 import com.roguelike.serialization.WorldIO
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 
 /**
@@ -30,17 +32,44 @@ class ProceduralMapManager(
     private val loadedTemplates = mutableListOf<SubmapTemplate>()
     private val generationScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
+    /**
+     * Serializes all generator-mutating coroutines. `MapGenerator` keeps
+     * shared mutable state (`placedSubmaps`, `occupiedGrid`, socket
+     * states); when two `scheduleExpansionFrom` ticks ran concurrently the
+     * inner BFS of `resolveAdjacentSockets` iterated `placedSubmaps` while
+     * the other worker was appending to it, raising
+     * ConcurrentModificationException. Wrapping every `generateNeighbors`
+     * call (and the planning that reads generator state) in this mutex
+     * makes mutation single-threaded without blocking the GL thread.
+     */
+    private val generationMutex = Mutex()
+
     /** Whether debug step-through is enabled. */
     var debugEnabled = false
 
     /** Callback for debug UI. */
     var debugCallback: DebugUICallback? = null
 
-    /** Set of submap origins whose neighbors have already been generated. */
-    private val neighborsGenerated = mutableSetOf<Vector3Int>()
+    /**
+     * Rooms whose open sockets we've already tried to expand (i.e. fed to
+     * [MapGenerator.generateNeighbors]). Each room expands at most once;
+     * after that its sockets are either CONNECTED or SEALED for good.
+     * Keyed on the room's origin (unique per placement).
+     */
+    private val expandedRooms = mutableSetOf<Vector3Int>()
 
     /** Set of submap origins already stamped into the active world. */
     private val stampedSubmaps = mutableSetOf<Vector3Int>()
+
+    /**
+     * How many rooms ahead of the player to keep procedurally populated.
+     * `1` keeps just the immediate neighbours of the player's room; `3` (the
+     * default) keeps the player's room, its neighbours, the neighbours'
+     * neighbours, and one more ring on top of that — so the player can see
+     * three rooms in any direction without ever stepping into an
+     * un-generated socket.
+     */
+    var roomGenerationDistance: Int = 3
 
     /**
      * Loads all .wld template files from the given directory.
@@ -143,6 +172,7 @@ class ProceduralMapManager(
         val placed = generator!!.placeInitial(initialTemplate, initialOffset)
         stampedSubmaps.add(initialOffset)
         stamper.stamp(placed, world)
+        publishRoomLights(placed)
 
         // Open any pre-connected sockets on the initial submap
         for (socket in placed.sockets) {
@@ -151,40 +181,101 @@ class ProceduralMapManager(
             }
         }
 
-        neighborsGenerated.add(initialOffset)
+        println("[ProceduralMapManager] " + "Initial room at $initialOffset, size=${initialTemplate.footprint}, sockets=${placed.sockets.size}, world=${world.width}x${world.height}x${world.depth}")
 
-        println("[ProceduralMapManager] " + "Initial submap at $initialOffset, size=${initialTemplate.footprint}, sockets=${placed.sockets.size}, world=${world.width}x${world.height}x${world.depth}")
-
-        // Immediately generate adjacent submaps for seamless player experience
-        generationScope.launch {
-            println("[ProceduralMapManager] " + "Starting neighbor generation for initial submap...")
-            generator!!.generateNeighbors(placed)
-            println("[ProceduralMapManager] " + "Neighbor generation done. Total placed: ${generator!!.placedSubmaps.size}")
-            /* postRunnable */ run { stampNewSubmaps() }
-        }
+        // Spawn the first ring of rooms: the player starts inside [placed]
+        // and is therefore zero rooms away from every socket on it — so we
+        // expand the initial room itself (which adds rooms through each of
+        // its open sockets). The next ring is added on demand as the player
+        // crosses into a freshly-stamped neighbour (see [onPlayerMove]).
+        scheduleExpansionFrom(placed)
 
         return activeWorld
     }
 
     /**
-     * Called when the player moves into a new position.
-     * Checks if they're entering a new submap region and triggers generation if needed.
+     * Called each frame by the gameplay loop with the player's current
+     * world-space position. The procedural generator grows rooms that the
+     * player is at most [roomGenerationDistance] rooms away from, so the
+     * world always has at least that many already-stamped rooms ahead of
+     * the player in every direction. Each room is expanded at most once
+     * (see [expandedRooms]).
      */
     fun onPlayerMove(playerX: Float, playerY: Float, playerZ: Float) {
         val gen = generator ?: return
 
         val absPos = Vector3Int(playerX.toInt(), playerY.toInt(), playerZ.toInt())
-        val currentSubmap = gen.getSubmapAt(absPos)
+        val currentRoom = gen.getSubmapAt(absPos) ?: return
+        scheduleExpansionFrom(currentRoom)
+    }
 
-        if (currentSubmap != null) {
-            val hasOpenSockets = currentSubmap.sockets.any { it.state == SocketState.OPEN }
-            if (hasOpenSockets && currentSubmap.origin !in neighborsGenerated) {
-                neighborsGenerated.add(currentSubmap.origin)
-                generationScope.launch {
-                    gen.generateNeighbors(currentSubmap)
-                    /* postRunnable */ run { stampNewSubmaps() }
+    /**
+     * Expand every not-yet-expanded room within [roomGenerationDistance]
+     * hops of [seed] along the CONNECTED room socket graph. The expansion
+     * runs on a background coroutine; once it finishes, stamping happens
+     * on the GL thread and we recursively schedule another expansion from
+     * [seed] so the newly-placed rooms (which have now lengthened the
+     * graph by one hop) get a chance to feed further generation, until the
+     * full depth-[roomGenerationDistance] frontier is populated.
+     */
+    private fun scheduleExpansionFrom(seed: PlacedSubmap) {
+        val gen = generator ?: return
+
+        // Run the whole planning + generation + stamping pipeline on a
+        // worker, serialized through [generationMutex]. The mutex matters
+        // because multiple player-move ticks (and the recursive
+        // re-schedule below) can otherwise produce overlapping coroutines
+        // that mutate `gen.placedSubmaps` while another worker iterates
+        // it — that race triggered the ConcurrentModificationException
+        // we used to crash on inside `resolveAdjacentSockets`.
+        generationScope.launch {
+            generationMutex.withLock {
+                // BFS over currently-placed rooms up to roomGenerationDistance hops.
+                // Anything in that radius that still has OPEN sockets and hasn't
+                // been expanded yet becomes a fresh generation seed.
+                val maxDepth = roomGenerationDistance.coerceAtLeast(0)
+                val visited = HashSet<Vector3Int>()
+                visited.add(seed.origin)
+                val roomsToExpand = mutableListOf<PlacedSubmap>()
+                if (seed.origin !in expandedRooms && seed.sockets.any { it.state == SocketState.OPEN }) {
+                    roomsToExpand.add(seed)
                 }
+                var frontier: List<PlacedSubmap> = listOf(seed)
+                var depth = 0
+                while (depth < maxDepth && frontier.isNotEmpty()) {
+                    val next = mutableListOf<PlacedSubmap>()
+                    for (room in frontier) {
+                        for (neighbour in gen.roomsAdjacentTo(room)) {
+                            if (!visited.add(neighbour.origin)) continue
+                            next.add(neighbour)
+                            if (neighbour.origin in expandedRooms) continue
+                            if (neighbour.sockets.none { it.state == SocketState.OPEN }) continue
+                            if (roomsToExpand.none { it === neighbour }) roomsToExpand.add(neighbour)
+                        }
+                    }
+                    frontier = next
+                    depth++
+                }
+                if (roomsToExpand.isEmpty()) return@withLock
+
+                // Reserve the slots immediately so concurrent player-move
+                // ticks queued behind us don't double-schedule the same room.
+                for (room in roomsToExpand) expandedRooms.add(room.origin)
+
+                for (room in roomsToExpand) {
+                    println("[ProceduralMapManager] " + "Expanding room '${room.template.name}' at ${room.origin}")
+                    gen.generateNeighbors(room)
+                }
+                stampNewSubmaps()
             }
+
+            // Newly placed rooms may have extended the reachable graph
+            // beyond the previous frontier — re-schedule from the same
+            // seed (after releasing the mutex) so the new rooms also get
+            // expanded if they fall within the depth budget. The
+            // expandedRooms guard ensures already-processed rooms are
+            // skipped, so this terminates.
+            scheduleExpansionFrom(seed)
         }
     }
 
@@ -196,7 +287,12 @@ class ProceduralMapManager(
         val world = activeWorld ?: return
         val gen = generator ?: return
 
-        for (placed in gen.placedSubmaps) {
+        // Snapshot under the generator's state lock so we iterate a stable
+        // view even when the caller is the render thread or another
+        // background tick races us.
+        val snapshot = gen.placedSubmapsSnapshot()
+
+        for (placed in snapshot) {
             if (placed.origin !in stampedSubmaps) {
                 stampedSubmaps.add(placed.origin)
 
@@ -206,6 +302,7 @@ class ProceduralMapManager(
 
                 println("[ProceduralMapManager] " + "Stamping '${placed.template.name}' rot=${placed.template.rotation} at ${placed.origin}, world now ${world.width}x${world.height}x${world.depth}")
                 stamper.stamp(placed, world)
+                publishRoomLights(placed)
 
                 // Open connections between connected sockets, seal dead ends
                 for (socket in placed.sockets) {
@@ -221,13 +318,177 @@ class ProceduralMapManager(
         }
 
         // Seal any newly-sealed sockets on already-stamped submaps (e.g. initial submap)
-        for (placed in gen.placedSubmaps) {
+        for (placed in snapshot) {
             for (socket in placed.sockets) {
                 if (socket.state == SocketState.SEALED) {
                     stamper.sealConnection(placed, socket, world)
                 }
             }
         }
+    }
+
+    /**
+     * Surface a room's owned light sources into the live world's global
+     * light list so the lighting upload pipeline can see them. Each room
+     * is published exactly once (alongside its stamp).
+     */
+    private fun publishRoomLights(room: PlacedSubmap) {
+        val world = activeWorld ?: return
+        if (room.lightSources.isEmpty()) return
+        world.lightSources.addAll(room.lightSources)
+        println("[ProceduralMapManager] " + "  Published ${room.lightSources.size} room lights from '${room.template.name}'")
+    }
+
+    /**
+     * Returns every light source owned by a room within [maxRoomDistance]
+     * hops of the room currently containing the player. "Hop" means a
+     * CONNECTED socket — the same notion of room adjacency used by the
+     * generator's expansion logic. `maxRoomDistance == 0` returns just the
+     * lights inside the player's current room; `maxRoomDistance == 2` adds
+     * the player's room, its neighbours, and the neighbours' neighbours.
+     *
+     * **Ordering.** The returned list is grouped by hop distance — all
+     * lights from the player's room first, then all lights one hop away,
+     * then two hops, and so on. Within a single ring, lights are sorted
+     * by Euclidean distance to the player. Downstream consumers can take a
+     * prefix of this list (e.g. the first `MAX_LIGHTS`) and be sure they
+     * always retain the most relevant lights: nearer rooms outrank farther
+     * rooms unconditionally, and within a room the closest fixtures win.
+     *
+     * If the player isn't inside any tracked room (e.g. they're standing
+     * in a brief untracked gap such as a doorway voxel or floating above a
+     * floor between Z layers), this falls back to the **closest** placed
+     * room as the BFS seed — that keeps the result bounded to the same
+     * `maxRoomDistance` horizon instead of dumping the entire world's
+     * light list, so distant lights still get culled and the priority
+     * order keeps updating as the player moves.
+     */
+    fun collectVisibleRoomLights(
+        playerX: Float, playerY: Float, playerZ: Float,
+        maxRoomDistance: Int
+    ): List<com.roguelike.core.model.LightSource> {
+        val gen = generator ?: run {
+            lightDebugLog("no generator yet, returning empty list", playerX, playerY, playerZ, null, emptyList())
+            return emptyList()
+        }
+        val absPos = Vector3Int(playerX.toInt(), playerY.toInt(), playerZ.toInt())
+        val containing = gen.getSubmapAt(absPos)
+        val seedRoom: PlacedSubmap = containing
+            ?: closestRoomTo(playerX, playerY, playerZ, gen)
+            ?: run {
+                lightDebugLog("no placed rooms at all, returning empty list", playerX, playerY, playerZ, null, emptyList())
+                return emptyList()
+            }
+
+        // BFS over the room socket graph, capped at `maxRoomDistance` hops.
+        // Each ring's lights are appended in distance-to-player order, so
+        // the final list is "ring 0 sorted, ring 1 sorted, ring 2 sorted…".
+        fun sortedByDistance(lights: List<com.roguelike.core.model.LightSource>): List<com.roguelike.core.model.LightSource> {
+            if (lights.size <= 1) return lights
+            return lights.sortedBy { ls ->
+                val dx = ls.x - playerX; val dy = ls.y - playerY; val dz = ls.z - playerZ
+                dx * dx + dy * dy + dz * dz
+            }
+        }
+
+        val visited = HashSet<Vector3Int>()
+        visited.add(seedRoom.origin)
+        val out = ArrayList<com.roguelike.core.model.LightSource>()
+        out.addAll(sortedByDistance(seedRoom.lightSources))
+
+        // Per-ring trace: how many rooms walked, how many lights gathered.
+        // Kept compact so it can be flushed every frame without flooding.
+        val ringTrace = StringBuilder()
+        ringTrace.append("seed='${seedRoom.template.name}'@${seedRoom.origin}")
+        ringTrace.append(" containing=${containing != null}")
+        ringTrace.append(" seedLights=${seedRoom.lightSources.size}")
+
+        // If the player happens to be in a stretch of lightless rooms, the
+        // strict `maxRoomDistance` horizon may produce zero lights and the
+        // scene goes pitch black. In that case keep walking the room graph
+        // outward (up to [maxExtendedSearch]) until at least one light is
+        // found, so the player always has something to see by. The cheap
+        // BFS only revisits unvisited rooms, so this is bounded.
+        val maxExtendedSearch = (maxRoomDistance * 4).coerceAtLeast(maxRoomDistance + 6)
+
+        var frontier: List<PlacedSubmap> = listOf(seedRoom)
+        var depth = 0
+        while (frontier.isNotEmpty()) {
+            // Always honour the strict horizon. Beyond it we keep walking
+            // ONLY if we still haven't found any lights at all.
+            if (depth >= maxRoomDistance && out.isNotEmpty()) break
+            if (depth >= maxExtendedSearch) break
+
+            val nextFrontier = ArrayList<PlacedSubmap>()
+            val ringLights = ArrayList<com.roguelike.core.model.LightSource>()
+            for (room in frontier) {
+                for (neighbour in gen.roomsAdjacentTo(room)) {
+                    if (visited.add(neighbour.origin)) {
+                        ringLights.addAll(neighbour.lightSources)
+                        nextFrontier.add(neighbour)
+                    }
+                }
+            }
+            out.addAll(sortedByDistance(ringLights))
+            ringTrace.append(" | ring${depth + 1}: rooms=${nextFrontier.size} lights=${ringLights.size}")
+            frontier = nextFrontier
+            depth++
+        }
+
+        lightDebugLog(ringTrace.toString(), playerX, playerY, playerZ, seedRoom, out)
+        return out
+    }
+
+    // Last log fingerprint, so we only print when the situation actually
+    // changes (room boundary crossed, light count changed, or seed
+    // identity changed). Otherwise the per-frame call would flood stdout.
+    private var lastLightDebugKey: String? = null
+
+    private fun lightDebugLog(
+        msg: String,
+        px: Float, py: Float, pz: Float,
+        seed: PlacedSubmap?,
+        lights: List<com.roguelike.core.model.LightSource>
+    ) {
+        val seedKey = seed?.origin?.toString() ?: "none"
+        val key = "$seedKey|${lights.size}|${msg.hashCode()}"
+        if (key == lastLightDebugKey) return
+        lastLightDebugKey = key
+
+        val sample = lights.take(3).joinToString(", ") { ls ->
+            val dx = ls.x - px; val dy = ls.y - py; val dz = ls.z - pz
+            val d = kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
+            "(%.1f,%.1f,%.1f r=%.1f d=%.1f)".format(ls.x, ls.y, ls.z, ls.radius, d)
+        }
+        println(
+            "[LightSelect] " +
+                "player=(%.2f,%.2f,%.2f) ".format(px, py, pz) +
+                msg +
+                " | total=${lights.size}" +
+                (if (sample.isNotEmpty()) " | nearest=[$sample]" else "")
+        )
+    }
+
+    /**
+     * Returns the placed room whose centre is nearest to the given world
+     * position. Used as a fallback seed for [collectVisibleRoomLights]
+     * when the player is briefly outside any room's AABB (doorways,
+     * between-floor gaps, etc.) so the lighting horizon doesn't snap to
+     * the entire world's light list.
+     */
+    private fun closestRoomTo(px: Float, py: Float, pz: Float, gen: MapGenerator): PlacedSubmap? {
+        var best: PlacedSubmap? = null
+        var bestDist = Float.MAX_VALUE
+        // Snapshot the placed list — the render thread calls us every frame
+        // while background coroutines may be appending new rooms.
+        for (room in gen.placedSubmapsSnapshot()) {
+            val o = room.origin; val f = room.template.footprint
+            val cx = o.x + f.x * 0.5f; val cy = o.y + f.y * 0.5f; val cz = o.z + f.z * 0.5f
+            val dx = cx - px; val dy = cy - py; val dz = cz - pz
+            val d = dx * dx + dy * dy + dz * dz
+            if (d < bestDist) { bestDist = d; best = room }
+        }
+        return best
     }
 
     fun dispose() {

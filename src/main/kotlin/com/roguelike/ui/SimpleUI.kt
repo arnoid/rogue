@@ -21,6 +21,18 @@ class SimpleUI(
     private val renderPass: Long
 ) : AutoCloseable {
 
+    companion object {
+        /** Hard cap on simultaneously-uploaded lights — must match `MAX_LIGHTS` in shaders/world_lit.frag.glsl. */
+        const val MAX_LIGHTS: Int = 128
+
+        // LightingUBO size in bytes — kept in sync with `LightingUBO` in
+        // shaders/world_lit.frag.glsl. Layout:
+        //   4 ints (16 B) + ambientParams vec4 (16 B) + gridOrigin vec4 (16 B) = 48 B
+        //   + MAX_LIGHTS * vec4 lightPosIntensity                              = MAX_LIGHTS * 16
+        //   + MAX_LIGHTS * vec4 lightColorRadius                               = MAX_LIGHTS * 16
+        const val LIGHTING_UBO_SIZE: Int = 48 + MAX_LIGHTS * 16 + MAX_LIGHTS * 16
+    }
+
     private var pipeline: Long = VK_NULL_HANDLE
     private var pipelineLayout: Long = VK_NULL_HANDLE
     private var vertShaderModule: Long = VK_NULL_HANDLE
@@ -70,6 +82,22 @@ class SimpleUI(
     private val maxGpuVertices = maxGpuQuads * verticesPerQuad
     private val gpuVertexData = FloatArray(maxGpuVertices * gpuFloatsPerVertex)
     private var gpuVertexCount = 0
+
+    // One-shot warning latch — flips true the first time a frame tries to
+    // submit more GPU vertices than the buffer can hold. Without this the
+    // overflow is silent: `drawGpuTriangle` simply drops the triangle, so
+    // the visible symptom is "world geometry disappears the further the
+    // player walks" (e.g. floors stop being drawn → no lit surfaces → the
+    // lighting pipeline appears to be broken even though it's fine).
+    private var gpuVertexOverflowWarned: Boolean = false
+    private fun warnGpuVertexOverflow() {
+        if (gpuVertexOverflowWarned) return
+        gpuVertexOverflowWarned = true
+        System.err.println(
+            "[SimpleUI] GPU vertex buffer full (cap=$maxGpuVertices); dropping triangles. " +
+                "Enable tighter frustum culling in the world renderer or raise maxGpuQuads."
+        )
+    }
 
     // Lit quad vertex: pos2 + color4 + worldPos3 + normal3 = 12 floats
     private val litFloatsPerVertex = 12
@@ -598,8 +626,9 @@ class SimpleUI(
 
     private fun createLitUboBuffers() {
         MemoryStack.stackPush().use { stack ->
-            // LightingUBO: 4 ints (16 bytes) + 32 * vec4 (512 bytes) + 32 * vec4 (512 bytes) = 1040 bytes
-            val uboSize = 16 + 32 * 16 + 32 * 16
+            // LightingUBO: 4 ints + ambientParams vec4 (32 bytes header)
+            //             + 32 * vec4 (512 bytes) + 32 * vec4 (512 bytes) = 1056 bytes
+            val uboSize = LIGHTING_UBO_SIZE
             val bufCI = VkBufferCreateInfo.calloc(stack)
                 .sType(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO)
                 .size(uboSize.toLong())
@@ -714,24 +743,34 @@ class SimpleUI(
     fun updateLighting(
         lights: List<LightData>,
         occupancyGrid: IntArray,
-        gridW: Int, gridH: Int, gridD: Int
+        gridW: Int, gridH: Int, gridD: Int,
+        ambient: Float = 0.15f,
+        gridOriginX: Int = 0, gridOriginY: Int = 0, gridOriginZ: Int = 0
     ) {
         // Update lighting UBO
         MemoryStack.stackPush().use { stack ->
-            val uboSize = 16 + 32 * 16 + 32 * 16
+            val uboSize = LIGHTING_UBO_SIZE
             val ppData = stack.mallocPointer(1)
             vmaMapMemory(context.allocator, lightingUboAlloc, ppData)
             val buf = ppData.getByteBuffer(0, uboSize)
 
-            val count = minOf(lights.size, 32)
+            val count = minOf(lights.size, MAX_LIGHTS)
             buf.putInt(count)
             buf.putInt(gridW)
             buf.putInt(gridH)
             buf.putInt(gridD)
+            // ambientParams vec4: x = ambient intensity, yzw reserved.
+            buf.putFloat(ambient); buf.putFloat(0f); buf.putFloat(0f); buf.putFloat(0f)
+            // gridOrigin vec4: xyz = absolute world voxel coordinates of the
+            // occupancy grid's (0,0,0) cell. Shader subtracts before indexing.
+            buf.putFloat(gridOriginX.toFloat())
+            buf.putFloat(gridOriginY.toFloat())
+            buf.putFloat(gridOriginZ.toFloat())
+            buf.putFloat(0f)
 
-            // lightPosIntensity[32] — vec4 each
+            // lightPosIntensity[MAX_LIGHTS] — vec4 each
             val floatBuf = buf.asFloatBuffer()
-            for (i in 0 until 32) {
+            for (i in 0 until MAX_LIGHTS) {
                 if (i < count) {
                     val l = lights[i]
                     floatBuf.put(l.x); floatBuf.put(l.y); floatBuf.put(l.z); floatBuf.put(l.intensity)
@@ -739,8 +778,8 @@ class SimpleUI(
                     floatBuf.put(0f); floatBuf.put(0f); floatBuf.put(0f); floatBuf.put(0f)
                 }
             }
-            // lightColorRadius[32] — vec4 each
-            for (i in 0 until 32) {
+            // lightColorRadius[MAX_LIGHTS] — vec4 each
+            for (i in 0 until MAX_LIGHTS) {
                 if (i < count) {
                     val l = lights[i]
                     floatBuf.put(l.r); floatBuf.put(l.g); floatBuf.put(l.b); floatBuf.put(l.radius)
@@ -774,7 +813,7 @@ class SimpleUI(
                 occupancySsboAlloc = pAlloc.get(0)
             }
             // Re-bind descriptor
-            val uboSize = (16 + 32 * 16 + 32 * 16).toLong()
+            val uboSize = LIGHTING_UBO_SIZE.toLong()
             updateLitDescriptorSet(uboSize)
         }
 
@@ -827,7 +866,7 @@ class SimpleUI(
                 shadowTriSsboBuffer = pBuf.get(0)
                 shadowTriSsboAlloc = pAlloc.get(0)
             }
-            val uboSize = (16 + 32 * 16 + 32 * 16).toLong()
+            val uboSize = LIGHTING_UBO_SIZE.toLong()
             updateLitDescriptorSet(uboSize)
         }
 
@@ -1022,7 +1061,7 @@ class SimpleUI(
         nx: Float, ny: Float, nz: Float,
         r: Float, g: Float, b: Float, a: Float = 1f
     ) {
-        if (gpuVertexCount + 6 > maxGpuVertices) return
+        if (gpuVertexCount + 6 > maxGpuVertices) { warnGpuVertexOverflow(); return }
         val offset = gpuVertexCount * gpuFloatsPerVertex
 
         // Two triangles: (0,1,2) and (0,2,3) — CCW winding
@@ -1046,7 +1085,7 @@ class SimpleUI(
         wx2: Float, wy2: Float, wz2: Float, nx2: Float, ny2: Float, nz2: Float,
         r: Float, g: Float, b: Float, a: Float = 1f
     ) {
-        if (gpuVertexCount + 3 > maxGpuVertices) return
+        if (gpuVertexCount + 3 > maxGpuVertices) { warnGpuVertexOverflow(); return }
         val offset = gpuVertexCount * gpuFloatsPerVertex
         putGpuVertex(offset + 0,  wx0, wy0, wz0, r, g, b, a, nx0, ny0, nz0)
         putGpuVertex(offset + 10, wx1, wy1, wz1, r, g, b, a, nx1, ny1, nz1)
@@ -1062,7 +1101,7 @@ class SimpleUI(
         wx1: Float, wy1: Float, wz1: Float, nx1: Float, ny1: Float, nz1: Float, r1: Float, g1: Float, b1: Float, a1: Float,
         wx2: Float, wy2: Float, wz2: Float, nx2: Float, ny2: Float, nz2: Float, r2: Float, g2: Float, b2: Float, a2: Float
     ) {
-        if (gpuVertexCount + 3 > maxGpuVertices) return
+        if (gpuVertexCount + 3 > maxGpuVertices) { warnGpuVertexOverflow(); return }
         val offset = gpuVertexCount * gpuFloatsPerVertex
         putGpuVertex(offset + 0,  wx0, wy0, wz0, r0, g0, b0, a0, nx0, ny0, nz0)
         putGpuVertex(offset + 10, wx1, wy1, wz1, r1, g1, b1, a1, nx1, ny1, nz1)

@@ -4,15 +4,25 @@ layout(location = 0) in vec4 v_color;
 layout(location = 1) in vec3 v_worldPos;
 layout(location = 2) in vec3 v_normal;
 
-// Light data: up to 32 lights packed into a UBO
-// Each light: vec4(pos.xyz, intensity), vec4(color.rgb, radius)
+// Light data: up to MAX_LIGHTS lights packed into a UBO.
+// Keep MAX_LIGHTS in sync with `SimpleUI.MAX_LIGHTS` on the host side.
+#define MAX_LIGHTS 128
+
 layout(set = 0, binding = 0) uniform LightingUBO {
     int lightCount;
     int gridW;
     int gridH;
     int gridD;
-    vec4 lightPosIntensity[32];   // xyz = position, w = intensity
-    vec4 lightColorRadius[32];    // rgb = color, a = radius
+    // Second 16-byte header slot: x = ambient intensity, yzw reserved.
+    vec4 ambientParams;
+    // Third 16-byte header slot: xyz = world-voxel origin of the occupancy
+    // grid window. The grid is anchored to this origin in absolute world
+    // coordinates; the shader subtracts it before indexing. Letting the
+    // window track the player lets the host upload only the geometry near
+    // the visible lights instead of the whole world.
+    vec4 gridOrigin;
+    vec4 lightPosIntensity[MAX_LIGHTS];   // xyz = position, w = intensity
+    vec4 lightColorRadius[MAX_LIGHTS];    // rgb = color, a = radius
 } lighting;
 
 // 3D occupancy grid as SSBO: 1 uint per cell
@@ -34,22 +44,32 @@ layout(location = 0) out vec4 outColor;
 
 /// Get wall flags for grid cell (ix,iy,iz) — returns lower 7 bits only
 uint getWallFlags(int ix, int iy, int iz) {
-    if (ix < 0 || ix >= lighting.gridW ||
-        iy < 0 || iy >= lighting.gridH ||
-        iz < 0 || iz >= lighting.gridD) return 0u;
-    uint idx = uint(iz * lighting.gridW * lighting.gridH + iy * lighting.gridW + ix);
+    // ix/iy/iz are absolute world voxel coordinates. Translate into the
+    // window-local index space first; cells outside the window contribute
+    // nothing (treated as empty space — they're outside the lit region
+    // anyway, so the DDA either won't reach them or won't care).
+    int lx = ix - int(lighting.gridOrigin.x);
+    int ly = iy - int(lighting.gridOrigin.y);
+    int lz = iz - int(lighting.gridOrigin.z);
+    if (lx < 0 || lx >= lighting.gridW ||
+        ly < 0 || ly >= lighting.gridH ||
+        lz < 0 || lz >= lighting.gridD) return 0u;
+    uint idx = uint(lz * lighting.gridW * lighting.gridH + ly * lighting.gridW + lx);
     return grid.cells[idx] & 0x7Fu;
 }
 
 /// Get shadow triangle range for a grid cell.
 /// Returns (startIndex, count) packed from bits 16-31 and 7-15.
 void getShadowTriRange(int ix, int iy, int iz, out int start, out int count) {
-    if (ix < 0 || ix >= lighting.gridW ||
-        iy < 0 || iy >= lighting.gridH ||
-        iz < 0 || iz >= lighting.gridD) {
+    int lx = ix - int(lighting.gridOrigin.x);
+    int ly = iy - int(lighting.gridOrigin.y);
+    int lz = iz - int(lighting.gridOrigin.z);
+    if (lx < 0 || lx >= lighting.gridW ||
+        ly < 0 || ly >= lighting.gridH ||
+        lz < 0 || lz >= lighting.gridD) {
         start = 0; count = 0; return;
     }
-    uint idx = uint(iz * lighting.gridW * lighting.gridH + iy * lighting.gridW + ix);
+    uint idx = uint(lz * lighting.gridW * lighting.gridH + ly * lighting.gridW + lx);
     uint cell = grid.cells[idx];
     start = int((cell >> 16u) & 0xFFFFu);
     count = int((cell >> 7u) & 0x1FFu);
@@ -204,8 +224,12 @@ void main() {
 
     int numLights = lighting.lightCount;
     if (numLights <= 0) {
-        // No lights — just use base color (environment lighting already baked into v_color)
-        outColor = vec4(baseColor, v_color.a);
+        // No lights — apply ambient-only fill so an Arena scene (ambient
+        // == 0) reads as true black instead of falling back to the raw
+        // vertex base color, which would make "no nearby room lights"
+        // look identical to "fully lit room".
+        float a = lighting.ambientParams.x;
+        outColor = vec4(baseColor * a, v_color.a);
         return;
     }
 
@@ -215,11 +239,11 @@ void main() {
     // self-hits while still catching occluder geometry.
     vec3 surfacePos = v_worldPos + N * 0.15;
 
-    // Ambient minimum
-    float ambient = 0.15;
+    // Ambient minimum (host-controlled; 0 disables ambient fill entirely).
+    float ambient = lighting.ambientParams.x;
     vec3 totalLight = vec3(ambient);
 
-    for (int i = 0; i < numLights && i < 32; i++) {
+    for (int i = 0; i < numLights && i < MAX_LIGHTS; i++) {
         vec3 lightPos = lighting.lightPosIntensity[i].xyz;
         float intensity = lighting.lightPosIntensity[i].w;
         vec3 lightColor = lighting.lightColorRadius[i].rgb;
@@ -240,7 +264,28 @@ void main() {
         // Shadow ray-march per pixel from offset surface position
         if (isOccluded(surfacePos, lightPos)) continue;
 
-        float attenuation = intensity / (1.0 + distSq * 0.1);
+        // Distance attenuation.
+        //
+        // The previous curve `intensity / (1 + distSq * 0.1)` dropped to
+        // ~10% brightness at d=10 regardless of the light's radius, so a
+        // radius=20 light barely lit the far half of a 12×12 room before
+        // the hard `dist > radius` cutoff. We now combine a gentle
+        // inverse-square term with a "windowed" falloff that drives the
+        // contribution smoothly to zero exactly at `radius`:
+        //
+        //   window      = saturate(1 - (dist/radius)^4)^2
+        //   attenuation = intensity * window / (1 + distSq * 0.05)
+        //
+        // The `* 0.05` coefficient (gentler than the old 0.1) keeps
+        // mid-range distances bright enough to actually illuminate the
+        // far side of a large room, while `window` guarantees the light
+        // fades smoothly to zero at the declared radius rather than
+        // popping at the hard cutoff. Existing `intensity` values stay
+        // useful — a light tuned for the old curve still produces
+        // similar near-field brightness.
+        float k = clamp(1.0 - pow(dist / radius, 4.0), 0.0, 1.0);
+        float window = k * k;
+        float attenuation = intensity * window / (1.0 + distSq * 0.05);
         totalLight += lightColor * attenuation * NdotL;
     }
 

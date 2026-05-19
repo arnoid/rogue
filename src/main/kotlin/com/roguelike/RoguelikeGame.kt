@@ -241,7 +241,7 @@ class RoguelikeGame(
                 val worldDirX = moveDir.x * rx + moveDir.y * fx
                 val worldDirY = moveDir.x * ry + moveDir.y * fy
                 moveDir.set(worldDirX, worldDirY, 0f).nor()
-                move.move(p, moveDir, delta, 3f)
+                move.move(p, moveDir, delta, 7f)
             }
         }
 
@@ -279,8 +279,17 @@ class RoguelikeGame(
         // Update camera to follow player
         updateOrbitalCamera(p.position)
 
-        // Upload lighting
-        uploadLighting(w)
+        // Upload lighting. Lights are pre-filtered by *room distance* so
+        // that fixtures sitting more than 3 rooms away from the player
+        // never reach the GPU — that cap matches the player's perceptual
+        // horizon (you can't directly see into rooms further than a couple
+        // of hops anyway) and keeps the shader workload bounded as the
+        // procedural world grows.
+        val candidateLights = proceduralManager.collectVisibleRoomLights(
+            p.position.x, p.position.y, p.position.z,
+            maxRoomDistance = 3
+        )
+        uploadLighting(w, candidateLights)
 
         // Set VP matrix
         val vpFloats = FloatArray(16)
@@ -324,121 +333,278 @@ class RoguelikeGame(
         camera.update()
     }
 
-    private fun uploadLighting(w: World) {
-        if (w.lightSources.isNotEmpty()) {
-            val gridW = w.width; val gridH = w.height; val gridD = w.depth
-            val occupancy = IntArray(gridW * gridH * gridD)
-            val shadowTriangles = mutableListOf<Float>()
-
-            // Per-cell triangle index lists (global triangle index, where one
-            // triangle = 9 floats in `shadowTriangles`). A triangle may live in
-            // more than one list when the geometry straddles a cell boundary
-            // (notably doorway frames and the swung-open door panel), so that
-            // the GLSL ray-march finds it regardless of which cell its DDA
-            // happens to be marching through.
-            val perCellTris = Array(gridW * gridH * gridD) { mutableListOf<Int>() }
-            fun cellIdx(cx: Int, cy: Int, cz: Int): Int? {
-                if (cx < 0 || cx >= gridW || cy < 0 || cy >= gridH || cz < 0 || cz >= gridD) return null
-                return cz * gridW * gridH + cy * gridW + cx
-            }
-
-            for (z in 0 until gridD) {
-                for (y in 0 until gridH) {
-                    for (x in 0 until gridW) {
-                        val node = w.getNode(x, y, z) ?: continue
-                        var flags = 0
-                        // A wall slot contributes a solid wall-edge flag only if
-                        // it contains a NON-door wall tile. Door slots are
-                        // shadow-cast via per-cell mesh triangles below, so that
-                        // light can pass through the open part of the doorway.
-                        if (isSolidWall(node, TileSlot.WALL_NORTH)) flags = flags or 1
-                        if (isSolidWall(node, TileSlot.WALL_SOUTH)) flags = flags or 2
-                        if (isSolidWall(node, TileSlot.WALL_EAST))  flags = flags or 4
-                        if (isSolidWall(node, TileSlot.WALL_WEST))  flags = flags or 8
-                        if (node.hasTile(TileSlot.FLOOR))      flags = flags or 16
-                        if (node.hasTile(TileSlot.CEILING))    flags = flags or 32
-                        occupancy[z * gridW * gridH + y * gridW + x] = flags
-
-                        // Stairs / ladder shadow geometry — register to owning cell only.
-                        val ownIdx = cellIdx(x, y, z) ?: continue
-                        if (node.hasTile(TileSlot.STAIRS)) {
-                            val tile = node.getTile(TileSlot.STAIRS)
-                            if (tile is StairsTile) {
-                                stairsMesh?.let {
-                                    val first = shadowTriangles.size / 9
-                                    val n = collectShadowTriangles(it, x.toFloat(), y.toFloat(), z.toFloat(), 0f, 0f, 0f, tile.rotationY + 180f, shadowTriangles)
-                                    for (k in 0 until n) perCellTris[ownIdx].add(first + k)
-                                }
-                            } else if (tile is LadderTile) {
-                                val rotY = tile.rotationY
-                                val offX = when (rotY) { 90f -> 0.5f; 270f -> -0.5f; else -> 0f }
-                                val offY = when (rotY) { 0f -> 0.5f; 180f -> -0.5f; else -> 0f }
-                                ladderMesh?.let {
-                                    val first = shadowTriangles.size / 9
-                                    val n = collectShadowTriangles(it, x.toFloat(), y.toFloat(), z.toFloat(), offX, offY, 0f, rotY, shadowTriangles)
-                                    for (k in 0 until n) perCellTris[ownIdx].add(first + k)
-                                }
-                            }
-                        }
-
-                        // Door-occluder triangles. Registered to BOTH the
-                        // owning cell and the cell on the other side of the
-                        // wall the door sits on (door frames and the swung
-                        // open panel straddle the wall boundary).
-                        collectDoorShadowTriangles(node, x, y, z, shadowTriangles) { slot, firstTri, n ->
-                            for (k in 0 until n) perCellTris[ownIdx].add(firstTri + k)
-                            val (nx, ny) = when (slot) {
-                                TileSlot.WALL_NORTH -> x to (y + 1)
-                                TileSlot.WALL_SOUTH -> x to (y - 1)
-                                TileSlot.WALL_EAST  -> (x + 1) to y
-                                TileSlot.WALL_WEST  -> (x - 1) to y
-                                else -> return@collectDoorShadowTriangles
-                            }
-                            val nbrIdx = cellIdx(nx, ny, z) ?: return@collectDoorShadowTriangles
-                            for (k in 0 until n) perCellTris[nbrIdx].add(firstTri + k)
-                        }
-                    }
-                }
-            }
-
-            // Pack per-cell triangle lists into the cell-flag bits. We may
-            // need to remap by appending duplicate references to a contiguous
-            // "cell tri index" buffer — but the shader expects a contiguous
-            // run of triangles per cell. So we expand the triangle buffer:
-            // for each cell that references triangles, append the actual
-            // triangle vertex data in run, and store start+count in flags.
-            val expandedTris = mutableListOf<Float>()
-            for (z in 0 until gridD) {
-                for (y in 0 until gridH) {
-                    for (x in 0 until gridW) {
-                        val idx = z * gridW * gridH + y * gridW + x
-                        val list = perCellTris[idx]
-                        if (list.isEmpty()) continue
-                        val start = expandedTris.size / 9
-                        val count = list.size.coerceAtMost(0x1FF)
-                        for (i in 0 until count) {
-                            val src = list[i] * 9
-                            for (k in 0 until 9) expandedTris.add(shadowTriangles[src + k])
-                        }
-                        var f = occupancy[idx]
-                        f = f or ((count and 0x1FF) shl 7)
-                        f = f or ((start and 0xFFFF) shl 16)
-                        occupancy[idx] = f
-                    }
-                }
-            }
-
-            val lights = w.lightSources.map { ls ->
-                SimpleUI.LightData(ls.x, ls.y, ls.z, ls.intensity, ls.colorR(), ls.colorG(), ls.colorB(), ls.radius)
-            }
-            ui.updateLighting(lights, occupancy, gridW, gridH, gridD)
-            val triArray = FloatArray(expandedTris.size)
-            for (i in expandedTris.indices) triArray[i] = expandedTris[i]
-            ui.updateShadowTriangles(triArray)
-        } else {
-            ui.updateLighting(emptyList(), IntArray(1), 1, 1, 1)
-            ui.updateShadowTriangles(FloatArray(0))
+    private fun uploadLighting(w: World, candidateLights: List<com.roguelike.core.model.LightSource>) {
+        // ── 1. Frustum-cull light sources ──────────────────────────────────
+        // Each light's influence is a sphere (centre = position, radius =
+        // light radius). Skip uploading any light whose sphere can't touch
+        // the view frustum — these can never contribute a visible photon and
+        // would otherwise waste one of the UBO slots, causing later rooms
+        // (whose lights would be culled in-shader to nothing) to go dark.
+        // The input set is already room-distance-bounded by the caller.
+        val frustumLights = candidateLights.filter { ls ->
+            camera.isSphereInFrustum(ls.x, ls.y, ls.z, ls.radius)
         }
+
+        // ── 2. Prioritise lights by room distance, then by Euclidean ─────
+        // `candidateLights` is already supplied in room-priority order: the
+        // player's current room first, then 1-hop rooms, then 2-hop, etc.,
+        // with each ring internally sorted by distance to the player. So if
+        // we need to truncate we simply keep the prefix — that guarantees a
+        // light inside the player's room can never be displaced by a light
+        // two rooms away just because the latter happens to be a few
+        // metres closer through walls.
+        val visibleLights = if (frustumLights.size <= SimpleUI.MAX_LIGHTS) {
+            frustumLights
+        } else {
+            frustumLights.subList(0, SimpleUI.MAX_LIGHTS)
+        }
+
+        // Diagnostic trace: how many lights make it through each stage.
+        // Throttled by fingerprint so it only prints when something actually
+        // changes (counts or first-light identity). Logs even when zero
+        // lights survive, so we can tell apart "no candidates" vs
+        // "everything frustum-culled" vs "MAX_LIGHTS truncation".
+        logUploadLighting(candidateLights, frustumLights, visibleLights)
+
+        if (visibleLights.isEmpty()) {
+            ui.updateLighting(emptyList(), IntArray(1), 1, 1, 1, ambient = 0f)
+            ui.updateShadowTriangles(FloatArray(0))
+            return
+        }
+
+        // ── 3. Build a window-around-player occupancy grid ────────────────
+        // Up to now the occupancy/shadow grid was sized to the FULL world.
+        // Once the procedural world grows past ~120×120 cells the per-frame
+        // allocations alone become punitive, AND the per-cell triangle
+        // start index (packed into bits 16-31 of each cell flag word) only
+        // has 16 bits — once `expandedTris` accumulates >65k triangles the
+        // start index silently overflows and every shadow cell reads
+        // garbage triangles, which makes `isOccluded` return true for almost
+        // every ray. The visible symptom is "lights stop projecting" after
+        // walking far enough through a generated world.
+        //
+        // The fix: only build the grid for a tight AABB around the
+        // currently-visible lights, anchored at `gridOrigin` in absolute
+        // world coordinates. The shader subtracts that origin before
+        // indexing, so the same DDA logic works unchanged.
+        val worldW = w.width; val worldH = w.height; val worldD = w.depth
+        var minX = Int.MAX_VALUE; var minY = Int.MAX_VALUE; var minZ = Int.MAX_VALUE
+        var maxX = Int.MIN_VALUE; var maxY = Int.MIN_VALUE; var maxZ = Int.MIN_VALUE
+        for (ls in visibleLights) {
+            val r = kotlin.math.ceil(ls.radius).toInt() + 1
+            val lxi = ls.x.toInt(); val lyi = ls.y.toInt(); val lzi = ls.z.toInt()
+            if (lxi - r < minX) minX = lxi - r
+            if (lyi - r < minY) minY = lyi - r
+            if (lzi - r < minZ) minZ = lzi - r
+            if (lxi + r > maxX) maxX = lxi + r
+            if (lyi + r > maxY) maxY = lyi + r
+            if (lzi + r > maxZ) maxZ = lzi + r
+        }
+        val originX = minX.coerceIn(0, worldW - 1)
+        val originY = minY.coerceIn(0, worldH - 1)
+        val originZ = minZ.coerceIn(0, worldD - 1)
+        val endX = (maxX + 1).coerceIn(originX + 1, worldW)
+        val endY = (maxY + 1).coerceIn(originY + 1, worldH)
+        val endZ = (maxZ + 1).coerceIn(originZ + 1, worldD)
+        val gridW = endX - originX
+        val gridH = endY - originY
+        val gridD = endZ - originZ
+        val occupancy = IntArray(gridW * gridH * gridD)
+        val shadowTriangles = mutableListOf<Float>()
+
+        // Per-cell triangle index lists are also sized to the window only.
+        val perCellTris = Array(gridW * gridH * gridD) { mutableListOf<Int>() }
+        fun cellIdx(cx: Int, cy: Int, cz: Int): Int? {
+            // cx/cy/cz are absolute world voxels; translate into window-local.
+            val lx = cx - originX
+            val ly = cy - originY
+            val lz = cz - originZ
+            if (lx < 0 || lx >= gridW || ly < 0 || ly >= gridH || lz < 0 || lz >= gridD) return null
+            return lz * gridW * gridH + ly * gridW + lx
+        }
+
+        // Pre-compute light sphere bounds for cheap per-cell relevance tests.
+        // A cell only needs shadow triangles if it sits inside at least one
+        // light's radius (otherwise nothing will ever ray-march through it).
+        val lightCount = visibleLights.size
+        val lx = FloatArray(lightCount)
+        val ly = FloatArray(lightCount)
+        val lz = FloatArray(lightCount)
+        val lr2 = FloatArray(lightCount)
+        for (i in 0 until lightCount) {
+            val ls = visibleLights[i]
+            lx[i] = ls.x; ly[i] = ls.y; lz[i] = ls.z
+            lr2[i] = ls.radius * ls.radius
+        }
+        fun cellTouchedByAnyLight(x: Int, y: Int, z: Int): Boolean {
+            val cx0 = x.toFloat(); val cy0 = y.toFloat(); val cz0 = z.toFloat()
+            val cx1 = cx0 + 1f;    val cy1 = cy0 + 1f;    val cz1 = cz0 + 1f
+            for (i in 0 until lightCount) {
+                val px = lx[i].coerceIn(cx0, cx1)
+                val py = ly[i].coerceIn(cy0, cy1)
+                val pz = lz[i].coerceIn(cz0, cz1)
+                val dx = px - lx[i]; val dy = py - ly[i]; val dz = pz - lz[i]
+                if (dx * dx + dy * dy + dz * dz <= lr2[i]) return true
+            }
+            return false
+        }
+
+        // Iterate ONLY the window — not the entire grown world.
+        for (z in originZ until endZ) {
+            for (y in originY until endY) {
+                for (x in originX until endX) {
+                    val node = w.getNode(x, y, z) ?: continue
+                    var flags = 0
+                    if (isSolidWall(node, TileSlot.WALL_NORTH)) flags = flags or 1
+                    if (isSolidWall(node, TileSlot.WALL_SOUTH)) flags = flags or 2
+                    if (isSolidWall(node, TileSlot.WALL_EAST))  flags = flags or 4
+                    if (isSolidWall(node, TileSlot.WALL_WEST))  flags = flags or 8
+                    if (node.hasTile(TileSlot.FLOOR))      flags = flags or 16
+                    if (node.hasTile(TileSlot.CEILING))    flags = flags or 32
+                    val wIdx = cellIdx(x, y, z) ?: continue
+                    occupancy[wIdx] = flags
+
+                    if (!cellTouchedByAnyLight(x, y, z)) continue
+
+                    if (node.hasTile(TileSlot.STAIRS)) {
+                        val tile = node.getTile(TileSlot.STAIRS)
+                        if (tile is StairsTile) {
+                            stairsMesh?.let {
+                                val first = shadowTriangles.size / 9
+                                val n = collectShadowTriangles(it, x.toFloat(), y.toFloat(), z.toFloat(), 0f, 0f, 0f, tile.rotationY + 180f, shadowTriangles)
+                                for (k in 0 until n) perCellTris[wIdx].add(first + k)
+                            }
+                        } else if (tile is LadderTile) {
+                            val rotY = tile.rotationY
+                            val offX = when (rotY) { 90f -> 0.5f; 270f -> -0.5f; else -> 0f }
+                            val offY = when (rotY) { 0f -> 0.5f; 180f -> -0.5f; else -> 0f }
+                            ladderMesh?.let {
+                                val first = shadowTriangles.size / 9
+                                val n = collectShadowTriangles(it, x.toFloat(), y.toFloat(), z.toFloat(), offX, offY, 0f, rotY, shadowTriangles)
+                                for (k in 0 until n) perCellTris[wIdx].add(first + k)
+                            }
+                        }
+                    }
+
+                    collectDoorShadowTriangles(node, x, y, z, shadowTriangles) { slot, firstTri, n ->
+                        for (k in 0 until n) perCellTris[wIdx].add(firstTri + k)
+                        val (nx, ny) = when (slot) {
+                            TileSlot.WALL_NORTH -> x to (y + 1)
+                            TileSlot.WALL_SOUTH -> x to (y - 1)
+                            TileSlot.WALL_EAST  -> (x + 1) to y
+                            TileSlot.WALL_WEST  -> (x - 1) to y
+                            else -> return@collectDoorShadowTriangles
+                        }
+                        val nbrIdx = cellIdx(nx, ny, z) ?: return@collectDoorShadowTriangles
+                        for (k in 0 until n) perCellTris[nbrIdx].add(firstTri + k)
+                    }
+                }
+            }
+        }
+
+        // Pack per-cell triangle lists into the cell-flag bits. Bits 7-15
+        // hold the per-cell triangle count, bits 16-31 the start index.
+        // We now KNOW we'll never overflow the 16-bit start index because
+        // the window contains at most a handful of rooms, but we still
+        // bail out defensively if a degenerate case would overflow.
+        val expandedTris = mutableListOf<Float>()
+        for (cz in 0 until gridD) {
+            for (cy in 0 until gridH) {
+                for (cx in 0 until gridW) {
+                    val idx = cz * gridW * gridH + cy * gridW + cx
+                    val list = perCellTris[idx]
+                    if (list.isEmpty()) continue
+                    val start = expandedTris.size / 9
+                    if (start > 0xFFFF) {
+                        // Hard ceiling — should be unreachable given the
+                        // window size, but better to drop a few shadows
+                        // than to corrupt every cell's triangle range.
+                        continue
+                    }
+                    val count = list.size.coerceAtMost(0x1FF)
+                    for (i in 0 until count) {
+                        val src = list[i] * 9
+                        for (k in 0 until 9) expandedTris.add(shadowTriangles[src + k])
+                    }
+                    var f = occupancy[idx]
+                    f = f or ((count and 0x1FF) shl 7)
+                    f = f or ((start and 0xFFFF) shl 16)
+                    occupancy[idx] = f
+                }
+            }
+        }
+
+        val lights = visibleLights.map { ls ->
+            SimpleUI.LightData(ls.x, ls.y, ls.z, ls.intensity, ls.colorR(), ls.colorG(), ls.colorB(), ls.radius)
+        }
+        ui.updateLighting(
+            lights, occupancy, gridW, gridH, gridD,
+            ambient = 0f,
+            gridOriginX = originX, gridOriginY = originY, gridOriginZ = originZ
+        )
+        val triArray = FloatArray(expandedTris.size)
+        for (i in expandedTris.indices) triArray[i] = expandedTris[i]
+        ui.updateShadowTriangles(triArray)
+
+        // Window + shadow trace. Helps diagnose "fragment looks dark"
+        // bugs by recording whether the player's cell sits inside the
+        // shadow window, how big the window is, and how many shadow
+        // triangles fit into it. Throttled the same way as the upload
+        // log so it only prints when something materially changes.
+        val p = player?.position
+        val px = p?.x ?: 0f; val py = p?.y ?: 0f; val pz = p?.z ?: 0f
+        val pInWindow = px.toInt() in originX until endX &&
+                py.toInt() in originY until endY &&
+                pz.toInt() in originZ until endZ
+        logWindowDebug(originX, originY, originZ, endX, endY, endZ, expandedTris.size / 9, pInWindow, px, py, pz)
+    }
+
+    private var lastWindowDebugKey: String? = null
+    private fun logWindowDebug(
+        ox: Int, oy: Int, oz: Int,
+        ex: Int, ey: Int, ez: Int,
+        triCount: Int,
+        playerInWindow: Boolean,
+        px: Float, py: Float, pz: Float
+    ) {
+        val key = "$ox,$oy,$oz|$ex,$ey,$ez|$triCount|$playerInWindow"
+        if (key == lastWindowDebugKey) return
+        lastWindowDebugKey = key
+        println(
+            "[LightWindow] " +
+                "player=(%.2f,%.2f,%.2f) ".format(px, py, pz) +
+                "playerInWindow=$playerInWindow " +
+                "origin=($ox,$oy,$oz) end=($ex,$ey,$ez) " +
+                "size=(${ex - ox}x${ey - oy}x${ez - oz}) " +
+                "shadowTris=$triCount"
+        )
+    }
+
+    // Throttled diagnostic for the lighting pipeline. Tracks the most
+    // recent stage fingerprints so that we only print when something
+    // visibly changes — otherwise the per-frame call would flood the log.
+    private var lastUploadLightingKey: String? = null
+
+    private fun logUploadLighting(
+        candidate: List<com.roguelike.core.model.LightSource>,
+        frustum: List<com.roguelike.core.model.LightSource>,
+        visible: List<com.roguelike.core.model.LightSource>
+    ) {
+        val firstId = visible.firstOrNull()?.let { "(%.1f,%.1f,%.1f)".format(it.x, it.y, it.z) } ?: "none"
+        val key = "${candidate.size}|${frustum.size}|${visible.size}|$firstId"
+        if (key == lastUploadLightingKey) return
+        lastUploadLightingKey = key
+
+        val p = player?.position
+        val playerStr = if (p != null) "(%.2f,%.2f,%.2f)".format(p.x, p.y, p.z) else "?"
+        println(
+            "[LightUpload] player=$playerStr" +
+                " candidates=${candidate.size}" +
+                " afterFrustum=${frustum.size}" +
+                " uploaded=${visible.size}" +
+                " (cap=${SimpleUI.MAX_LIGHTS})" +
+                " firstUploaded=$firstId"
+        )
     }
 
     private fun isSolidWall(node: com.roguelike.core.model.WorldNode, slot: TileSlot): Boolean {
@@ -583,9 +749,31 @@ class RoguelikeGame(
         val wallR  = 0.55f; val wallG  = 0.42f; val wallB  = 0.30f
         val playerZ = kotlin.math.floor(player?.position?.z ?: 0f).toInt()
 
-        for (z in 0..maxRenderZ) {
+        // Render the player's current Z layer and every layer beneath it.
+        // Anything above the player is hidden so upper floors never occlude
+        // the view down into the level they're standing on. Clamp into the
+        // world's actual depth so freshly-grown worlds don't read past the
+        // grid bounds.
+        //
+        // CRITICAL: iterate only the cells that actually fall inside the
+        // camera frustum. As the procedural world expands past ~60×60 cells,
+        // iterating the full grid floods `drawGpuTriangle` with vertices,
+        // hits `maxGpuVertices` mid-frame, and the remaining triangles are
+        // silently dropped — producing the "lighting breaks the further you
+        // walk" symptom. Frustum culling keeps the per-frame vertex count
+        // bounded to roughly what's actually visible.
+        val topZ = playerZ.coerceIn(0, (w.depth - 1).coerceAtLeast(0))
+        for (z in 0..topZ) {
             for (x in 0 until w.width) {
                 for (y in 0 until w.height) {
+                    // Cell AABB in world space is (x..x+1, y..y+1, z..z+1).
+                    // Inflate slightly so meshes that overhang the cell
+                    // (e.g. doorframes, ladders) aren't false-culled.
+                    if (!camera.isBoxInFrustum(
+                            x.toFloat() - 0.1f, y.toFloat() - 0.1f, z.toFloat() - 0.1f,
+                            x.toFloat() + 1.1f, y.toFloat() + 1.1f, z.toFloat() + 1.1f
+                        )
+                    ) continue
                     val node = w.getNode(x, y, z) ?: continue
                     val hasFloor = node.hasTile(TileSlot.FLOOR)
                     val hasCeiling = node.hasTile(TileSlot.CEILING) && z < playerZ

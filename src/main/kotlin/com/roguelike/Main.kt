@@ -158,7 +158,14 @@ fun main() {
 
             // Begin render pass
             val clearValues = VkClearValue.calloc(2, stack)
-            clearValues.get(0).color().float32(0, 0.05f).float32(1, 0.05f).float32(2, 0.1f).float32(3, 1f)
+            // Arena uses a pure-black background (no ambient sky fill) so
+            // unlit space outside light radii reads as true black. Menus
+            // and the editor keep the dim blue clear for legibility.
+            if (launcher.state == AppState.GAME) {
+                clearValues.get(0).color().float32(0, 0f).float32(1, 0f).float32(2, 0f).float32(3, 1f)
+            } else {
+                clearValues.get(0).color().float32(0, 0.05f).float32(1, 0.05f).float32(2, 0.1f).float32(3, 1f)
+            }
             clearValues.get(1).depthStencil().depth(1f).stencil(0)
 
             val renderPassInfo = VkRenderPassBeginInfo.calloc(stack)

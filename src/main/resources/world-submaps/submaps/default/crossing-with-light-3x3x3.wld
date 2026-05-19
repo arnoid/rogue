@@ -1,0 +1,22 @@
+{
+  "width": 3,
+  "height": 3,
+  "depth": 3,
+  "nodes": [
+    {"x":0,"y":1,"z":1,"tiles":[{"type":"FloorTile","slot":"FLOOR"},{"type":"WallSouthTile","slot":"WALL_SOUTH"},{"type":"CeilingTile","slot":"CEILING"}],"socketSlots":["WALL_WEST"]},
+    {"x":0,"y":2,"z":1,"tiles":[{"type":"WallEastTile","slot":"WALL_EAST"},{"type":"WallSouthTile","slot":"WALL_SOUTH"}]},
+    {"x":1,"y":0,"z":1,"tiles":[{"type":"FloorTile","slot":"FLOOR"},{"type":"WallWestTile","slot":"WALL_WEST"},{"type":"WallEastTile","slot":"WALL_EAST"},{"type":"CeilingTile","slot":"CEILING"}],"socketSlots":["WALL_SOUTH"]},
+    {"x":1,"y":1,"z":1,"tiles":[{"type":"FloorTile","slot":"FLOOR"},{"type":"CeilingTile","slot":"CEILING"}]},
+    {"x":1,"y":2,"z":1,"tiles":[{"type":"FloorTile","slot":"FLOOR"},{"type":"CeilingTile","slot":"CEILING"}],"socketSlots":["WALL_NORTH"]},
+    {"x":2,"y":0,"z":1,"tiles":[{"type":"WallNorthTile","slot":"WALL_NORTH"}]},
+    {"x":2,"y":1,"z":1,"tiles":[{"type":"FloorTile","slot":"FLOOR"},{"type":"WallNorthTile","slot":"WALL_NORTH"},{"type":"CeilingTile","slot":"CEILING"}],"socketSlots":["WALL_EAST"]},
+    {"x":2,"y":2,"z":1,"tiles":[{"type":"WallWestTile","slot":"WALL_WEST"}]}
+  ],
+  "associations": [
+  ],
+  "props": [
+  ],
+  "lightSources": [
+    {"id":"2f2d2170-85bb-441f-baad-3bd33576aadc","x":1.5,"y":1.5,"z":1.8,"intensity":5.0,"radius":5.0,"colorHex":"ffcc88"}
+  ]
+}
