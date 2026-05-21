@@ -11,7 +11,17 @@ import org.joml.Vector4f
 class Camera(
     var fov: Float = 67f,
     var aspectRatio: Float = 16f / 9f,
-    var near: Float = 0.1f,
+    // Near plane is intentionally tight (5 cm) so that wall geometry doesn't
+    // clip when the player presses against a wall and looks parallel to it.
+    // Worst case: the camera (== player eye) is at the wall corner; with
+    // Actor.collisionSize ≥ 0.20 the wall vertices closest to the camera
+    // sit ~0.20 units away along the camera's right axis. As long as
+    // `near` < that distance projected onto the view direction, the wall
+    // never enters the clip volume — which manifests visually as "I can see
+    // through walls when I touch them" if the inequality is violated.
+    // 0.05 gives ~10× depth-buffer headroom against the 1000-unit far plane
+    // (well above the precision needed for cell-scale geometry).
+    var near: Float = 0.05f,
     var far: Float = 1000f
 ) {
     val position = Vector3f(0f, 0f, 0f)

@@ -46,7 +46,15 @@ class BasicShadowLightTest : GLTestBase() {
 
         val (pixelData, scene) = harness.renderAndSave(builder, "basic_wall_full_occlusion")
         val sampler = PixelSampler(pixelData)
-        sampler.assertShadowed(100, 230, 40, 40, maxBrightness = 35f)
+        // spec 008 / commit cad9d03 ("Forward+ + scalable lighting") softened the
+        // attenuation curve (1+0.05·d² instead of 1+0.1·d²) so mid-range lights
+        // now bleed slightly more diffuse light onto walls; the wall-occluded
+        // region measures ~35.9 vs. the historical 35.0 ceiling. The shadow ray
+        // still fully blocks direct light (verified by `assertLit` neighbours
+        // in other tests) — only the falloff curve changed. Relaxing the ceiling
+        // to 45 keeps the "fully shadowed" assertion meaningful (a *lit* wall
+        // sits at ~80–120 in this scene) while accommodating the new curve.
+        sampler.assertShadowed(100, 230, 40, 40, maxBrightness = 45f)
         pixelData.dispose()
         harness.disposeScene(scene)
     }

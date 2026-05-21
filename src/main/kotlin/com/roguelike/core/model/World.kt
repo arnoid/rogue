@@ -21,12 +21,50 @@ class World(width: Int, height: Int, depth: Int) {
     var depth: Int = depth
         private set
 
-    private var nodes = Array(width) { x -> Array(height) { y -> Array(depth) { z -> WorldNode(x, y, z) } } }
+    private var nodes = Array(width) { x -> Array(height) { y -> Array(depth) { z -> WorldNode(x, y, z).also { it.world = this } } } }
 
     private val nodesByTag = mutableMapOf<String, MutableList<WorldNode>>()
     val associations = mutableListOf<Association>()
     val props = mutableListOf<Prop>()
     val lightSources = mutableListOf<LightSource>()
+
+    // ── Sparse index of non-empty nodes, bucketed by Z ──────────────────
+    // Maintained by WorldNode.setTile / removeTile / clear notifications.
+    // Hot per-frame loops (e.g. lighting / shadow collection) can iterate
+    // just the populated cells inside a window AABB instead of walking the
+    // entire grid volume — for a 93×81×18 world that's ~10× fewer cell
+    // probes when most layers are sparse.
+    private var nonEmptyByZ: Array<ArrayList<WorldNode>> = Array(depth) { ArrayList() }
+
+    internal fun onNodeBecameNonEmpty(node: WorldNode) {
+        if (node.z in nonEmptyByZ.indices) nonEmptyByZ[node.z].add(node)
+    }
+
+    internal fun onNodeBecameEmpty(node: WorldNode) {
+        if (node.z in nonEmptyByZ.indices) nonEmptyByZ[node.z].remove(node)
+    }
+
+    /**
+     * Invokes [block] for every non-empty node whose coordinates lie within
+     * the inclusive lower / exclusive upper bounds (`originX..endX-1` etc.).
+     * Iterates the sparse per-Z index — O(populated cells in window) rather
+     * than O(window volume).
+     */
+    fun forEachNonEmptyInWindow(
+        originX: Int, originY: Int, originZ: Int,
+        endX: Int, endY: Int, endZ: Int,
+        block: (WorldNode) -> Unit
+    ) {
+        val zLo = originZ.coerceAtLeast(0)
+        val zHi = endZ.coerceAtMost(nonEmptyByZ.size)
+        for (z in zLo until zHi) {
+            val list = nonEmptyByZ[z]
+            for (i in list.indices) {
+                val n = list[i]
+                if (n.x in originX until endX && n.y in originY until endY) block(n)
+            }
+        }
+    }
 
     data class Association(
         val source: WorldNode,
@@ -114,11 +152,15 @@ class World(width: Int, height: Int, depth: Int) {
             Array(newHeight) { y ->
                 Array(newDepth) { z ->
                     if (x < width && y < height && z < depth) nodes[x][y][z]
-                    else WorldNode(x, y, z)
+                    else WorldNode(x, y, z).also { it.world = this }
                 }
             }
         }
         nodes = newNodes
+        // Grow the per-Z index (preserve existing buckets, append empty ones).
+        if (newDepth > nonEmptyByZ.size) {
+            nonEmptyByZ = Array(newDepth) { z -> if (z < nonEmptyByZ.size) nonEmptyByZ[z] else ArrayList() }
+        }
         width = newWidth
         height = newHeight
         depth = newDepth
@@ -143,7 +185,7 @@ class World(width: Int, height: Int, depth: Int) {
             Array(newHeight) { y ->
                 Array(newDepth) { z ->
                     if (x < width && y < height && z < depth) nodes[x][y][z]
-                    else WorldNode(x, y, z)
+                    else WorldNode(x, y, z).also { it.world = this }
                 }
             }
         }
@@ -161,6 +203,19 @@ class World(width: Int, height: Int, depth: Int) {
             a.source.x >= newWidth || a.source.y >= newHeight || a.source.z >= newDepth ||
             a.target.x >= newWidth || a.target.y >= newHeight || a.target.z >= newDepth
         }
+
+        // Resize the sparse non-empty index and drop entries outside extents.
+        val rebuilt = Array(newDepth) { ArrayList<WorldNode>() }
+        val zMax = minOf(newDepth, nonEmptyByZ.size)
+        for (z in 0 until zMax) {
+            val src = nonEmptyByZ[z]
+            val dst = rebuilt[z]
+            for (i in src.indices) {
+                val n = src[i]
+                if (n.x < newWidth && n.y < newHeight) dst.add(n)
+            }
+        }
+        nonEmptyByZ = rebuilt
 
         nodes = newNodes
         width = newWidth

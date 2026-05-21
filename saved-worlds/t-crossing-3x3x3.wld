@@ -1,0 +1,18 @@
+{
+  "width": 3,
+  "height": 3,
+  "depth": 3,
+  "nodes": [
+    {"x":0,"y":1,"z":1,"tiles":[{"type":"CeilingTile","slot":"CEILING"},{"type":"FloorTile","slot":"FLOOR"},{"type":"WallSouthTile","slot":"WALL_SOUTH"},{"type":"WallNorthTile","slot":"WALL_NORTH"}],"socketSlots":["WALL_WEST"]},
+    {"x":1,"y":1,"z":1,"tiles":[{"type":"CeilingTile","slot":"CEILING"},{"type":"FloorTile","slot":"FLOOR"},{"type":"WallSouthTile","slot":"WALL_SOUTH"}]},
+    {"x":1,"y":2,"z":1,"tiles":[{"type":"CeilingTile","slot":"CEILING"},{"type":"FloorTile","slot":"FLOOR"},{"type":"WallEastTile","slot":"WALL_EAST"},{"type":"WallWestTile","slot":"WALL_WEST"}],"socketSlots":["WALL_NORTH"]},
+    {"x":2,"y":1,"z":1,"tiles":[{"type":"CeilingTile","slot":"CEILING"},{"type":"FloorTile","slot":"FLOOR"},{"type":"WallSouthTile","slot":"WALL_SOUTH"},{"type":"WallNorthTile","slot":"WALL_NORTH"}],"socketSlots":["WALL_EAST"]}
+  ],
+  "associations": [
+  ],
+  "props": [
+  ],
+  "lightSources": [
+    {"id":"89a87449-cb5b-4d8b-bbc3-bd7f6881b240","x":1.5,"y":1.5,"z":1.8,"intensity":5.0,"radius":5.0,"colorHex":"ffcc88"}
+  ]
+}

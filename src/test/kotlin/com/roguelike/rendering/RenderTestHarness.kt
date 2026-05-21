@@ -77,8 +77,16 @@ class RenderTestHarness(
                 return false
             }
 
-            // Create Vulkan context
-            vulkanContext = VulkanContext.create(window, debug = false)
+            // Create Vulkan context.
+            //
+            // spec 008 (FPS recovery): force the validation layer on for the
+            // duration of this feature so any descriptor-set / binding-table
+            // drift introduced by the new tile-quality SSBO is caught loudly
+            // at test time. The legacy default (`debug = false`) silenced
+            // every `VUID-Vk*` message, which is exactly the failure mode
+            // the new binding 5 makes catastrophic. See
+            // `specs/008-fps-fov-shadow-culling/contracts/shader-binding-table.md`.
+            vulkanContext = VulkanContext.create(window, debug = true)
             val ctx = vulkanContext!!
 
             // Create swap chain

@@ -115,13 +115,136 @@ class AssetLoader {
             val maxDim = maxOf(size.x, maxOf(size.y, size.z))
             val scale = if (maxDim > 0f) 1.0f / maxDim else 1.0f
 
-            val data = MeshData(vertices, colors, indexList.toShortArray(), center, size, scale)
+            // Cull hidden interior faces typical of voxel OBJ exports.
+            // MagicaVoxel-style exporters emit every face of every solid
+            // voxel, so interior shared faces appear twice — once for each
+            // adjacent voxel — with opposing normals and coincident
+            // centroids. Detecting and dropping those pairs typically
+            // removes 50-80% of triangles for free.
+            val rawIndices = indexList.toShortArray()
+            val culledIndices = cullInteriorFaces(vertices, rawIndices)
+
+            val data = MeshData(vertices, colors, culledIndices, center, size, scale)
             models[name] = data
-            println("[AssetLoader] Loaded '$name': ${vertCount} verts, hasColors=${colors != null}")
+            val before = rawIndices.size / 3
+            val after = culledIndices.size / 3
+            val pct = if (before > 0) (100.0 * (before - after) / before).toInt() else 0
+            println("[AssetLoader] Loaded '$name': ${vertCount} verts, hasColors=${colors != null}, tris=$before→$after (-${pct}% interior)")
             return data
         } finally {
             aiReleaseImport(scene)
         }
+    }
+
+    /**
+     * Drop interior voxel faces: any triangle whose centroid coincides
+     * with another triangle's centroid AND whose face normal points the
+     * opposite way. Quantised hashing keeps this O(N) on average — we
+     * snap centroids to a small grid (1/1024 of the model's bbox span)
+     * so floating-point jitter from the OBJ exporter doesn't break the
+     * pairing. Both triangles in a back-to-back pair are removed.
+     */
+    private fun cullInteriorFaces(vertices: FloatArray, indices: ShortArray): ShortArray {
+        val triCount = indices.size / 3
+        if (triCount < 2) return indices
+
+        // Compute centroids + normals for every triangle.
+        data class Tri(val cx: Float, val cy: Float, val cz: Float,
+                       val nx: Float, val ny: Float, val nz: Float)
+        val tris = ArrayList<Tri>(triCount)
+        // Track model bbox for centroid quantisation.
+        var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE; var minZ = Float.MAX_VALUE
+        var maxX = -Float.MAX_VALUE; var maxY = -Float.MAX_VALUE; var maxZ = -Float.MAX_VALUE
+        for (i in 0 until triCount) {
+            val i0 = indices[i * 3].toInt() and 0xFFFF
+            val i1 = indices[i * 3 + 1].toInt() and 0xFFFF
+            val i2 = indices[i * 3 + 2].toInt() and 0xFFFF
+            val ax = vertices[i0 * 6];     val ay = vertices[i0 * 6 + 1]; val az = vertices[i0 * 6 + 2]
+            val bx = vertices[i1 * 6];     val by = vertices[i1 * 6 + 1]; val bz = vertices[i1 * 6 + 2]
+            val cxv = vertices[i2 * 6];    val cyv = vertices[i2 * 6 + 1]; val czv = vertices[i2 * 6 + 2]
+            val ccx = (ax + bx + cxv) / 3f
+            val ccy = (ay + by + cyv) / 3f
+            val ccz = (az + bz + czv) / 3f
+            // Face normal via cross product (right-hand rule). Don't
+            // trust per-vertex normals — they're smoothed and would
+            // pair adjacent non-coplanar faces.
+            val e1x = bx - ax; val e1y = by - ay; val e1z = bz - az
+            val e2x = cxv - ax; val e2y = cyv - ay; val e2z = czv - az
+            var nx = e1y * e2z - e1z * e2y
+            var ny = e1z * e2x - e1x * e2z
+            var nz = e1x * e2y - e1y * e2x
+            val nl = kotlin.math.sqrt(nx * nx + ny * ny + nz * nz)
+            if (nl > 0f) { nx /= nl; ny /= nl; nz /= nl }
+            tris.add(Tri(ccx, ccy, ccz, nx, ny, nz))
+            if (ccx < minX) minX = ccx; if (ccy < minY) minY = ccy; if (ccz < minZ) minZ = ccz
+            if (ccx > maxX) maxX = ccx; if (ccy > maxY) maxY = ccy; if (ccz > maxZ) maxZ = ccz
+        }
+
+        // Quantise centroids to 1/1024 of the bbox span on each axis so
+        // exporter rounding (typically 1e-4) doesn't break the match.
+        val spanX = (maxX - minX).coerceAtLeast(1e-6f)
+        val spanY = (maxY - minY).coerceAtLeast(1e-6f)
+        val spanZ = (maxZ - minZ).coerceAtLeast(1e-6f)
+        val invQX = 1024f / spanX
+        val invQY = 1024f / spanY
+        val invQZ = 1024f / spanZ
+        fun keyOf(x: Float, y: Float, z: Float): Long {
+            val qx = ((x - minX) * invQX).toInt().toLong() and 0xFFFFL
+            val qy = ((y - minY) * invQY).toInt().toLong() and 0xFFFFL
+            val qz = ((z - minZ) * invQZ).toInt().toLong() and 0xFFFFL
+            return (qx shl 32) or (qy shl 16) or qz
+        }
+
+        // For each centroid key, remember the first triangle index that
+        // produced it. When a later triangle shares the same key AND has
+        // an opposing normal (dot < -0.9), mark BOTH as culled.
+        val bucket = HashMap<Long, IntArray>(triCount * 2)
+        val culled = BooleanArray(triCount)
+        for (i in 0 until triCount) {
+            val t = tris[i]
+            val key = keyOf(t.cx, t.cy, t.cz)
+            val existing = bucket[key]
+            var matched = false
+            if (existing != null) {
+                for (j in existing.indices) {
+                    val other = existing[j]
+                    if (culled[other]) continue
+                    val o = tris[other]
+                    val dot = t.nx * o.nx + t.ny * o.ny + t.nz * o.nz
+                    if (dot < -0.9f) {
+                        culled[i] = true
+                        culled[other] = true
+                        matched = true
+                        break
+                    }
+                }
+            }
+            if (!matched) {
+                if (existing == null) {
+                    bucket[key] = intArrayOf(i)
+                } else {
+                    // Append; rare enough that a fresh small array is fine.
+                    val grown = IntArray(existing.size + 1)
+                    System.arraycopy(existing, 0, grown, 0, existing.size)
+                    grown[existing.size] = i
+                    bucket[key] = grown
+                }
+            }
+        }
+
+        var kept = 0
+        for (i in 0 until triCount) if (!culled[i]) kept++
+        if (kept == triCount) return indices
+        val out = ShortArray(kept * 3)
+        var w = 0
+        for (i in 0 until triCount) {
+            if (culled[i]) continue
+            out[w]     = indices[i * 3]
+            out[w + 1] = indices[i * 3 + 1]
+            out[w + 2] = indices[i * 3 + 2]
+            w += 3
+        }
+        return out
     }
 
     // ---- Palette texture helpers ----

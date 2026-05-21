@@ -42,7 +42,25 @@ class SimpleUI(
          * changed — the main cause of "going through the pixels"
          * stutter with many lights.
          */
-        const val MAX_SHADOW_TRIANGLES: Int = 0xFFFF
+        /**
+         * Hard ceiling on the per-frame shadow occluder triangle count.
+         *
+         * Sized to match the bit budget of the per-cell triangle range
+         * packed into the occupancy SSBO cell word (see
+         * [RoguelikeGame.uploadLighting] and `world_lit.frag.glsl`).
+         * The current layout is:
+         *   bits 0-6   : wall/floor/ceiling flags
+         *   bits 7-14  : per-cell triangle count   (8 bits → max 255)
+         *   bits 15-31 : per-cell triangle start   (17 bits → max 131071)
+         *
+         * Raising this beyond 0x1FFFF requires widening the start field
+         * (and lowering the count field, or repacking the whole word).
+         * The earlier 16-bit start limit (0xFFFF) silently corrupted
+         * shadow cell ranges once a large dungeon's per-frame triangle
+         * total crossed 65k, producing a characteristic "missing shadow
+         * squares" artefact in the rendered scene.
+         */
+        const val MAX_SHADOW_TRIANGLES: Int = 0x1FFFF
 
         /** Hard cap on occupancy cells uploaded per frame. 96³ ≈ 880 K
          *  cells covers any realistic shadow window. */
@@ -92,6 +110,15 @@ class SimpleUI(
     private var tileLightIndexSsboBuffer: Long = VK_NULL_HANDLE
     private var tileLightIndexSsboAlloc: Long = VK_NULL_HANDLE
     private var tileLightIndexSsboSize: Long = 0
+    // spec 008 (FPS recovery): per-tile shadow-quality SSBO (binding 5).
+    // One uint8 per Forward+ tile, packed 4-per-uint little-endian.
+    // 0 = ambient-only, 1 = low-quality (1-tap shadows, fewer lights),
+    // 2 = full quality (spec-007 behaviour). Mirrors the existing
+    // tileLightCount* allocation pattern. Contract:
+    // specs/008-fps-fov-shadow-culling/contracts/tile-quality-ssbo.md
+    private var tileQualitySsboBuffer: Long = VK_NULL_HANDLE
+    private var tileQualitySsboAlloc: Long = VK_NULL_HANDLE
+    private var tileQualitySsboSize: Long = 0
 
     // --- GPU-rasterized 3D pipeline (depth-buffered, VP transform on GPU) ---
     private var gpuPipeline: Long = VK_NULL_HANDLE
@@ -103,7 +130,7 @@ class SimpleUI(
 
     // GPU quad vertex: worldPos3 + color4 + normal3 = 10 floats
     private val gpuFloatsPerVertex = 10
-    private val maxGpuQuads = 16384
+    private val maxGpuQuads = 65536
     private val vpMatrix = FloatArray(16) // cached VP matrix for push constants
 
     // Vertex: pos2 + color4 + uv2 = 8 floats per vertex, 6 verts per quad
@@ -627,12 +654,14 @@ class SimpleUI(
             //         binding 2 = SSBO (shadow triangles)
             //         binding 3 = SSBO (Forward+ per-tile light count)
             //         binding 4 = SSBO (Forward+ per-tile light indices)
-            val bindings = VkDescriptorSetLayoutBinding.calloc(5, stack)
+            //         binding 5 = SSBO (spec 008 per-tile shadow quality)
+            val bindings = VkDescriptorSetLayoutBinding.calloc(6, stack)
             bindings.get(0).binding(0).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT)
             bindings.get(1).binding(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT)
             bindings.get(2).binding(2).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT)
             bindings.get(3).binding(3).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT)
             bindings.get(4).binding(4).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT)
+            bindings.get(5).binding(5).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1).stageFlags(VK_SHADER_STAGE_FRAGMENT_BIT)
 
             val layoutCI = VkDescriptorSetLayoutCreateInfo.calloc(stack)
                 .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO)
@@ -641,10 +670,10 @@ class SimpleUI(
             vkCreateDescriptorSetLayout(context.vkDevice, layoutCI, null, pLayout)
             litDescriptorSetLayout = pLayout.get(0)
 
-            // Pool — 1 UBO + 4 SSBOs.
+            // Pool — 1 UBO + 5 SSBOs.
             val poolSizes = VkDescriptorPoolSize.calloc(2, stack)
             poolSizes.get(0).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1)
-            poolSizes.get(1).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(4)
+            poolSizes.get(1).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(5)
             val poolCI = VkDescriptorPoolCreateInfo.calloc(stack)
                 .sType(VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO)
                 .maxSets(1)
@@ -731,13 +760,28 @@ class SimpleUI(
             tileLightIndexSsboBuffer = pBuf.get(0)
             tileLightIndexSsboAlloc = pAlloc.get(0)
 
+            // spec 008: Forward+ per-tile shadow-quality SSBO.
+            // One uint8 per tile, packed 4-per-uint little-endian. Size
+            // is MAX_LIGHT_TILES bytes (already a multiple of 16 since
+            // MAX_LIGHT_TILES = 128*128 = 16 384). Contract:
+            // specs/008-fps-fov-shadow-culling/contracts/tile-quality-ssbo.md
+            tileQualitySsboSize = MAX_LIGHT_TILES.toLong()
+            val qualityCI = VkBufferCreateInfo.calloc(stack)
+                .sType(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO)
+                .size(tileQualitySsboSize)
+                .usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)
+                .sharingMode(VK_SHARING_MODE_EXCLUSIVE)
+            check(vmaCreateBuffer(context.allocator, qualityCI, allocCI, pBuf, pAlloc, null) == VK_SUCCESS)
+            tileQualitySsboBuffer = pBuf.get(0)
+            tileQualitySsboAlloc = pAlloc.get(0)
+
             updateLitDescriptorSet(uboSize.toLong())
         }
     }
 
     private fun updateLitDescriptorSet(uboSize: Long) {
         MemoryStack.stackPush().use { stack ->
-            val writes = VkWriteDescriptorSet.calloc(5, stack)
+            val writes = VkWriteDescriptorSet.calloc(6, stack)
 
             val uboBI = VkDescriptorBufferInfo.calloc(1, stack)
             uboBI.get(0).buffer(lightingUboBuffer).offset(0).range(uboSize)
@@ -788,6 +832,17 @@ class SimpleUI(
                 .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
                 .descriptorCount(1)
                 .pBufferInfo(indexBI)
+
+            // spec 008 binding 5: per-tile shadow-quality SSBO.
+            val qualityBI = VkDescriptorBufferInfo.calloc(1, stack)
+            qualityBI.get(0).buffer(tileQualitySsboBuffer).offset(0).range(tileQualitySsboSize)
+            writes.get(5)
+                .sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET)
+                .dstSet(litDescriptorSet)
+                .dstBinding(5)
+                .descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+                .descriptorCount(1)
+                .pBufferInfo(qualityBI)
 
             vkUpdateDescriptorSets(context.vkDevice, writes, null)
         }
@@ -975,6 +1030,58 @@ class SimpleUI(
     }
 
     /**
+     * Upload the per-tile shadow quality byte for this frame (spec 008).
+     *
+     * Layout: one `uint8` per Forward+ tile, packed 4-per-uint in
+     * little-endian order on the host-mapped buffer. The shader reads
+     * via `tileQuality.packed[tIdx >> 2] >> ((tIdx & 3) * 8) & 0xFF`.
+     * Contract: specs/008-fps-fov-shadow-culling/contracts/tile-quality-ssbo.md
+     *
+     * Quality semantics:
+     *   0 = ambient-only (skip the lighting loop entirely)
+     *   1 = low quality (1-tap shadows, fewer per-pixel lights)
+     *   2 = full quality (today's spec-007 behaviour)
+     *   3..255 = reserved; shader treats as 2.
+     *
+     * The writer clamps every byte to [0,2] so a downstream bug in the
+     * producer can't accidentally hit the reserved range. Bytes
+     * `[tileCount, end)` are zeroed so a tile-count shrink can't leak
+     * stale "full quality" labels into freshly-empty regions.
+     */
+    fun updateTileQuality(qualities: ByteArray, tileCount: Int) {
+        if (tileCount <= 0 || tileCount > MAX_LIGHT_TILES) {
+            if (tileCount > MAX_LIGHT_TILES) {
+                System.err.println(
+                    "[SimpleUI] tile count $tileCount exceeds MAX_LIGHT_TILES=$MAX_LIGHT_TILES — tile-quality upload skipped"
+                )
+            }
+            return
+        }
+        if (qualities.size < tileCount) {
+            System.err.println(
+                "[SimpleUI] updateTileQuality: qualities.size=${qualities.size} < tileCount=$tileCount — skipping"
+            )
+            return
+        }
+        MemoryStack.stackPush().use { stack ->
+            val ppData = stack.mallocPointer(1)
+            vmaMapMemory(context.allocator, tileQualitySsboAlloc, ppData)
+            val byteBuf = ppData.getByteBuffer(0, tileQualitySsboSize.toInt())
+            // Clamp to [0,2] inline as we copy (single pass, no temp array).
+            for (i in 0 until tileCount) {
+                val raw = qualities[i].toInt()
+                val clamped = if (raw < 0) 0 else if (raw > 2) 2 else raw
+                byteBuf.put(i, clamped.toByte())
+            }
+            // Zero the tail so a tile-count shrink (window resize) can't
+            // leak stale labels into freshly-empty regions.
+            val total = tileQualitySsboSize.toInt()
+            for (i in tileCount until total) byteBuf.put(i, 0.toByte())
+            vmaUnmapMemory(context.allocator, tileQualitySsboAlloc)
+        }
+    }
+
+    /**
      * Upload shadow mesh triangles for mesh-accurate shadow casting.
      * Each triangle is 9 floats (3 vertices × 3 components: x, y, z).
      * The occupancy grid encodes per-cell triangle ranges:
@@ -994,9 +1101,28 @@ class SimpleUI(
      * active triangle count — the hot-path entry point. The SSBO is
      * persistent (allocated once at MAX_SHADOW_TRIANGLES capacity), so
      * this call is a pure memcpy without buffer recreation.
+     *
+     * Hot-path optimisations:
+     *  - The CPU rebuilds an interleaved vec4-padded copy in a tight
+     *    Kotlin loop (~1 ns/float), then bulk-uploads the whole packed
+     *    block via a single [FloatBuffer.put] (≈ JNI `memcpy`). The
+     *    previous per-float `buf.put(...)` path was 480k JNI calls per
+     *    frame at 40k triangles and showed up as ~30 ms in the
+     *    `uploadLighting` phase timing.
+     *  - If [contentHash] matches the previous frame's, the SSBO write
+     *    is skipped entirely — the persistent buffer already has the
+     *    right data. Pass `0L` to force the upload (e.g. on first call).
      */
-    fun updateShadowTriangles(triangles: FloatArray, triCount: Int) {
-        if (triCount <= 0) return
+    private val packedShadowTris = FloatArray(MAX_SHADOW_TRIANGLES * 12)
+    private var lastShadowHash: Long = -1L
+    private var lastShadowCount: Int = -1
+
+    fun updateShadowTriangles(triangles: FloatArray, triCount: Int, contentHash: Long = 0L) {
+        if (triCount <= 0) {
+            lastShadowHash = 0L
+            lastShadowCount = 0
+            return
+        }
         if (triCount > MAX_SHADOW_TRIANGLES) {
             System.err.println(
                 "[SimpleUI] shadow triangle count $triCount exceeds " +
@@ -1005,18 +1131,50 @@ class SimpleUI(
         }
         val uploadCount = minOf(triCount, MAX_SHADOW_TRIANGLES)
 
+        // Skip the entire upload when nothing changed. The shader still
+        // reads the persistent SSBO contents from the previous frame —
+        // they're still valid for an unchanged window.
+        if (contentHash != 0L && contentHash == lastShadowHash && uploadCount == lastShadowCount) {
+            return
+        }
+
+        // Pack 9 floats/tri into 12 floats/tri (vec4 padded) in a tight
+        // Kotlin loop on heap — orders of magnitude faster than writing
+        // individual floats through a mapped JNI FloatBuffer.
+        val packed = packedShadowTris
+        var s = 0
+        var d = 0
+        var t = 0
+        while (t < uploadCount) {
+            packed[d]     = triangles[s]
+            packed[d + 1] = triangles[s + 1]
+            packed[d + 2] = triangles[s + 2]
+            packed[d + 3] = 0f
+            packed[d + 4] = triangles[s + 3]
+            packed[d + 5] = triangles[s + 4]
+            packed[d + 6] = triangles[s + 5]
+            packed[d + 7] = 0f
+            packed[d + 8] = triangles[s + 6]
+            packed[d + 9] = triangles[s + 7]
+            packed[d + 10] = triangles[s + 8]
+            packed[d + 11] = 0f
+            s += 9
+            d += 12
+            t++
+        }
+
         MemoryStack.stackPush().use { stack ->
             val ppData = stack.mallocPointer(1)
             vmaMapMemory(context.allocator, shadowTriSsboAlloc, ppData)
+            // Single bulk transfer — backs onto Unsafe.copyMemory in
+            // most JVMs, so this is one `memcpy` regardless of count.
             val buf = ppData.getByteBuffer(0, uploadCount * 48).asFloatBuffer()
-            for (t in 0 until uploadCount) {
-                val base = t * 9
-                buf.put(triangles[base + 0]); buf.put(triangles[base + 1]); buf.put(triangles[base + 2]); buf.put(0f)
-                buf.put(triangles[base + 3]); buf.put(triangles[base + 4]); buf.put(triangles[base + 5]); buf.put(0f)
-                buf.put(triangles[base + 6]); buf.put(triangles[base + 7]); buf.put(triangles[base + 8]); buf.put(0f)
-            }
+            buf.put(packed, 0, uploadCount * 12)
             vmaUnmapMemory(context.allocator, shadowTriSsboAlloc)
         }
+
+        lastShadowHash = contentHash
+        lastShadowCount = uploadCount
     }
 
     /**
@@ -1236,6 +1394,187 @@ class SimpleUI(
         putGpuVertex(offset + 10, wx1, wy1, wz1, r1, g1, b1, a1, nx1, ny1, nz1)
         putGpuVertex(offset + 20, wx2, wy2, wz2, r2, g2, b2, a2, nx2, ny2, nz2)
         gpuVertexCount += 3
+    }
+
+    /**
+     * Allocation-free batch upload of an indexed mesh with a per-instance
+     * affine transform (centre/scale, Y↔Z axis swap, Z-rotation, translation)
+     * and a single solid colour. Walks the index buffer in a tight loop,
+     * writes straight into [gpuVertexData] — no per-vertex `FloatArray`
+     * allocations, no per-triangle method dispatch. Replaces the
+     * per-triangle `drawGpuTriangle` calls that used to dominate
+     * `RoguelikeGame.drawModelAtNode`.
+     *
+     * Vertex layout in [verts]: 6 floats per vertex (px,py,pz,nx,ny,nz).
+     * Transform matches the historical `drawModelAtNode`:
+     *   m = (v - centre) * scale     (centre + scale)
+     *   p = (m.x, m.z, m.y)          (Y↔Z swap)
+     *   p.xy rotated by `rotationYDeg` around origin (Z-axis)
+     *   p += (nodeX+0.5+offsetX, nodeY+0.5+offsetY, nodeZ+0.5+offsetZ)
+     */
+    fun drawMeshSolid(
+        verts: FloatArray, indices: ShortArray,
+        cx: Float, cy: Float, cz: Float, scale: Float,
+        nodeX: Float, nodeY: Float, nodeZ: Float,
+        offsetX: Float, offsetY: Float, offsetZ: Float,
+        rotationYDeg: Float,
+        r: Float, g: Float, b: Float, a: Float
+    ) {
+        val idxLen = (indices.size / 3) * 3
+        if (idxLen == 0) return
+        val room = maxGpuVertices - gpuVertexCount
+        if (room < 3) { warnGpuVertexOverflow(); return }
+        val emitVerts = if (idxLen > room) { warnGpuVertexOverflow(); (room / 3) * 3 } else idxLen
+
+        val rotated = rotationYDeg != 0f
+        val radY = if (rotated) Math.toRadians(rotationYDeg.toDouble()).toFloat() else 0f
+        val cosY = if (rotated) kotlin.math.cos(radY) else 1f
+        val sinY = if (rotated) kotlin.math.sin(radY) else 0f
+        val tx = nodeX + 0.5f + offsetX
+        val ty = nodeY + 0.5f + offsetY
+        val tz = nodeZ + 0.5f + offsetZ
+
+        val data = gpuVertexData
+        var off = gpuVertexCount * gpuFloatsPerVertex
+        var i = 0
+        while (i < emitVerts) {
+            val vIdx = indices[i].toInt() and 0xFFFF
+            val vi = vIdx * 6
+            val mx = (verts[vi]     - cx) * scale
+            val my = (verts[vi + 1] - cy) * scale
+            val mz = (verts[vi + 2] - cz) * scale
+            var px = mx; var py = mz; val pz = my
+            var nx = verts[vi + 3]; var ny = verts[vi + 5]; val nz = verts[vi + 4]
+            if (rotated) {
+                val rpx = px * cosY - py * sinY; val rpy = px * sinY + py * cosY; px = rpx; py = rpy
+                val rnx = nx * cosY - ny * sinY; val rny = nx * sinY + ny * cosY; nx = rnx; ny = rny
+            }
+            data[off]     = px + tx
+            data[off + 1] = py + ty
+            data[off + 2] = pz + tz
+            data[off + 3] = r
+            data[off + 4] = g
+            data[off + 5] = b
+            data[off + 6] = a
+            data[off + 7] = nx
+            data[off + 8] = ny
+            data[off + 9] = nz
+            off += 10
+            i++
+        }
+        gpuVertexCount += emitVerts
+    }
+
+    /** Same as [drawMeshSolid] but samples a per-vertex RGB triplet from
+     *  [colors] (3 floats per vertex, matching `MeshData.colors`). */
+    fun drawMeshPerVertexColor(
+        verts: FloatArray, colors: FloatArray, indices: ShortArray,
+        cx: Float, cy: Float, cz: Float, scale: Float,
+        nodeX: Float, nodeY: Float, nodeZ: Float,
+        offsetX: Float, offsetY: Float, offsetZ: Float,
+        rotationYDeg: Float,
+        a: Float
+    ) {
+        val idxLen = (indices.size / 3) * 3
+        if (idxLen == 0) return
+        val room = maxGpuVertices - gpuVertexCount
+        if (room < 3) { warnGpuVertexOverflow(); return }
+        val emitVerts = if (idxLen > room) { warnGpuVertexOverflow(); (room / 3) * 3 } else idxLen
+
+        val rotated = rotationYDeg != 0f
+        val radY = if (rotated) Math.toRadians(rotationYDeg.toDouble()).toFloat() else 0f
+        val cosY = if (rotated) kotlin.math.cos(radY) else 1f
+        val sinY = if (rotated) kotlin.math.sin(radY) else 0f
+        val tx = nodeX + 0.5f + offsetX
+        val ty = nodeY + 0.5f + offsetY
+        val tz = nodeZ + 0.5f + offsetZ
+
+        val data = gpuVertexData
+        var off = gpuVertexCount * gpuFloatsPerVertex
+        var i = 0
+        while (i < emitVerts) {
+            val vIdx = indices[i].toInt() and 0xFFFF
+            val vi = vIdx * 6
+            val ci = vIdx * 3
+            val mx = (verts[vi]     - cx) * scale
+            val my = (verts[vi + 1] - cy) * scale
+            val mz = (verts[vi + 2] - cz) * scale
+            var px = mx; var py = mz; val pz = my
+            var nx = verts[vi + 3]; var ny = verts[vi + 5]; val nz = verts[vi + 4]
+            if (rotated) {
+                val rpx = px * cosY - py * sinY; val rpy = px * sinY + py * cosY; px = rpx; py = rpy
+                val rnx = nx * cosY - ny * sinY; val rny = nx * sinY + ny * cosY; nx = rnx; ny = rny
+            }
+            data[off]     = px + tx
+            data[off + 1] = py + ty
+            data[off + 2] = pz + tz
+            data[off + 3] = colors[ci]
+            data[off + 4] = colors[ci + 1]
+            data[off + 5] = colors[ci + 2]
+            data[off + 6] = a
+            data[off + 7] = nx
+            data[off + 8] = ny
+            data[off + 9] = nz
+            off += 10
+            i++
+        }
+        gpuVertexCount += emitVerts
+    }
+
+    /**
+     * Allocation-free collector for shadow occluder triangles. Walks the
+     * mesh's index buffer once with the same transform stack as
+     * [drawMeshSolid] and writes 9 floats per triangle (3 vertices ×
+     * x,y,z) directly into [outData] starting at index `outOffset*9`.
+     * Returns the number of triangles actually written (may be less than
+     * the mesh's triangle count if [outCapacityTris] would be exceeded).
+     */
+    fun collectMeshShadowTriangles(
+        verts: FloatArray, indices: ShortArray,
+        cx: Float, cy: Float, cz: Float, scale: Float,
+        nodeX: Float, nodeY: Float, nodeZ: Float,
+        offsetX: Float, offsetY: Float, offsetZ: Float,
+        rotationYDeg: Float,
+        outData: FloatArray, outOffsetTris: Int, outCapacityTris: Int
+    ): Int {
+        val triCount = indices.size / 3
+        if (triCount == 0 || outCapacityTris <= outOffsetTris) return 0
+        val emitTris = minOf(triCount, outCapacityTris - outOffsetTris)
+        if (emitTris <= 0) return 0
+
+        val rotated = rotationYDeg != 0f
+        val radY = if (rotated) Math.toRadians(rotationYDeg.toDouble()).toFloat() else 0f
+        val cosY = if (rotated) kotlin.math.cos(radY) else 1f
+        val sinY = if (rotated) kotlin.math.sin(radY) else 0f
+        val tx = nodeX + 0.5f + offsetX
+        val ty = nodeY + 0.5f + offsetY
+        val tz = nodeZ + 0.5f + offsetZ
+
+        var out = outOffsetTris * 9
+        val emitLimit = emitTris * 3
+        var i = 0
+        while (i < emitLimit) {
+            // 3 vertices of one triangle
+            var k = 0
+            while (k < 3) {
+                val vIdx = indices[i + k].toInt() and 0xFFFF
+                val vi = vIdx * 6
+                val mx = (verts[vi]     - cx) * scale
+                val my = (verts[vi + 1] - cy) * scale
+                val mz = (verts[vi + 2] - cz) * scale
+                var px = mx; var py = mz; val pz = my
+                if (rotated) {
+                    val rpx = px * cosY - py * sinY; val rpy = px * sinY + py * cosY; px = rpx; py = rpy
+                }
+                outData[out]     = px + tx
+                outData[out + 1] = py + ty
+                outData[out + 2] = pz + tz
+                out += 3
+                k++
+            }
+            i += 3
+        }
+        return emitTris
     }
 
     private fun putGpuVertex(offset: Int, wx: Float, wy: Float, wz: Float,
@@ -1498,6 +1837,7 @@ class SimpleUI(
         if (shadowTriSsboBuffer != VK_NULL_HANDLE) vmaDestroyBuffer(context.allocator, shadowTriSsboBuffer, shadowTriSsboAlloc)
         if (tileLightCountSsboBuffer != VK_NULL_HANDLE) vmaDestroyBuffer(context.allocator, tileLightCountSsboBuffer, tileLightCountSsboAlloc)
         if (tileLightIndexSsboBuffer != VK_NULL_HANDLE) vmaDestroyBuffer(context.allocator, tileLightIndexSsboBuffer, tileLightIndexSsboAlloc)
+        if (tileQualitySsboBuffer != VK_NULL_HANDLE) vmaDestroyBuffer(context.allocator, tileQualitySsboBuffer, tileQualitySsboAlloc)
         if (litDescriptorPool != VK_NULL_HANDLE) vkDestroyDescriptorPool(context.vkDevice, litDescriptorPool, null)
         if (litDescriptorSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(context.vkDevice, litDescriptorSetLayout, null)
         if (litPipeline != VK_NULL_HANDLE) vkDestroyPipeline(context.vkDevice, litPipeline, null)
@@ -1512,3 +1852,8 @@ class SimpleUI(
         ShaderCompiler.destroyShaderModule(context.vkDevice, gpuFragShaderModule)
     }
 }
+
+
+
+
+

@@ -11,6 +11,17 @@ package com.roguelike.core.model
  */
 class WorldNode(val x: Int, val y: Int, val z: Int) {
 
+    /**
+     * Back-reference to the [World] this node belongs to. Set by [World] when
+     * the node is created or moved into the grid (via construction or
+     * [World.ensureSize] / [World.setSize]). The reference enables the node
+     * to notify the world when its empty/non-empty status changes, so that
+     * the world can maintain a sparse index of populated cells — this lets
+     * hot per-frame loops (lighting / shadow collection) iterate just the
+     * non-empty cells instead of the entire grid volume.
+     */
+    internal var world: World? = null
+
     object Tags {
         const val PLAYER_SPAWN = "player_spawn"
         const val ENEMY_SPAWN  = "enemy_spawn"
@@ -29,9 +40,18 @@ class WorldNode(val x: Int, val y: Int, val z: Int) {
     /** Read-only view of all tiles currently placed on this node. */
     val tiles: Collection<Tile> get() = tileSlots.values
 
-    fun setTile(tile: Tile): Tile? = tileSlots.put(tile.slot, tile)
+    fun setTile(tile: Tile): Tile? {
+        val wasEmpty = tileSlots.isEmpty()
+        val prev = tileSlots.put(tile.slot, tile)
+        if (wasEmpty && tileSlots.isNotEmpty()) world?.onNodeBecameNonEmpty(this)
+        return prev
+    }
     fun getTile(slot: TileSlot): Tile? = tileSlots[slot]
-    fun removeTile(slot: TileSlot): Tile? = tileSlots.remove(slot)
+    fun removeTile(slot: TileSlot): Tile? {
+        val prev = tileSlots.remove(slot)
+        if (prev != null && tileSlots.isEmpty()) world?.onNodeBecameEmpty(this)
+        return prev
+    }
     fun hasTile(slot: TileSlot): Boolean = tileSlots.containsKey(slot)
 
     // ── Floor helpers ───────────────────────────────────────────────────
@@ -126,6 +146,7 @@ class WorldNode(val x: Int, val y: Int, val z: Int) {
     // ── Reset ───────────────────────────────────────────────────────────
 
     fun clear() {
+        val wasNonEmpty = tileSlots.isNotEmpty()
         tileSlots.clear()
         _doorSlots.clear()
         _manualDoorSlots.clear()
@@ -133,5 +154,6 @@ class WorldNode(val x: Int, val y: Int, val z: Int) {
         _ladderSlots.clear()
         items.clear()
         tags.clear()
+        if (wasNonEmpty) world?.onNodeBecameEmpty(this)
     }
 }

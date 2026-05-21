@@ -1,0 +1,27 @@
+{
+  "width": 3,
+  "height": 3,
+  "depth": 3,
+  "nodes": [
+    {"x":0,"y":0,"z":2,"tiles":[{"type":"WallNorthTile","slot":"WALL_NORTH"},{"type":"WallEastTile","slot":"WALL_EAST"}]},
+    {"x":0,"y":1,"z":2,"tiles":[{"type":"FloorTile","slot":"FLOOR"},{"type":"CeilingTile","slot":"CEILING"}],"socketSlots":["WALL_WEST"]},
+    {"x":0,"y":2,"z":2,"tiles":[{"type":"WallSouthTile","slot":"WALL_SOUTH"}]},
+    {"x":1,"y":0,"z":2,"tiles":[{"type":"FloorTile","slot":"FLOOR"},{"type":"CeilingTile","slot":"CEILING"}],"socketSlots":["WALL_SOUTH"]},
+    {"x":1,"y":1,"z":0,"tiles":[{"type":"WallWestTile","slot":"WALL_WEST"},{"type":"WallSouthTile","slot":"WALL_SOUTH"},{"type":"FloorTile","slot":"FLOOR"},{"type":"CeilingTile","slot":"CEILING"}]},
+    {"x":1,"y":1,"z":2,"tiles":[{"type":"FloorTile","slot":"FLOOR"},{"type":"CeilingTile","slot":"CEILING"}]},
+    {"x":1,"y":2,"z":0,"tiles":[{"type":"WallWestTile","slot":"WALL_WEST"},{"type":"FloorTile","slot":"FLOOR"},{"type":"CeilingTile","slot":"CEILING"}],"socketSlots":["WALL_NORTH"]},
+    {"x":1,"y":2,"z":2,"tiles":[{"type":"WallSouthTile","slot":"WALL_SOUTH"}]},
+    {"x":2,"y":0,"z":2,"tiles":[{"type":"WallWestTile","slot":"WALL_WEST"}]},
+    {"x":2,"y":1,"z":0,"tiles":[{"type":"WallSouthTile","slot":"WALL_SOUTH"},{"type":"WallNorthTile","slot":"WALL_NORTH"},{"type":"FloorTile","slot":"FLOOR"},{"type":"CeilingTile","slot":"CEILING"}],"socketSlots":["WALL_EAST"]},
+    {"x":2,"y":1,"z":2,"tiles":[{"type":"WallWestTile","slot":"WALL_WEST"}]},
+    {"x":2,"y":2,"z":0,"tiles":[{"type":"WallWestTile","slot":"WALL_WEST"}]}
+  ],
+  "associations": [
+  ],
+  "props": [
+  ],
+  "lightSources": [
+    {"id":"f1d93210-f826-4d28-9a66-0cc6a3fff236","x":1.5,"y":1.5,"z":0.8,"intensity":5.0,"radius":5.0,"colorHex":"ffcc88"},
+    {"id":"77a69b1c-b835-4271-a927-08f0902e727b","x":1.5,"y":1.5,"z":2.8,"intensity":5.0,"radius":5.0,"colorHex":"ffcc88"}
+  ]
+}

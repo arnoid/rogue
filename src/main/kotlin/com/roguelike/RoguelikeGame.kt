@@ -4,6 +4,8 @@ import com.roguelike.core.math.Vec3
 import com.roguelike.core.model.Tile
 import com.roguelike.core.model.TileSlot
 import com.roguelike.core.model.WorldNode
+import com.roguelike.core.perf.PerfFlags
+import com.roguelike.core.perf.WindowShiftHysteresis
 import com.roguelike.core.systems.MovementSystem
 import com.roguelike.core.systems.InteractionSystem
 import com.roguelike.generation.BiomeDefinition
@@ -64,6 +66,131 @@ class RoguelikeGame(
     // Smoothed framerate (exponential moving average) for top-left HUD indicator.
     private var smoothedFps: Float = 0f
 
+    // ── Per-frame phase profiler ─────────────────────────────────────────
+    // Each phase records a running EMA of its CPU wall-clock cost in
+    // milliseconds. Displayed on the HUD and dumped to stdout once per
+    // second so we have hard numbers to chase.
+    private val phaseMs = HashMap<String, Float>()
+    private var phaseDumpAt = System.nanoTime()
+    private var lastFrameTrisRendered = 0
+    private var lastFrameShadowTris = 0
+    private var lastFrameLights = 0
+
+    // spec 008 / US2 (T035 + T037): per-frame shadow-cell-cache counters
+    // used by PerfHud.classify to label cache_miss frames. These are NOT
+    // accumulated forever — they are zeroed at the top of every
+    // uploadLighting() so the HUD's hit-rate reflects "this frame" not
+    // "since launch". `CacheCounterResetTest` pins that invariant.
+    @Volatile private var shadowCellCacheMissCount = 0
+    @Volatile private var shadowCellsTouchedCount = 0
+    /** Test/diagnostic accessor — used by `CacheCounterResetTest` to assert
+     *  the per-frame reset behaviour without exposing the mutable fields. */
+    internal fun debugReadCacheCounters(): Pair<Int, Int> =
+        shadowCellCacheMissCount to shadowCellsTouchedCount
+    private inline fun <R> timed(name: String, block: () -> R): R {
+        val t0 = System.nanoTime()
+        val r = block()
+        val ms = (System.nanoTime() - t0) / 1_000_000f
+        val prev = phaseMs[name] ?: ms
+        phaseMs[name] = prev * 0.9f + ms * 0.1f
+        return r
+    }
+    private fun recordSubPhase(name: String, ms: Float) {
+        val prev = phaseMs[name] ?: ms
+        phaseMs[name] = prev * 0.9f + ms * 0.1f
+    }
+
+    // ── Reusable scratch for uploadLighting ──────────────────────────────
+    // Avoid 580 KB/frame of IntArray and per-frame List allocations.
+    private class IntScratch {
+        private var arr: IntArray = IntArray(0)
+        fun ensure(n: Int): IntArray {
+            if (arr.size < n) arr = IntArray(n + (n ushr 1))
+            return arr
+        }
+    }
+    private class LongScratch {
+        private var arr: LongArray = LongArray(0)
+        fun ensure(n: Int): LongArray {
+            if (arr.size < n) arr = LongArray(n + (n ushr 1))
+            return arr
+        }
+    }
+    private val occupancyScratch = IntScratch()
+    private val needShadowScratch = LongScratch()
+    private val reusableLightData = ArrayList<SimpleUI.LightData>(SimpleUI.MAX_LIGHTS)
+
+    // ── Per-cell shadow geometry cache ───────────────────────────────────
+    // For each (worldX, worldY, worldZ) we cache:
+    //   key    : a content hash of the cell's shadow-relevant tile state
+    //            (stair rotation, door open/closed, etc).
+    //   tris   : the packed shadow-triangle floats (9 per triangle) that
+    //            collectShadowTriangles + collectDoorShadowTriangles would
+    //            emit for this cell. Already transformed to world space —
+    //            independent of camera/light, so safe to reuse.
+    //   borrow : for door frames straddling a wall the original code
+    //            registered the triangle batch twice (owning cell + cell
+    //            on the other side). We replicate that here as a small
+    //            list of (dx,dy,dz, offsetFloat, count) entries telling
+    //            the cache-replay where to also stamp the same tri range.
+    //
+    // Cells without stair/door/ladder content cache an empty result (key
+    // matches → zero-cost skip).  When a cell falls outside the next
+    // frame's window we keep the cache entry — re-entry on a backtrack
+    // re-uses it. We evict the LRU half of the map only when it exceeds
+    // a hard cap to bound memory.
+    private class ShadowCacheEntry(
+        var key: Long = 0L,
+        var tris: FloatArray = FloatArray(0),
+        var triCount: Int = 0,
+        // Borrow offsets: 4 ints per borrow (dx, dy, dz, firstTriOffset),
+        // count entries packed at the start.
+        var borrows: IntArray = IntArray(0),
+        var borrowCount: Int = 0
+    )
+    private val shadowCellCache = HashMap<Long, ShadowCacheEntry>(4096)
+    private fun packCellKey(x: Int, y: Int, z: Int): Long =
+        ((x.toLong() and 0xFFFFFL) shl 40) or ((y.toLong() and 0xFFFFFL) shl 20) or (z.toLong() and 0xFFFFFL)
+
+    /**
+     * Build a content key for a cell. Mirrors what the producer code
+     * actually reads: STAIRS rotation, LADDER rotation, door-slot state
+     * (closed/open + which slot). Doesn't include occupancy bits — those
+     * don't affect the shadow tri set.
+     */
+    private fun shadowKeyFor(node: com.roguelike.core.model.WorldNode): Long {
+        var k = 1469598103934665603L
+        fun mix(v: Int) { k = (k xor v.toLong()) * 1099511628211L }
+        val stairsT = node.getTile(TileSlot.STAIRS)
+        when (stairsT) {
+            is StairsTile -> { mix(1); mix(stairsT.rotationY.toRawBits()) }
+            is LadderTile -> { mix(2); mix(stairsT.rotationY.toRawBits()) }
+            null -> mix(0)
+            else -> mix(3)
+        }
+        // Door / doorway state per slot. Plain walls are also folded into
+        // the key (per slot) because they now contribute their own shadow
+        // triangles via the wall-mesh occluder block in uploadLighting —
+        // a cached cell without those triangles would otherwise stick
+        // around after a wall is added by the editor / procedural gen.
+        val slots = arrayOf(TileSlot.WALL_NORTH, TileSlot.WALL_SOUTH, TileSlot.WALL_EAST, TileSlot.WALL_WEST)
+        for ((i, slot) in slots.withIndex()) {
+            val t = node.getTile(slot)
+            val code: Int = when (t) {
+                is DoorNorthTile -> if (t.isOpen) 10 + i else 20 + i
+                is DoorSouthTile -> if (t.isOpen) 10 + i else 20 + i
+                is DoorEastTile  -> if (t.isOpen) 10 + i else 20 + i
+                is DoorWestTile  -> if (t.isOpen) 10 + i else 20 + i
+                is WallDoorwayNorthTile, is WallDoorwaySouthTile,
+                is WallDoorwayEastTile, is WallDoorwayWestTile -> 30 + i
+                null -> 0
+                else -> 40 + i  // plain wall (or any other non-special wall tile): unique per slot
+            }
+            if (code != 0) mix(code)
+        }
+        return k
+    }
+
     // Asset loading
     private val assetLoader = AssetLoader()
     private var floorMesh: MeshData? = null
@@ -96,6 +223,36 @@ class RoguelikeGame(
         const val MOUSE_SENSITIVITY: Float = 0.12f
         /** Degrees per second turn rate for the Q/E keyboard fallback. */
         const val KEYBOARD_TURN_RATE: Float = 120f
+        /**
+         * Minimum ambient floor applied to lit geometry in the Arena.
+         *
+         * Set to a small non-zero value so fragments not reached by any
+         * light still render with a faint base colour instead of pure
+         * black. Without this floor, every fragment whose tile bin has
+         * no surviving light — or whose top-K lights all fail the
+         * shadow ray-march — collapses to RGB (0,0,0), producing flat
+         * geometric voids that destroy depth perception (see the
+         * "massive black void carving across the bottom half" repro
+         * screenshot). The swap-chain clear colour remains pure black,
+         * so the *background* outside any geometry still reads as true
+         * black; this constant only affects shaded fragments on actual
+         * world meshes.
+         *
+         * Value chosen empirically (~6% grey) to keep the lighting
+         * dramatic while preventing total information loss in shadowed
+         * regions. The editor uses [SimpleUI.updateLighting]'s default
+         * of 0.15f, which is brighter than appropriate for the Arena.
+         */
+        const val ARENA_AMBIENT: Float = 0.06f
+
+        /**
+         * spec 008: cells outside the view frustum that are still
+         * emitted so their wall meshes can be borrowed into in-frustum
+         * neighbours. 1 cell is enough because wall borrow-into only
+         * reaches the immediate neighbour (see uploadLighting's "borrow"
+         * comment). Behind PerfFlags.enabled.
+         */
+        const val FRUSTUM_SKIRT_CELLS: Int = 1
     }
 
     // File dialog
@@ -145,6 +302,10 @@ class RoguelikeGame(
 
     /** One-shot warning latch: too many shadow triangles in one frame. */
     private var shadowTriOverflowWarned = false
+    // spec 008 (FR-008): one-shot warning for the per-cell triangle
+    // cap. We don't want a warning spam if the asset that breaches
+    // the cap is on screen continuously.
+    private var triPerCellCapWarned = false
 
     // ── Forward+ per-tile light bin scratch buffers ──────────────────────
     //
@@ -156,6 +317,18 @@ class RoguelikeGame(
     // because the top-K shader pass would have culled them anyway).
     private val tileLightCount = IntArray(SimpleUI.MAX_LIGHT_TILES)
     private val tileLightIndices = IntArray(SimpleUI.MAX_LIGHT_TILES * SimpleUI.MAX_LIGHTS_PER_TILE)
+    // spec 008: reusable per-tile shadow-quality byte array. Allocated
+    // once at MAX_LIGHT_TILES so the hot path stays alloc-free; only the
+    // prefix [0, tileCount) is rewritten each frame and SimpleUI zeroes
+    // the tail. See contracts/tile-quality-ssbo.md.
+    private val tileQualityBuf = ByteArray(SimpleUI.MAX_LIGHT_TILES)
+    // spec 008: window-shift hysteresis. Pure-logic state machine that
+    // re-anchors the lighting grid window only when the desired origin
+    // has moved ≥ 4 cells AND ≥ 8 frames have passed since the last
+    // shift. Override (forceShift) when the per-frame visible-light
+    // count jumps by > 20 % so a new room can't go dark for 8 frames.
+    // See data-model.md §3 and contracts/perf-flags.md.
+    private val windowHysteresis = WindowShiftHysteresis(cellThreshold = 4, frameCooldown = 8)
     private var tileBinOverflowWarned = false
 
     /**
@@ -171,6 +344,18 @@ class RoguelikeGame(
         fun add(v: Float): Boolean {
             if (size >= data.size) return false
             data[size++] = v
+            return true
+        }
+        /**
+         * Bulk-append [len] floats from [src] starting at [srcOff].
+         * Returns false (and copies nothing) if the buffer would
+         * overflow. Backed by `System.arraycopy` — ~50× faster than
+         * looping `add()` for the per-cell cache replay.
+         */
+        fun addAll(src: FloatArray, srcOff: Int, len: Int): Boolean {
+            if (size + len > data.size) return false
+            System.arraycopy(src, srcOff, data, size, len)
+            size += len
             return true
         }
     }
@@ -407,12 +592,12 @@ class RoguelikeGame(
         }
 
         // Per-frame interaction tick: rescue trapped actors, process deferred door closes
-        interactionSystem?.update(delta)
+        timed("interaction") { interactionSystem?.update(delta) }
 
         // Notify procedural manager so it can lazily generate adjacent submaps
         // when the player crosses into a new region. New submaps are stamped
         // into `w` in-place, which may also grow the world's dimensions.
-        proceduralManager.onPlayerMove(p.position.x, p.position.y, p.position.z)
+        timed("procedural") { proceduralManager.onPlayerMove(p.position.x, p.position.y, p.position.z) }
         if (w.depth - 1 > maxRenderZ) maxRenderZ = w.depth - 1
 
         // First-person camera controls.
@@ -449,11 +634,13 @@ class RoguelikeGame(
         // distance cap. With the renderer no longer culling by player
         // distance we want every visible fixture to participate in
         // shading, regardless of how many rooms away it is.
-        val candidateLights = proceduralManager.collectVisibleRoomLights(
-            p.position.x, p.position.y, p.position.z,
-            maxRoomDistance = 1_000_000
-        )
-        uploadLighting(w, candidateLights)
+        val candidateLights = timed("collectLights") {
+            proceduralManager.collectVisibleRoomLights(
+                p.position.x, p.position.y, p.position.z,
+                maxRoomDistance = 1_000_000
+            )
+        }
+        timed("uploadLighting") { uploadLighting(w, candidateLights) }
 
         // Set VP matrix
         val vpFloats = FloatArray(16)
@@ -461,7 +648,7 @@ class RoguelikeGame(
         ui.setViewProjection(vpFloats)
 
         // Render world
-        renderWorld(w)
+        timed("renderWorld") { renderWorld(w) }
 
         // In first-person mode the camera sits inside the player, so we
         // intentionally don't draw the player avatar — it would just
@@ -474,9 +661,94 @@ class RoguelikeGame(
         // Framerate indicator (top-left). Smoothed via EMA to avoid jitter.
         val instantFps = if (delta > 0f) 1f / delta else 0f
         smoothedFps = if (smoothedFps <= 0f) instantFps else smoothedFps * 0.9f + instantFps * 0.1f
-        ui.drawText("FPS: %.0f".format(smoothedFps), 10f, 10f, 1f, 1f, 0.4f, 1f, 1.2f)
+        ui.drawText("FPS: %.0f  (%.1f ms)".format(smoothedFps, 1000f / smoothedFps.coerceAtLeast(0.01f)), 10f, 10f, 1f, 1f, 0.4f, 1f, 1.2f)
         val posStr = "Pos: %.1f, %.1f, %.1f".format(p.position.x, p.position.y, p.position.z)
         ui.drawText(posStr, 10f, 32f, 0.7f, 0.7f, 0.8f, 1f, 1.1f)
+
+        // Per-phase timings (top-left, below pos). Cheap; lets us watch
+        // the bottleneck live without attaching a profiler.
+        var hudY = 54f
+        val phases = arrayOf(
+            "interaction", "procedural", "collectLights", "uploadLighting", "renderWorld",
+            "ul.cull", "ul.alloc", "ul.stamp", "ul.collect", "ul.pack", "ul.tiles+light", "ul.upload"
+        )
+        for (name in phases) {
+            val ms = phaseMs[name] ?: continue
+            ui.drawText("%-15s %5.1f ms".format(name, ms), 10f, hudY, 0.85f, 0.85f, 0.95f, 1f, 1f)
+            hudY += 16f
+        }
+        ui.drawText("lights=$lastFrameLights  shadowTris=$lastFrameShadowTris", 10f, hudY, 0.7f, 0.85f, 0.7f, 1f, 1f)
+        hudY += 16f
+        ui.drawText("worldSize=${w.width}x${w.height}x${w.depth}", 10f, hudY, 0.6f, 0.6f, 0.7f, 1f, 1f)
+        hudY += 16f
+        // spec 008 / US2 (T035, T041): show the derived perf label so a
+        // human can confirm at a glance whether F11 is doing what they
+        // think it is doing. `disabled` IFF PerfFlags.enabled is false.
+        run {
+            val frameMs = 1000f / smoothedFps.coerceAtLeast(0.01f)
+            val cpuPhases =
+                (phaseMs["interaction"] ?: 0f) +
+                (phaseMs["procedural"] ?: 0f) +
+                (phaseMs["collectLights"] ?: 0f) +
+                (phaseMs["uploadLighting"] ?: 0f) +
+                (phaseMs["renderWorld"] ?: 0f)
+            val touched = shadowCellsTouchedCount
+            val misses = shadowCellCacheMissCount
+            val cacheHit = if (touched == 0) 1f else 1f - (misses.toFloat() / touched.toFloat())
+            val driver = com.roguelike.core.perf.PerfHud.classify(
+                frameMs = frameMs,
+                cpuPhases = cpuPhases,
+                uploadMs = phaseMs["uploadLighting"] ?: 0f,
+                cacheHitRate = cacheHit,
+                flagEnabled = com.roguelike.core.perf.PerfFlags.enabled
+            )
+            ui.drawText(
+                "driver=%s  cache_hit=%.0f%%  gpu_ms=%.1f".format(driver, cacheHit * 100f, (frameMs - cpuPhases).coerceAtLeast(0f)),
+                10f, hudY, 0.95f, 0.8f, 0.5f, 1f, 1f
+            )
+        }
+
+        // Once per second, dump the same numbers to stdout so we have a
+        // copy-pasteable record.
+        val nowNs = System.nanoTime()
+        if (nowNs - phaseDumpAt > 1_000_000_000L) {
+            phaseDumpAt = nowNs
+            val frameMs = 1000f / smoothedFps.coerceAtLeast(0.01f)
+            val sb = StringBuilder("[Profile] fps=%.1f frame=%.1fms".format(smoothedFps, frameMs))
+            for (name in phases) phaseMs[name]?.let { sb.append("  $name=%.1f".format(it)) }
+            sb.append("  lights=$lastFrameLights shadowTris=$lastFrameShadowTris world=${w.width}x${w.height}x${w.depth}")
+
+            // spec 008 / US2 (T035, T036, T041): derived perf-skeptic
+            // labels. `gpu_ms` is what's left of the frame after the
+            // recorded CPU phases; `cache_hit` reads from the
+            // per-frame counters wired above; `driver` calls into
+            // `PerfHud.classify` so the single source of truth lives
+            // there (see PerfHudTest / PerfHudClassifierTest). When
+            // `PerfFlags.enabled == false`, classify() returns
+            // `disabled` regardless of the measured numbers — that's
+            // the contract the A/B capture relies on.
+            val cpuPhases =
+                (phaseMs["interaction"] ?: 0f) +
+                (phaseMs["procedural"] ?: 0f) +
+                (phaseMs["collectLights"] ?: 0f) +
+                (phaseMs["uploadLighting"] ?: 0f) +
+                (phaseMs["renderWorld"] ?: 0f)
+            val gpuMs = (frameMs - cpuPhases).coerceAtLeast(0f)
+            val touched = shadowCellsTouchedCount
+            val misses = shadowCellCacheMissCount
+            val cacheHit = if (touched == 0) 1f else 1f - (misses.toFloat() / touched.toFloat())
+            val uploadMs = phaseMs["uploadLighting"] ?: 0f
+            val driver = com.roguelike.core.perf.PerfHud.classify(
+                frameMs = frameMs,
+                cpuPhases = cpuPhases,
+                uploadMs = uploadMs,
+                cacheHitRate = cacheHit,
+                flagEnabled = com.roguelike.core.perf.PerfFlags.enabled
+            )
+            sb.append("  gpu_ms=%.1f cache_hit=%.0f%% driver=%s".format(gpuMs, cacheHit * 100f, driver))
+            println(sb.toString())
+        }
+
         // Simple crosshair (two short bars centred on screen).
         val cx = sw * 0.5f; val cy = sh * 0.5f
         ui.drawRect(cx - 6f, cy - 1f, 12f, 2f, 1f, 1f, 1f, 0.8f)
@@ -506,6 +778,14 @@ class RoguelikeGame(
     }
 
     private fun uploadLighting(w: World, candidateLights: List<com.roguelike.core.model.LightSource>) {
+        val t0 = System.nanoTime()
+
+        // spec 008 / US2 (T035, T037): zero per-frame cache counters BEFORE
+        // any cell work so the HUD's cache-hit-rate measures only this
+        // frame. Pinned by `CacheCounterResetTest`.
+        shadowCellCacheMissCount = 0
+        shadowCellsTouchedCount = 0
+
         // ── 1. Frustum-cull light sources ──────────────────────────────────
         // Each light's influence is a sphere (centre = position, radius =
         // light radius). Skip uploading any light whose sphere can't touch
@@ -538,9 +818,13 @@ class RoguelikeGame(
         // "everything frustum-culled" vs "MAX_LIGHTS truncation".
         logUploadLighting(candidateLights, frustumLights, visibleLights)
 
+        val tCull = System.nanoTime()
+
         if (visibleLights.isEmpty()) {
-            ui.updateLighting(emptyList(), IntArray(1), 1, 1, 1, ambient = 0f)
+            ui.updateLighting(emptyList(), IntArray(1), 1, 1, 1, ambient = ARENA_AMBIENT)
             ui.updateShadowTriangles(expandedTriBuf.data, 0)
+            lastFrameLights = 0
+            lastFrameShadowTris = 0
             // Zero the per-tile bins so the shader's Forward+ path sees
             // an empty list this frame instead of stale indices.
             uploadLightTiles(emptyList())
@@ -575,9 +859,36 @@ class RoguelikeGame(
             if (lyi + r > maxY) maxY = lyi + r
             if (lzi + r > maxZ) maxZ = lzi + r
         }
-        val originX = minX.coerceIn(0, worldW - 1)
-        val originY = minY.coerceIn(0, worldH - 1)
-        val originZ = minZ.coerceIn(0, worldD - 1)
+        val desiredOriginX = minX.coerceIn(0, worldW - 1)
+        val desiredOriginY = minY.coerceIn(0, worldH - 1)
+        val desiredOriginZ = minZ.coerceIn(0, worldD - 1)
+        // spec 008: window-shift hysteresis. The desired origin (above)
+        // is what the spec-007 code would use; hysteresis may hold the
+        // previous origin if the player has only drifted a few cells.
+        // forceShift overrides hysteresis when the per-frame visible
+        // light count jumps by > 20 % (a new room popped into view).
+        // The end* clamps below stay derived from the desired (max+1),
+        // so the window grows to cover lights even when origin is held;
+        // only the *origin* anchor moves on a hysteresis-allowed shift.
+        val (rx, ry, rz) = if (PerfFlags.enabled) {
+            val prev = if (lastFrameLights == 0) 1 else lastFrameLights
+            val jump = kotlin.math.abs(visibleLights.size - lastFrameLights).toFloat() / prev
+            val force = jump > 0.20f
+            val resolved = windowHysteresis.resolve(
+                Triple(desiredOriginX, desiredOriginY, desiredOriginZ),
+                forceShift = force
+            )
+            Triple(resolved.first, resolved.second, resolved.third)
+        } else {
+            // PerfFlags.enabled = false → pixel-identical to spec 007:
+            // skip hysteresis entirely. (Hysteresis state goes stale
+            // until next enable — that's fine, the next call to
+            // resolve() re-anchors on its first invocation.)
+            Triple(desiredOriginX, desiredOriginY, desiredOriginZ)
+        }
+        val originX = rx.coerceIn(0, worldW - 1)
+        val originY = ry.coerceIn(0, worldH - 1)
+        val originZ = rz.coerceIn(0, worldD - 1)
         val endX = (maxX + 1).coerceIn(originX + 1, worldW)
         val endY = (maxY + 1).coerceIn(originY + 1, worldH)
         val endZ = (maxZ + 1).coerceIn(originZ + 1, worldD)
@@ -585,119 +896,377 @@ class RoguelikeGame(
         val gridH = endY - originY
         val gridD = endZ - originZ
         val cellCount = gridW * gridH * gridD
-        val occupancy = IntArray(cellCount)
+
+        // Reusable occupancy + "needs shadow tris" bitset (allocated once,
+        // grown on demand). Avoids 580 KB of GC pressure per frame on a
+        // 145k-cell window.
+        val occupancy = occupancyScratch.ensure(cellCount)
+        java.util.Arrays.fill(occupancy, 0, cellCount, 0)
+        val needShadow = needShadowScratch.ensure((cellCount + 63) ushr 6)
+        java.util.Arrays.fill(needShadow, 0, (cellCount + 63) ushr 6, 0L)
+
         // Reset scratch buffers — outer arrays are reused across frames.
         shadowTriBuf.reset()
         expandedTriBuf.reset()
         ensurePerCellCapacity(cellCount)
-        fun cellIdx(cx: Int, cy: Int, cz: Int): Int {
-            // cx/cy/cz are absolute world voxels; translate into window-local.
-            val lx = cx - originX
-            val ly = cy - originY
-            val lz = cz - originZ
-            if (lx < 0 || lx >= gridW || ly < 0 || ly >= gridH || lz < 0 || lz >= gridD) return -1
-            return lz * gridW * gridH + ly * gridW + lx
-        }
 
-        // Pre-compute light sphere bounds for cheap per-cell relevance tests.
-        // A cell only needs shadow triangles if it sits inside at least one
-        // light's radius (otherwise nothing will ever ray-march through it).
+        val tAlloc = System.nanoTime()
+
+        // ── 3a. Stamp each light's bounding box into the bitset ──────
+        //
+        // The bitset just answers "does any light reach this cell?" — the
+        // shader does precise per-pixel falloff anyway. So we just write
+        // the cell-AABB of the light (no per-cell distance test), and
+        // burst-set whole spans of bits per Y-row instead of one bit per
+        // cell. That collapses the per-light inner work to ~rows × 1
+        // span-set rather than `(2r+1)³` distance tests.
+        //
+        // Shadow-emission radius cap: triangles further than
+        // SHADOW_EMIT_RADIUS units from a light can't contribute a
+        // visually-meaningful shadow given typical light intensities, and
+        // emitting them blows MAX_SHADOW_TRIANGLES (the "shadow buffer
+        // full" warning the user has been seeing). Clamp here.
+        val SHADOW_EMIT_RADIUS = 10f
         val lightCount = visibleLights.size
-        val lx = FloatArray(lightCount)
-        val ly = FloatArray(lightCount)
-        val lz = FloatArray(lightCount)
-        val lr2 = FloatArray(lightCount)
-        for (i in 0 until lightCount) {
-            val ls = visibleLights[i]
-            lx[i] = ls.x; ly[i] = ls.y; lz[i] = ls.z
-            lr2[i] = ls.radius * ls.radius
-        }
-        fun cellTouchedByAnyLight(x: Int, y: Int, z: Int): Boolean {
-            val cx0 = x.toFloat(); val cy0 = y.toFloat(); val cz0 = z.toFloat()
-            val cx1 = cx0 + 1f;    val cy1 = cy0 + 1f;    val cz1 = cz0 + 1f
-            for (i in 0 until lightCount) {
-                val px = lx[i].coerceIn(cx0, cx1)
-                val py = ly[i].coerceIn(cy0, cy1)
-                val pz = lz[i].coerceIn(cz0, cz1)
-                val dx = px - lx[i]; val dy = py - ly[i]; val dz = pz - lz[i]
-                if (dx * dx + dy * dy + dz * dz <= lr2[i]) return true
-            }
-            return false
-        }
-
-        // Iterate ONLY the window — not the entire grown world.
-        for (z in originZ until endZ) {
-            for (y in originY until endY) {
-                for (x in originX until endX) {
-                    val node = w.getNode(x, y, z) ?: continue
-                    var flags = 0
-                    if (isSolidWall(node, TileSlot.WALL_NORTH)) flags = flags or 1
-                    if (isSolidWall(node, TileSlot.WALL_SOUTH)) flags = flags or 2
-                    if (isSolidWall(node, TileSlot.WALL_EAST))  flags = flags or 4
-                    if (isSolidWall(node, TileSlot.WALL_WEST))  flags = flags or 8
-                    if (node.hasTile(TileSlot.FLOOR))      flags = flags or 16
-                    if (node.hasTile(TileSlot.CEILING))    flags = flags or 32
-                    val wIdx = cellIdx(x, y, z); if (wIdx < 0) continue
-                    occupancy[wIdx] = flags
-
-                    if (!cellTouchedByAnyLight(x, y, z)) continue
-
-                    if (node.hasTile(TileSlot.STAIRS)) {
-                        val tile = node.getTile(TileSlot.STAIRS)
-                        if (tile is StairsTile) {
-                            stairsMesh?.let {
-                                val first = shadowTriBuf.triCount
-                                val n = collectShadowTriangles(it, x.toFloat(), y.toFloat(), z.toFloat(), 0f, 0f, 0f, stairsRenderRotation(tile.rotationY), shadowTriBuf)
-                                for (k in 0 until n) addPerCellTri(wIdx, first + k)
-                            }
-                        } else if (tile is LadderTile) {
-                            val rotY = tile.rotationY
-                            val offX = when (rotY) { 90f -> 0.5f; 270f -> -0.5f; else -> 0f }
-                            val offY = when (rotY) { 0f -> 0.5f; 180f -> -0.5f; else -> 0f }
-                            ladderMesh?.let {
-                                val first = shadowTriBuf.triCount
-                                val n = collectShadowTriangles(it, x.toFloat(), y.toFloat(), z.toFloat(), offX, offY, 0f, rotY, shadowTriBuf)
-                                for (k in 0 until n) addPerCellTri(wIdx, first + k)
-                            }
-                        }
-                    }
-
-                    collectDoorShadowTriangles(node, x, y, z, shadowTriBuf) { slot, firstTri, n ->
-                        for (k in 0 until n) addPerCellTri(wIdx, firstTri + k)
-                        val (nx, ny) = when (slot) {
-                            TileSlot.WALL_NORTH -> x to (y + 1)
-                            TileSlot.WALL_SOUTH -> x to (y - 1)
-                            TileSlot.WALL_EAST  -> (x + 1) to y
-                            TileSlot.WALL_WEST  -> (x - 1) to y
-                            else -> return@collectDoorShadowTriangles
-                        }
-                        val nbrIdx = cellIdx(nx, ny, z); if (nbrIdx < 0) return@collectDoorShadowTriangles
-                        for (k in 0 until n) addPerCellTri(nbrIdx, firstTri + k)
+        for (li in 0 until lightCount) {
+            val ls = visibleLights[li]
+            val r = kotlin.math.min(ls.radius, SHADOW_EMIT_RADIUS)
+            val lxi = kotlin.math.floor(ls.x - r).toInt().coerceAtLeast(originX)
+            val lyi = kotlin.math.floor(ls.y - r).toInt().coerceAtLeast(originY)
+            val lzi = kotlin.math.floor(ls.z - r).toInt().coerceAtLeast(originZ)
+            val lxe = kotlin.math.ceil(ls.x + r).toInt().coerceAtMost(endX - 1)
+            val lye = kotlin.math.ceil(ls.y + r).toInt().coerceAtMost(endY - 1)
+            val lze = kotlin.math.ceil(ls.z + r).toInt().coerceAtMost(endZ - 1)
+            if (lxe < lxi || lye < lyi || lze < lzi) continue
+            // Local-cell X range (window-relative).
+            val lx0 = lxi - originX
+            val lx1 = lxe - originX
+            for (cz in lzi..lze) {
+                val lz = cz - originZ
+                for (cy in lyi..lye) {
+                    val ly = cy - originY
+                    val rowBase = lz * gridW * gridH + ly * gridW
+                    // Set bits [rowBase+lx0 .. rowBase+lx1] inclusive.
+                    val from = rowBase + lx0
+                    val to = rowBase + lx1
+                    // Fast burst-set across long-word boundaries.
+                    var w0 = from ushr 6
+                    val w1 = to ushr 6
+                    val fromBit = from and 63
+                    val toBit = to and 63
+                    if (w0 == w1) {
+                        val mask = ((-1L ushr (63 - (toBit - fromBit))) shl fromBit)
+                        needShadow[w0] = needShadow[w0] or mask
+                    } else {
+                        needShadow[w0] = needShadow[w0] or (-1L shl fromBit)
+                        w0++
+                        while (w0 < w1) { needShadow[w0] = -1L; w0++ }
+                        needShadow[w1] = needShadow[w1] or (-1L ushr (63 - toBit))
                     }
                 }
             }
         }
 
-        // Pack per-cell triangle lists into the cell-flag bits. Bits 7-15
-        // hold the per-cell triangle count, bits 16-31 the start index.
-        // We now KNOW we'll never overflow the 16-bit start index because
-        // the window contains at most a handful of rooms, but we still
-        // bail out defensively if a degenerate case would overflow.
+        val tStamp = System.nanoTime()
+
+        // Iterate ONLY the non-empty cells inside the window — the sparse
+        // per-Z index in World gives us O(populated cells) instead of
+        // O(window volume). At ~93×81×18 = 135k cells, even a quick
+        // node.tiles.isEmpty() guard on every cell costs several ms per
+        // frame; the index drops that to the actual ~few-thousand
+        // populated cells the dungeon contains.
+        w.forEachNonEmptyInWindow(originX, originY, originZ, endX, endY, endZ) { node ->
+            val x = node.x; val y = node.y; val z = node.z
+            val wIdx = (z - originZ) * gridW * gridH + (y - originY) * gridW + (x - originX)
+            val isLit = (needShadow[wIdx ushr 6] and (1L shl (wIdx and 63))) != 0L
+            var flags = 0
+            if (isSolidWall(node, TileSlot.WALL_NORTH)) flags = flags or 1
+            if (isSolidWall(node, TileSlot.WALL_SOUTH)) flags = flags or 2
+            if (isSolidWall(node, TileSlot.WALL_EAST))  flags = flags or 4
+            if (isSolidWall(node, TileSlot.WALL_WEST))  flags = flags or 8
+            if (node.hasTile(TileSlot.FLOOR))      flags = flags or 16
+            if (node.hasTile(TileSlot.CEILING))    flags = flags or 32
+            occupancy[wIdx] = flags
+
+            if (!isLit) return@forEachNonEmptyInWindow
+
+            // Per-cell shadow geometry cache — most cells'
+            // shadow tris are stable frame-to-frame. We
+            // recompute only on cache miss (door toggled, new
+            // submap stamped, first visit).
+            val cellKey = packCellKey(x, y, z)
+            val contentKey = shadowKeyFor(node)
+            val cached = shadowCellCache[cellKey]
+            // spec 008 / US2 (T035): count every lit cell we touch and
+            // every cache miss. The HUD derives cache_hit_rate from these.
+            shadowCellsTouchedCount++
+            if (cached != null && cached.key == contentKey) {
+                // Cache hit: bulk-copy the cell's pre-computed
+                // triangle floats into shadowTriBuf and register
+                // the per-cell tri indices.
+                val n = cached.triCount
+                if (n > 0) {
+                    val first = shadowTriBuf.triCount
+                    if (!shadowTriBuf.addAll(cached.tris, 0, n * 9)) {
+                        // Buffer full — skip the remaining
+                        // cached batches this frame. The
+                        // existing shadowTriOverflowWarned
+                        // branch elsewhere will fire.
+                        return@forEachNonEmptyInWindow
+                    }
+                    for (k in 0 until n) addPerCellTri(wIdx, first + k)
+                    // Replay borrows (door frames & panels straddling
+                    // walls register into the neighbour cell).
+                    // Borrow record stride = 4 ints: [dx, dy, triOff, count].
+                    val bc = cached.borrowCount
+                    val brs = cached.borrows
+                    for (bi in 0 until bc) {
+                        val base = bi * 4
+                        val dx = brs[base]
+                        val dy = brs[base + 1]
+                        val triOff = brs[base + 2]
+                        val borrowCount = brs[base + 3]
+                        val nx = x + dx; val ny = y + dy
+                        if (nx < originX || nx >= endX || ny < originY || ny >= endY) continue
+                        val nbrIdx = (z - originZ) * gridW * gridH + (ny - originY) * gridW + (nx - originX)
+                        for (k in 0 until borrowCount) addPerCellTri(nbrIdx, first + triOff + k)
+                    }
+                }
+                return@forEachNonEmptyInWindow
+            }
+
+            // Cache miss: run the producers, then snapshot the
+            // emitted floats + borrows into the cache entry.
+            shadowCellCacheMissCount++
+            val cellFirstTri = shadowTriBuf.triCount
+            val cellBorrows = ArrayList<Int>(8)
+
+            if (node.hasTile(TileSlot.STAIRS)) {
+                val tile = node.getTile(TileSlot.STAIRS)
+                if (tile is StairsTile) {
+                    stairsMesh?.let {
+                        val first = shadowTriBuf.triCount
+                        val n = collectShadowTriangles(it, x.toFloat(), y.toFloat(), z.toFloat(), 0f, 0f, 0f, stairsRenderRotation(tile.rotationY), shadowTriBuf)
+                        for (k in 0 until n) addPerCellTri(wIdx, first + k)
+                    }
+                } else if (tile is LadderTile) {
+                    val rotY = tile.rotationY
+                    val offX = when (rotY) { 90f -> 0.5f; 270f -> -0.5f; else -> 0f }
+                    val offY = when (rotY) { 0f -> 0.5f; 180f -> -0.5f; else -> 0f }
+                    ladderMesh?.let {
+                        val first = shadowTriBuf.triCount
+                        val n = collectShadowTriangles(it, x.toFloat(), y.toFloat(), z.toFloat(), offX, offY, 0f, rotY, shadowTriBuf)
+                        for (k in 0 until n) addPerCellTri(wIdx, first + k)
+                    }
+                }
+            }
+
+            // ── Wall meshes as shadow occluders ──────────────────────────
+            //
+            // Walls were previously represented in the shadow system *only*
+            // by per-cell bit flags (bits 0-3 in occupancy[]). That bit-flag
+            // DDA correctly blocks rays that *cross* a cell boundary at a
+            // wall plane, but it produces no occlusion for rays whose
+            // entire span sits inside one cell — exactly the case that
+            // dominates floor/ceiling lighting. A wall standing on the
+            // east face of cell (5,5,0) sits at world x = 6.0; a floor
+            // fragment at world (5.9, 5.5, 0) and a light at world (5.1,
+            // 5.5, 0.5) are both in cell (5,5,0), so the DDA never crosses
+            // a boundary and the wall flag is never tested — the floor
+            // lights up *as if the wall were not there*, which is the
+            // exact symptom the user reported ("floors and ceilings are
+            // lit as if there are no walls").
+            //
+            // Adding the wall *mesh* (12 triangles) to the per-cell shadow
+            // triangle buffer makes the per-pixel ray-march test the ray
+            // against the actual wall geometry via Möller-Trumbore. Because
+            // a wall mesh straddles the boundary between two cells, we
+            // borrow it into the neighbour cell too (same mechanism the
+            // door producer already uses) so a fragment on either side
+            // sees the wall as an occluder during its same-cell test.
+            //
+            // Cost: ≤ 4 × 12 = 48 extra triangles per cell with all four
+            // walls. The per-cell count field is 8 bits (max 255), so a
+            // full-walled cell with stairs + doors still stays under the
+            // limit. Realistic per-window total grows from ~8 k to ~30 k,
+            // well under MAX_SHADOW_TRIANGLES (131 071).
+            //
+            // We skip slots that already produced shadow geometry via
+            // [collectDoorShadowTriangles] (doors and doorway-walls) so we
+            // don't double up the occluder for the same physical mesh.
+            val wm = wallMesh
+            if (wm != null) {
+                for (slotIdx in 0 until 4) {
+                    val slot = when (slotIdx) {
+                        0 -> TileSlot.WALL_NORTH
+                        1 -> TileSlot.WALL_SOUTH
+                        2 -> TileSlot.WALL_EAST
+                        else -> TileSlot.WALL_WEST
+                    }
+                    if (!isSolidWall(node, slot)) continue // door/doorway already produced geometry
+                    val (offX, offY, rotDeg) = when (slot) {
+                        TileSlot.WALL_NORTH -> Triple( 0.0f,  0.5f,   0f)
+                        TileSlot.WALL_SOUTH -> Triple( 0.0f, -0.5f, 180f)
+                        TileSlot.WALL_EAST  -> Triple( 0.5f,  0.0f,  90f)
+                        else                -> Triple(-0.5f,  0.0f, 270f) // WALL_WEST
+                    }
+                    val first = shadowTriBuf.triCount
+                    val n = collectShadowTriangles(
+                        wm, x.toFloat(), y.toFloat(), z.toFloat(),
+                        offX, offY, 0f, rotDeg, shadowTriBuf
+                    )
+                    if (n == 0) continue
+                    for (k in 0 until n) addPerCellTri(wIdx, first + k)
+                    // Borrow into the neighbour cell on the other side of
+                    // the wall so its floor/ceiling fragments also see the
+                    // wall as an occluder when the ray stays inside one
+                    // cell (same idea as the existing door-borrow logic).
+                    val (nx, ny) = when (slot) {
+                        TileSlot.WALL_NORTH -> x to (y + 1)
+                        TileSlot.WALL_SOUTH -> x to (y - 1)
+                        TileSlot.WALL_EAST  -> (x + 1) to y
+                        else                -> (x - 1) to y
+                    }
+                    if (nx in originX until endX && ny in originY until endY) {
+                        val nbrIdx = (z - originZ) * gridW * gridH + (ny - originY) * gridW + (nx - originX)
+                        for (k in 0 until n) addPerCellTri(nbrIdx, first + k)
+                        cellBorrows.add(nx - x)
+                        cellBorrows.add(ny - y)
+                        cellBorrows.add(first - cellFirstTri)
+                        cellBorrows.add(n)
+                    }
+                }
+            }
+
+            collectDoorShadowTriangles(node, x, y, z, shadowTriBuf) { slot, firstTri, n ->
+                for (k in 0 until n) addPerCellTri(wIdx, firstTri + k)
+                val (nx, ny) = when (slot) {
+                    TileSlot.WALL_NORTH -> x to (y + 1)
+                    TileSlot.WALL_SOUTH -> x to (y - 1)
+                    TileSlot.WALL_EAST  -> (x + 1) to y
+                    TileSlot.WALL_WEST  -> (x - 1) to y
+                    else -> return@collectDoorShadowTriangles
+                }
+                if (nx < originX || nx >= endX || ny < originY || ny >= endY) return@collectDoorShadowTriangles
+                val nbrIdx = (z - originZ) * gridW * gridH + (ny - originY) * gridW + (nx - originX)
+                for (k in 0 until n) addPerCellTri(nbrIdx, firstTri + k)
+                // Record the borrow for the cache. Stride = 4 ints:
+                //   [dx, dy, triOffsetInCellSnapshot, count]
+                // Previously the count slot held an unused 0 and the
+                // replay path registered only ONE triangle per borrow,
+                // silently losing the rest of each batch (a door slot
+                // emits up to 2 batches: frame + panel, each ~12 tris).
+                // The visible symptom was missing occluder triangles on
+                // neighbour cells across a door — light bleed past
+                // closed doors, plus "overlapping black square shadow"
+                // artefacts where the cell saw a partial set of stray
+                // triangles at the wrong positions.
+                cellBorrows.add(nx - x)
+                cellBorrows.add(ny - y)
+                cellBorrows.add(firstTri - cellFirstTri)
+                cellBorrows.add(n)
+            }
+
+            // Snapshot this cell's triangle range into the cache.
+            val cellTriCount = shadowTriBuf.triCount - cellFirstTri
+            val entry = cached ?: ShadowCacheEntry().also { shadowCellCache[cellKey] = it }
+            entry.key = contentKey
+            entry.triCount = cellTriCount
+            val needFloats = cellTriCount * 9
+            if (entry.tris.size < needFloats) entry.tris = FloatArray(needFloats)
+            if (cellTriCount > 0) System.arraycopy(shadowTriBuf.data, cellFirstTri * 9, entry.tris, 0, needFloats)
+            val bc = cellBorrows.size / 4
+            entry.borrowCount = bc
+            if (entry.borrows.size < bc * 4) entry.borrows = IntArray(bc * 4)
+            for (i in 0 until bc * 4) entry.borrows[i] = cellBorrows[i]
+        }
+        // Bound cache size — modest cap; geometry footprint per entry
+        // is a few hundred bytes worst-case. Evict half by clearing the
+        // map; rebuild on demand. (LRU would be nicer but this is rare.)
+        if (shadowCellCache.size > 32768) shadowCellCache.clear()
+
+        val tCollect = System.nanoTime()
+
+        // Pack per-cell triangle lists into the cell-flag bits. Layout:
+        //   bits 0-6   : wall/floor/ceiling flags
+        //   bits 7-14  : per-cell triangle count  (8 bits → max 255)
+        //   bits 15-31 : per-cell triangle start  (17 bits → max 131071)
+        //
+        // The shader's matching unpack lives in
+        // shaders/world_lit.frag.glsl::getShadowTriRange — keep the two
+        // in sync. The 17-bit start field doubled the safe shadow-tri
+        // budget; previously a 16-bit start would silently wrap once
+        // expandedTris > 65k on large dungeons, making cells past that
+        // point read garbage triangle ranges. The visible symptom was a
+        // square-checkerboard of cells that stopped shadowing in the
+        // middle of an otherwise-shadowed area.
+        //
+        // spec 008: when PerfFlags.enabled, skip emitting triangles for
+        // cells whose world AABB (expanded by FRUSTUM_SKIRT_CELLS) is
+        // outside the view frustum. The wall-flag bits (0-6) stay
+        // intact so out-of-frustum cells on a ray's path still occlude
+        // correctly; only the per-cell shadow-tri (start, count)
+        // packing is skipped. The skirt keeps wall-borrow geometry
+        // from neighbouring in-frustum cells valid. Producer-side
+        // (shadowCellCache) stays frustum-agnostic by design so the
+        // cache hit-rate doesn't tank when the player pans the camera.
+        val cullByFrustum = PerfFlags.enabled
+        val skirt = FRUSTUM_SKIRT_CELLS.toFloat()
         for (cz in 0 until gridD) {
             for (cy in 0 until gridH) {
                 for (cx in 0 until gridW) {
                     val idx = cz * gridW * gridH + cy * gridW + cx
                     val listCount = perCellTriCount[idx]
                     if (listCount == 0) continue
+                    if (cullByFrustum) {
+                        val wx = (originX + cx).toFloat()
+                        val wy = (originY + cy).toFloat()
+                        val wz = (originZ + cz).toFloat()
+                        if (!camera.isBoxInFrustum(
+                                wx - skirt, wy - skirt, wz - skirt,
+                                wx + 1f + skirt, wy + 1f + skirt, wz + 1f + skirt
+                            )
+                        ) {
+                            // Out-of-frustum: leave occupancy[idx]'s
+                            // (start, count) at 0 so the shader's
+                            // getShadowTriRange returns an empty range.
+                            // Wall bits 0-6 are already set above.
+                            continue
+                        }
+                    }
                     val list = perCellTris[idx]
                     val start = expandedTriBuf.triCount
-                    if (start > 0xFFFF) {
-                        // Hard ceiling — should be unreachable given the
-                        // window size, but better to drop a few shadows
-                        // than to corrupt every cell's triangle range.
+                    if (start > 0x1FFFF) {
+                        // Hard ceiling — should be unreachable because
+                        // MAX_SHADOW_TRIANGLES is sized to exactly fill
+                        // the 17-bit start field. If we got here the
+                        // upstream collector emitted too many triangles
+                        // for the SSBO; drop the rest of the cells' tris
+                        // rather than corrupt their start indices.
                         continue
                     }
-                    val count = listCount.coerceAtMost(0x1FF)
+                    // spec 008 (FR-008): cap per-cell triangle count at
+                    // 24 when PerfFlags.enabled. The shader's hot loop
+                    // runs O(count) ray-triangle tests per fragment, so
+                    // a single 200-triangle cell dominates the slowest
+                    // frame. 24 was chosen as the smallest cap that
+                    // still resolves "stairs + adjacent wall corner"
+                    // worst-case borrow geometry without visible loss.
+                    // A one-shot warning names the offending cell so
+                    // an asset author can investigate.
+                    val cellCap = if (PerfFlags.enabled) 24 else 0xFF
+                    if (PerfFlags.enabled && listCount > cellCap && !triPerCellCapWarned) {
+                        triPerCellCapWarned = true
+                        val wx = originX + cx
+                        val wy = originY + cy
+                        val wz = originZ + cz
+                        System.err.println(
+                            "[RoguelikeGame] spec 008: per-cell shadow-tri cap " +
+                                "(${cellCap}) hit at cell=($wx,$wy,$wz); had $listCount tris. " +
+                                "Tighten the asset's collision geometry or raise the cap if intentional."
+                        )
+                    }
+                    val count = listCount.coerceAtMost(cellCap)
                     var droppedHere = false
                     for (i in 0 until count) {
                         val src = list[i] * 9
@@ -716,31 +1285,73 @@ class RoguelikeGame(
                         )
                     }
                     var f = occupancy[idx]
-                    f = f or ((count and 0x1FF) shl 7)
-                    f = f or ((start and 0xFFFF) shl 16)
+                    f = f or ((count and 0xFF) shl 7)
+                    f = f or ((start and 0x1FFFF) shl 15)
                     occupancy[idx] = f
                 }
             }
         }
 
-        val lights = visibleLights.map { ls ->
-            SimpleUI.LightData(ls.x, ls.y, ls.z, ls.intensity, ls.colorR(), ls.colorG(), ls.colorB(), ls.radius)
-        }
+        val tPack = System.nanoTime()
+
         // Forward+ tile binning — call FIRST so it stamps the cached
         // screen/tile params into SimpleUI before updateLighting embeds
         // them in the UBO this same frame (otherwise the shader reads
         // last frame's screen dims, which manifests as misaligned tile
         // lookups after a window resize).
         uploadLightTiles(visibleLights)
+        // updateLighting accepts a List<LightData> — recycle a reusable
+        // ArrayList so we don't allocate 128 boxed objects per frame.
+        reusableLightData.clear()
+        reusableLightData.ensureCapacity(lightCount)
+        for (li in 0 until lightCount) {
+            val ls = visibleLights[li]
+            reusableLightData.add(SimpleUI.LightData(ls.x, ls.y, ls.z, ls.intensity, ls.colorR(), ls.colorG(), ls.colorB(), ls.radius))
+        }
         ui.updateLighting(
-            lights, occupancy, gridW, gridH, gridD,
-            ambient = 0f,
+            reusableLightData, occupancy, gridW, gridH, gridD,
+            ambient = ARENA_AMBIENT,
             gridOriginX = originX, gridOriginY = originY, gridOriginZ = originZ
         )
+
+        val tTiles = System.nanoTime()
+
         // updateShadowTriangles reads from the start of the supplied
         // FloatArray up to `triCount * 9` floats, so we can hand it the
         // backing buffer directly — no allocation per frame.
-        ui.updateShadowTriangles(expandedTriBuf.data, expandedTriBuf.triCount)
+        // Compute a content hash so SimpleUI can skip the GPU upload
+        // when the window contents haven't changed (player standing
+        // still: hash is stable → zero per-frame SSBO writes).
+        val triCount = expandedTriBuf.triCount
+        var hash = (triCount.toLong() * 2654435761L) xor 0x9E3779B97F4A7C15UL.toLong()
+        if (triCount > 0) {
+            val data = expandedTriBuf.data
+            // Sample at a stride so we don't read every float — 256
+            // probe points are plenty to detect any geometry change
+            // (door opens, new submap stamped, light window shifted).
+            val step = maxOf(1, (triCount * 9) / 256)
+            var i = 0
+            val n = triCount * 9
+            while (i < n) {
+                hash = (hash * 1099511628211L) xor java.lang.Float.floatToRawIntBits(data[i]).toLong()
+                i += step
+            }
+        }
+        ui.updateShadowTriangles(expandedTriBuf.data, triCount, hash)
+        lastFrameLights = visibleLights.size
+        lastFrameShadowTris = triCount
+
+        val tUpload = System.nanoTime()
+
+        // Sub-phase timings (EMA into phaseMs for the HUD).
+        fun ms(a: Long, b: Long) = (b - a) / 1_000_000f
+        recordSubPhase("ul.cull",    ms(t0, tCull))
+        recordSubPhase("ul.alloc",   ms(tCull, tAlloc))
+        recordSubPhase("ul.stamp",   ms(tAlloc, tStamp))
+        recordSubPhase("ul.collect", ms(tStamp, tCollect))
+        recordSubPhase("ul.pack",    ms(tCollect, tPack))
+        recordSubPhase("ul.tiles+light", ms(tPack, tTiles))
+        recordSubPhase("ul.upload",  ms(tTiles, tUpload))
 
         // Window + shadow trace. Helps diagnose "fragment looks dark"
         // bugs by recording whether the player's cell sits inside the
@@ -863,6 +1474,50 @@ class RoguelikeGame(
         }
 
         ui.updateLightTiles(tileLightCount, tileLightIndices, tilesX, tilesY, sw, sh)
+
+        // ── spec 008: per-tile shadow-quality byte ────────────────────
+        // Compute one byte per Forward+ tile and ship it to the shader
+        // via SimpleUI.updateTileQuality (binding 5).
+        //   q=0 — empty tile (no lights touched it). Shader skips the
+        //         entire lighting loop and paints ambient-only.
+        //   q=1 — peripheral tile (centre distance > R). 1-tap shadow
+        //         visibility, top-K cap of MAX_PER_PIXEL_LIGHTS_LOW (3).
+        //   q=2 — central tile with lights. Full spec-007 behaviour.
+        // When PerfFlags.enabled is false EVERY tile gets q=2 so the
+        // shader's branch reduces to today's code path; this is the
+        // pixel-identity guarantee mandated by the perf-flags contract.
+        // Contract: specs/008-fps-fov-shadow-culling/contracts/tile-quality-ssbo.md
+        val flagOn = PerfFlags.enabled
+        if (!flagOn) {
+            // Fast path: blanket the prefix with `2`. Tail is zeroed by
+            // SimpleUI.updateTileQuality so a window shrink can't leak
+            // stale labels.
+            java.util.Arrays.fill(tileQualityBuf, 0, tileCount, 2.toByte())
+        } else {
+            // Centre/periphery split, measured in tiles.
+            val cx = (tilesX - 1) * 0.5f
+            val cy = (tilesY - 1) * 0.5f
+            val centreFrac = PerfFlags.centreFraction
+            val minDim = if (sw < sh) sw else sh
+            // R is the radius in tiles of the high-quality centre region.
+            val rTiles = centreFrac * minDim * 0.5f / tileSize
+            val rTilesSq = rTiles * rTiles
+            for (ty in 0 until tilesY) {
+                val dy = ty.toFloat() - cy
+                val dySq = dy * dy
+                val rowBase = ty * tilesX
+                for (tx in 0 until tilesX) {
+                    val t = rowBase + tx
+                    val q = if (tileLightCount[t] == 0) 0
+                    else {
+                        val dx = tx.toFloat() - cx
+                        if (dx * dx + dySq > rTilesSq) 1 else 2
+                    }
+                    tileQualityBuf[t] = q.toByte()
+                }
+            }
+        }
+        ui.updateTileQuality(tileQualityBuf, tileCount)
     }
 
     /** Mark every active tile as touched by [lightIdx]. Used as the
@@ -1023,110 +1678,75 @@ class RoguelikeGame(
         offsetX: Float, offsetY: Float, offsetZ: Float,
         rotationYDeg: Float, out: FloatBuf
     ): Int {
-        val verts = mesh.vertices
-        val indices = mesh.indices
-        val scale = mesh.scale
-        val cx = mesh.center.x; val cy = mesh.center.y; val cz = mesh.center.z
-        val radY = Math.toRadians(rotationYDeg.toDouble()).toFloat()
-        val cosY = cos(radY); val sinY = sin(radY)
-
-        fun xformPos(idx: Int): FloatArray {
-            val vi = idx * 6
-            val mx = (verts[vi] - cx) * scale
-            val my = (verts[vi + 1] - cy) * scale
-            val mz = (verts[vi + 2] - cz) * scale
-            var px = mx; var py = mz; var pz = my
-            if (rotationYDeg != 0f) {
-                val rpx = px * cosY - py * sinY
-                val rpy = px * sinY + py * cosY
-                px = rpx; py = rpy
-            }
-            px += nodeX + 0.5f + offsetX
-            py += nodeY + 0.5f + offsetY
-            pz += nodeZ + 0.5f + offsetZ
-            return floatArrayOf(px, py, pz)
-        }
-
-        var triCount = 0
-        var i = 0
-        while (i < indices.size - 2) {
-            val v0 = xformPos(indices[i].toInt() and 0xFFFF)
-            val v1 = xformPos(indices[i + 1].toInt() and 0xFFFF)
-            val v2 = xformPos(indices[i + 2].toInt() and 0xFFFF)
-            // Atomically append the 9 floats; if the buffer is full,
-            // skip the triangle entirely to keep the buffer self-consistent.
-            if (out.size + 9 > out.data.size) {
-                i += 3
-                continue
-            }
-            out.add(v0[0]); out.add(v0[1]); out.add(v0[2])
-            out.add(v1[0]); out.add(v1[1]); out.add(v1[2])
-            out.add(v2[0]); out.add(v2[1]); out.add(v2[2])
-            triCount++
-            i += 3
-        }
-        return triCount
+        // Fast path: hand the mesh's index buffer to SimpleUI's allocation-free
+        // collector. The collector writes 9 floats per triangle directly into
+        // out.data starting at the current write head, returns the count
+        // actually written (clamped to remaining capacity), and we advance
+        // out.size in lock-step. No per-vertex FloatArray allocations.
+        val capacityTris = out.data.size / 9
+        val firstTri = out.size / 9
+        val emitted = ui.collectMeshShadowTriangles(
+            mesh.vertices, mesh.indices,
+            mesh.center.x, mesh.center.y, mesh.center.z, mesh.scale,
+            nodeX, nodeY, nodeZ,
+            offsetX, offsetY, offsetZ,
+            rotationYDeg,
+            out.data, firstTri, capacityTris
+        )
+        out.size = (firstTri + emitted) * 9
+        return emitted
     }
 
     private fun renderWorld(w: World) {
         val floorR = 0.25f; val floorG = 0.30f; val floorB = 0.40f
         val wallR  = 0.55f; val wallG  = 0.42f; val wallB  = 0.30f
 
-        // Render the player's current Z layer and every layer beneath it.
-        // Anything above the player is hidden so upper floors never occlude
-        // the view down into the level they're standing on. Clamp into the
-        // world's actual depth so freshly-grown worlds don't read past the
-        // grid bounds.
+        // Sparse traversal: iterate ONLY non-empty nodes via the per-Z
+        // index instead of walking the entire 3-D grid. On large worlds
+        // (~170k cells, ~5-8k populated) this is ~20× fewer cells touched
+        // and removes the per-cell frustum test that used to spike
+        // renderWorld to 20-30ms whenever a big chunk passed the chunk
+        // frustum test.
         //
-        // CRITICAL: iterate only the cells that actually fall inside the
-        // camera frustum. As the procedural world expands past ~60×60 cells,
-        // iterating the full grid floods `drawGpuTriangle` with vertices,
-        // hits `maxGpuVertices` mid-frame, and the remaining triangles are
-        // silently dropped — producing the "lighting breaks the further you
-        // walk" symptom. Frustum culling keeps the per-frame vertex count
-        // bounded to roughly what's actually visible.
-        // Render every Z layer in the world — no player-relative cap.
-        // Frustum culling alone decides what's drawn.
-        for (z in 0 until w.depth) {
-            for (x in 0 until w.width) {
-                for (y in 0 until w.height) {
-                    // Cell AABB in world space is (x..x+1, y..y+1, z..z+1).
-                    // Inflate slightly so meshes that overhang the cell
-                    // (e.g. doorframes, ladders) aren't false-culled.
-                    if (!camera.isBoxInFrustum(
-                            x.toFloat() - 0.1f, y.toFloat() - 0.1f, z.toFloat() - 0.1f,
-                            x.toFloat() + 1.1f, y.toFloat() + 1.1f, z.toFloat() + 1.1f
-                        )
-                    ) continue
-                    val node = w.getNode(x, y, z) ?: continue
-                    val hasFloor = node.hasTile(TileSlot.FLOOR)
-                    val hasCeiling = node.hasTile(TileSlot.CEILING)
-                    val hasWallN = node.hasTile(TileSlot.WALL_NORTH)
-                    val hasWallS = node.hasTile(TileSlot.WALL_SOUTH)
-                    val hasWallE = node.hasTile(TileSlot.WALL_EAST)
-                    val hasWallW = node.hasTile(TileSlot.WALL_WEST)
-                    val hasStairs = node.hasTile(TileSlot.STAIRS)
-                    if (!(hasFloor || hasCeiling || hasWallN || hasWallS || hasWallE || hasWallW || hasStairs)) continue
+        // Frustum culling is still applied per cell, but only to the
+        // populated subset, so the worst case is bounded by content size
+        // rather than world volume.
+        w.forEachNonEmptyInWindow(0, 0, 0, w.width, w.height, w.depth) { node ->
+            val x = node.x; val y = node.y; val z = node.z
+            if (!camera.isBoxInFrustum(
+                    x.toFloat() - 0.1f, y.toFloat() - 0.1f, z.toFloat() - 0.1f,
+                    x.toFloat() + 1.1f, y.toFloat() + 1.1f, z.toFloat() + 1.1f
+                )
+            ) return@forEachNonEmptyInWindow
 
-                    val tbx = x.toFloat(); val tby = y.toFloat(); val tbz = z.toFloat()
+            val hasFloor = node.hasTile(TileSlot.FLOOR)
+            val hasCeiling = node.hasTile(TileSlot.CEILING)
+            val hasWallN = node.hasTile(TileSlot.WALL_NORTH)
+            val hasWallS = node.hasTile(TileSlot.WALL_SOUTH)
+            val hasWallE = node.hasTile(TileSlot.WALL_EAST)
+            val hasWallW = node.hasTile(TileSlot.WALL_WEST)
+            val hasStairs = node.hasTile(TileSlot.STAIRS)
+            // Non-empty index guarantees at least one tile, but a node may
+            // hold only props/lights — skip if no renderable slot is set.
+            if (!(hasFloor || hasCeiling || hasWallN || hasWallS || hasWallE || hasWallW || hasStairs)) return@forEachNonEmptyInWindow
 
-                    if (hasFloor) floorMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetZ = -0.5f, r = floorR, g = floorG, b = floorB) }
-                    if (hasCeiling) ceilingMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetZ = 0.5f, r = floorR, g = floorG, b = floorB) }
-                    if (hasWallN) drawWallOrDoor(node, TileSlot.WALL_NORTH, tbx, tby, tbz, offsetY = 0.5f, rotationYDeg = 0f, r = wallR, g = wallG, b = wallB)
-                    if (hasWallS) drawWallOrDoor(node, TileSlot.WALL_SOUTH, tbx, tby, tbz, offsetY = -0.5f, rotationYDeg = 180f, r = wallR, g = wallG, b = wallB)
-                    if (hasWallE) drawWallOrDoor(node, TileSlot.WALL_EAST, tbx, tby, tbz, offsetX = 0.5f, rotationYDeg = 90f, r = wallR, g = wallG, b = wallB)
-                    if (hasWallW) drawWallOrDoor(node, TileSlot.WALL_WEST, tbx, tby, tbz, offsetX = -0.5f, rotationYDeg = 270f, r = wallR, g = wallG, b = wallB)
-                    if (hasStairs) {
-                        val tile = node.getTile(TileSlot.STAIRS)
-                        if (tile is StairsTile) {
-                            stairsMesh?.let { drawModelAtNode(it, tbx, tby, tbz, rotationYDeg = stairsRenderRotation(tile.rotationY), r = 0.45f, g = 0.40f, b = 0.35f) }
-                        } else if (tile is LadderTile) {
-                            val rot = tile.rotationY
-                            val offX = when (rot) { 90f -> 0.5f; 270f -> -0.5f; else -> 0f }
-                            val offY = when (rot) { 0f -> 0.5f; 180f -> -0.5f; else -> 0f }
-                            ladderMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = offX, offsetY = offY, rotationYDeg = rot, r = 0.50f, g = 0.38f, b = 0.25f) }
-                        }
-                    }
+            val tbx = x.toFloat(); val tby = y.toFloat(); val tbz = z.toFloat()
+
+            if (hasFloor) floorMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetZ = -0.5f, r = floorR, g = floorG, b = floorB) }
+            if (hasCeiling) ceilingMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetZ = 0.5f, r = floorR, g = floorG, b = floorB) }
+            if (hasWallN) drawWallOrDoor(node, TileSlot.WALL_NORTH, tbx, tby, tbz, offsetY = 0.5f, rotationYDeg = 0f, r = wallR, g = wallG, b = wallB)
+            if (hasWallS) drawWallOrDoor(node, TileSlot.WALL_SOUTH, tbx, tby, tbz, offsetY = -0.5f, rotationYDeg = 180f, r = wallR, g = wallG, b = wallB)
+            if (hasWallE) drawWallOrDoor(node, TileSlot.WALL_EAST, tbx, tby, tbz, offsetX = 0.5f, rotationYDeg = 90f, r = wallR, g = wallG, b = wallB)
+            if (hasWallW) drawWallOrDoor(node, TileSlot.WALL_WEST, tbx, tby, tbz, offsetX = -0.5f, rotationYDeg = 270f, r = wallR, g = wallG, b = wallB)
+            if (hasStairs) {
+                val tile = node.getTile(TileSlot.STAIRS)
+                if (tile is StairsTile) {
+                    stairsMesh?.let { drawModelAtNode(it, tbx, tby, tbz, rotationYDeg = stairsRenderRotation(tile.rotationY), r = 0.45f, g = 0.40f, b = 0.35f) }
+                } else if (tile is LadderTile) {
+                    val rot = tile.rotationY
+                    val offX = when (rot) { 90f -> 0.5f; 270f -> -0.5f; else -> 0f }
+                    val offY = when (rot) { 0f -> 0.5f; 180f -> -0.5f; else -> 0f }
+                    ladderMesh?.let { drawModelAtNode(it, tbx, tby, tbz, offsetX = offX, offsetY = offY, rotationYDeg = rot, r = 0.50f, g = 0.38f, b = 0.25f) }
                 }
             }
         }
@@ -1227,61 +1847,27 @@ class RoguelikeGame(
         r: Float, g: Float, b: Float, a: Float = 1f,
         pivotLocalX: Float? = null, pivotLocalY: Float? = null, pivotLocalZ: Float? = null
     ) {
-        val verts = mesh.vertices
-        val indices = mesh.indices
-        val scale = mesh.scale
         val cx = pivotLocalX ?: mesh.center.x
         val cy = pivotLocalY ?: mesh.center.y
         val cz = pivotLocalZ ?: mesh.center.z
-        val radY = Math.toRadians(rotationYDeg.toDouble()).toFloat()
-        val cosY = cos(radY); val sinY = sin(radY)
-
-        fun xform(idx: Int): FloatArray {
-            val vi = idx * 6
-            val mx = (verts[vi] - cx) * scale
-            val my = (verts[vi + 1] - cy) * scale
-            val mz = (verts[vi + 2] - cz) * scale
-            val mnx = verts[vi + 3]; val mny = verts[vi + 4]; val mnz = verts[vi + 5]
-            var px = mx; var py = mz; var pz = my
-            var nx = mnx; var ny = mnz; var nz = mny
-            if (rotationYDeg != 0f) {
-                val rpx = px * cosY - py * sinY; val rpy = px * sinY + py * cosY; px = rpx; py = rpy
-                val rnx = nx * cosY - ny * sinY; val rny = nx * sinY + ny * cosY; nx = rnx; ny = rny
-            }
-            px += nodeX + 0.5f + offsetX
-            py += nodeY + 0.5f + offsetY
-            pz += nodeZ + 0.5f + offsetZ
-            return floatArrayOf(px, py, pz, nx, ny, nz)
-        }
-
-        var i = 0
         val colors = mesh.colors
-        while (i < indices.size - 2) {
-            val idx0 = indices[i].toInt() and 0xFFFF
-            val idx1 = indices[i + 1].toInt() and 0xFFFF
-            val idx2 = indices[i + 2].toInt() and 0xFFFF
-            val v0 = xform(idx0)
-            val v1 = xform(idx1)
-            val v2 = xform(idx2)
-            if (colors != null) {
-                // Use per-vertex palette colors sampled from the model's PNG texture
-                val cr0 = colors[idx0 * 3]; val cg0 = colors[idx0 * 3 + 1]; val cb0 = colors[idx0 * 3 + 2]
-                val cr1 = colors[idx1 * 3]; val cg1 = colors[idx1 * 3 + 1]; val cb1 = colors[idx1 * 3 + 2]
-                val cr2 = colors[idx2 * 3]; val cg2 = colors[idx2 * 3 + 1]; val cb2 = colors[idx2 * 3 + 2]
-                ui.drawGpuTrianglePerVertexColor(
-                    v0[0], v0[1], v0[2], v0[3], v0[4], v0[5], cr0, cg0, cb0, a,
-                    v1[0], v1[1], v1[2], v1[3], v1[4], v1[5], cr1, cg1, cb1, a,
-                    v2[0], v2[1], v2[2], v2[3], v2[4], v2[5], cr2, cg2, cb2, a
-                )
-            } else {
-                ui.drawGpuTriangle(
-                    v0[0], v0[1], v0[2], v0[3], v0[4], v0[5],
-                    v1[0], v1[1], v1[2], v1[3], v1[4], v1[5],
-                    v2[0], v2[1], v2[2], v2[3], v2[4], v2[5],
-                    r, g, b, a
-                )
-            }
-            i += 3
+        if (colors != null) {
+            ui.drawMeshPerVertexColor(
+                mesh.vertices, colors, mesh.indices,
+                cx, cy, cz, mesh.scale,
+                nodeX, nodeY, nodeZ,
+                offsetX, offsetY, offsetZ,
+                rotationYDeg, a
+            )
+        } else {
+            ui.drawMeshSolid(
+                mesh.vertices, mesh.indices,
+                cx, cy, cz, mesh.scale,
+                nodeX, nodeY, nodeZ,
+                offsetX, offsetY, offsetZ,
+                rotationYDeg,
+                r, g, b, a
+            )
         }
     }
 

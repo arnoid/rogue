@@ -1458,6 +1458,23 @@ class MapEditor(
                             var cellTriStart = shadowTriangles.size / 9
                             var cellTriCount = 0
 
+                            // spec 008: editor mirror of the game-side
+                            // frustum-cull. Default behaviour (PerfFlags
+                            // off) keeps today's WYSIWYG full-window
+                            // upload so the editor preview stays
+                            // pixel-equivalent to what's saved. With
+                            // PerfFlags.enabled the editor previews the
+                            // exact same per-cell shadow-tri culling
+                            // the game performs. Skirt matches game.
+                            val editorCellInFrustum = if (!com.roguelike.core.perf.PerfFlags.enabled) true else {
+                                val s = 1f /* FRUSTUM_SKIRT_CELLS */
+                                camera.isBoxInFrustum(
+                                    x.toFloat() - s, y.toFloat() - s, z.toFloat() - s,
+                                    x.toFloat() + 1f + s, y.toFloat() + 1f + s, z.toFloat() + 1f + s
+                                )
+                            }
+                            if (editorCellInFrustum) {
+
                             // Collect shadow triangles for stairs/ladders
                             if (node.hasTile(TileSlot.STAIRS)) {
                                 val tile = node.getTile(TileSlot.STAIRS)
@@ -1471,10 +1488,55 @@ class MapEditor(
                                 }
                             }
 
-                            // Encode shadow triangle range into flags
+                            // Wall meshes as shadow occluders — mirrors the
+                            // RoguelikeGame.uploadLighting wall-mesh block.
+                            // The boundary-flag DDA alone can't shadow same-
+                            // cell rays (e.g. a floor fragment + a light both
+                            // sitting inside one cell, separated only by a
+                            // wall on the cell's edge), so the actual wall
+                            // geometry is also fed to the per-pixel ray
+                            // -triangle test. We skip door/doorway slots
+                            // because those tile types produce their own
+                            // (more accurate) door-frame/panel shadow
+                            // geometry elsewhere in the renderer.
+                            val wm = wallMesh
+                            if (wm != null) {
+                                for (slotIdx in 0 until 4) {
+                                    val slot = when (slotIdx) {
+                                        0 -> TileSlot.WALL_NORTH
+                                        1 -> TileSlot.WALL_SOUTH
+                                        2 -> TileSlot.WALL_EAST
+                                        else -> TileSlot.WALL_WEST
+                                    }
+                                    val tile = node.getTile(slot) ?: continue
+                                    val isDoor = tile is DoorNorthTile || tile is DoorSouthTile ||
+                                                 tile is DoorEastTile  || tile is DoorWestTile
+                                    val isDoorway = tile is WallDoorwayNorthTile || tile is WallDoorwaySouthTile ||
+                                                    tile is WallDoorwayEastTile  || tile is WallDoorwayWestTile
+                                    if (isDoor || isDoorway) continue
+                                    val (offX, offY, rotDeg) = when (slot) {
+                                        TileSlot.WALL_NORTH -> Triple( 0.0f,  0.5f,   0f)
+                                        TileSlot.WALL_SOUTH -> Triple( 0.0f, -0.5f, 180f)
+                                        TileSlot.WALL_EAST  -> Triple( 0.5f,  0.0f,  90f)
+                                        else                -> Triple(-0.5f,  0.0f, 270f) // WALL_WEST
+                                    }
+                                    cellTriCount += collectShadowTriangles(
+                                        wm, x.toFloat(), y.toFloat(), z.toFloat(),
+                                        offX, offY, 0f, rotDeg, shadowTriangles
+                                    )
+                                }
+                            }
+
+                            } // end editorCellInFrustum guard (spec 008)
+
+                            // Encode shadow triangle range into flags.
+                            // Layout matches RoguelikeGame.uploadLighting and
+                            // shaders/world_lit.frag.glsl::getShadowTriRange:
+                            //   bits 7-14  : count  (8 bits → max 255)
+                            //   bits 15-31 : start  (17 bits → max 131071)
                             if (cellTriCount > 0) {
-                                flags = flags or ((cellTriCount and 0x1FF) shl 7)
-                                flags = flags or ((cellTriStart and 0xFFFF) shl 16)
+                                flags = flags or ((cellTriCount and 0xFF) shl 7)
+                                flags = flags or ((cellTriStart and 0x1FFFF) shl 15)
                             }
 
                             occupancy[z * gridW * gridH + y * gridW + x] = flags

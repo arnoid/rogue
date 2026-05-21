@@ -1,6 +1,7 @@
 package com.roguelike
 
 import com.roguelike.input.InputSystem
+import com.roguelike.core.perf.PerfFlags
 import com.roguelike.rendering.Camera
 import com.roguelike.rendering.vulkan.ShaderCache
 import com.roguelike.rendering.vulkan.ShaderCompileSplash
@@ -16,6 +17,13 @@ import org.lwjgl.vulkan.KHRSwapchain.*
 import org.lwjgl.vulkan.VK10.*
 
 fun main() {
+    // spec 008 (FPS recovery): read the perf-flags override from
+    // local.properties once, before any render frame. Default keeps
+    // PerfFlags.enabled = true so end-users benefit; capture sessions
+    // pin it to false via `perf.flags.enabled=false`.
+    // See specs/008-fps-fov-shadow-culling/contracts/perf-flags.md.
+    PerfFlags.loadFromLocalProperties(java.io.File("local.properties"))
+
     // Initialize GLFW
     check(glfwInit()) { "Failed to initialize GLFW" }
     check(GLFWVulkan.glfwVulkanSupported()) {
@@ -66,12 +74,21 @@ fun main() {
     // the main thread inside the SimpleUI constructor with no UI feedback.
     val launcher = RoguelikeLauncher(vulkanContext, swapChain, inputSystem, camera)
 
-    // Create synchronization objects
-    val imageAvailableSemaphore: Long
-    val renderFinishedSemaphore: Long
-    val inFlightFence: Long
+    // Create synchronization objects.
+    //
+    // FRAMES_IN_FLIGHT is held at 1 for now because `SimpleUI` reuses a
+    // single shared vertex buffer for its UI/lit/gpu pipelines and rewrites
+    // it inside `render()`. Bumping this to 2 would let the CPU race the
+    // GPU on that shared buffer (validation error + flicker). The arrays
+    // and indexing below are kept so the switch to 2 becomes a one-line
+    // change once SimpleUI's vertex pools are per-frame as well.
+    val FRAMES_IN_FLIGHT = 1
+    val imageAvailableSemaphores = LongArray(FRAMES_IN_FLIGHT)
+    val renderFinishedSemaphores = LongArray(FRAMES_IN_FLIGHT)
+    val inFlightFences = LongArray(FRAMES_IN_FLIGHT)
     val commandPool: Long
-    val commandBuffer: VkCommandBuffer
+    val commandBuffers = arrayOfNulls<VkCommandBuffer>(FRAMES_IN_FLIGHT)
+    var currentFrame = 0
 
     MemoryStack.stackPush().use { stack ->
         val semaphoreCI = VkSemaphoreCreateInfo.calloc(stack)
@@ -83,14 +100,16 @@ fun main() {
         val pSemaphore = stack.mallocLong(1)
         val pFence = stack.mallocLong(1)
 
-        vkCreateSemaphore(vulkanContext.vkDevice, semaphoreCI, null, pSemaphore)
-        imageAvailableSemaphore = pSemaphore.get(0)
-        vkCreateSemaphore(vulkanContext.vkDevice, semaphoreCI, null, pSemaphore)
-        renderFinishedSemaphore = pSemaphore.get(0)
-        vkCreateFence(vulkanContext.vkDevice, fenceCI, null, pFence)
-        inFlightFence = pFence.get(0)
+        for (i in 0 until FRAMES_IN_FLIGHT) {
+            vkCreateSemaphore(vulkanContext.vkDevice, semaphoreCI, null, pSemaphore)
+            imageAvailableSemaphores[i] = pSemaphore.get(0)
+            vkCreateSemaphore(vulkanContext.vkDevice, semaphoreCI, null, pSemaphore)
+            renderFinishedSemaphores[i] = pSemaphore.get(0)
+            vkCreateFence(vulkanContext.vkDevice, fenceCI, null, pFence)
+            inFlightFences[i] = pFence.get(0)
+        }
 
-        // Create command pool and buffer
+        // Create command pool and one primary command buffer per frame slot.
         val poolCI = VkCommandPoolCreateInfo.calloc(stack)
             .sType(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO)
             .flags(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT)
@@ -103,10 +122,12 @@ fun main() {
             .sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO)
             .commandPool(commandPool)
             .level(VK_COMMAND_BUFFER_LEVEL_PRIMARY)
-            .commandBufferCount(1)
-        val pCmdBuf = stack.mallocPointer(1)
+            .commandBufferCount(FRAMES_IN_FLIGHT)
+        val pCmdBuf = stack.mallocPointer(FRAMES_IN_FLIGHT)
         vkAllocateCommandBuffers(vulkanContext.vkDevice, allocInfo, pCmdBuf)
-        commandBuffer = VkCommandBuffer(pCmdBuf.get(0), vulkanContext.vkDevice)
+        for (i in 0 until FRAMES_IN_FLIGHT) {
+            commandBuffers[i] = VkCommandBuffer(pCmdBuf.get(i), vulkanContext.vkDevice)
+        }
     }
 
     // Window resize callback
@@ -132,10 +153,10 @@ fun main() {
             window = window,
             context = vulkanContext,
             swapChain = swapChain,
-            commandBuffer = commandBuffer,
-            imageAvailableSemaphore = imageAvailableSemaphore,
-            renderFinishedSemaphore = renderFinishedSemaphore,
-            inFlightFence = inFlightFence,
+            commandBuffer = commandBuffers[0]!!,
+            imageAvailableSemaphore = imageAvailableSemaphores[0],
+            renderFinishedSemaphore = renderFinishedSemaphores[0],
+            inFlightFence = inFlightFences[0],
             stale = stale
         )
         println("[Main] shader compilation complete")
@@ -164,7 +185,15 @@ fun main() {
 
         // Each frame gets its own stack frame
         MemoryStack.stackPush().use { stack ->
-            // Wait for previous frame
+            // Pick the per-frame sync set for this slot.
+            val imageAvailableSemaphore = imageAvailableSemaphores[currentFrame]
+            val renderFinishedSemaphore = renderFinishedSemaphores[currentFrame]
+            val inFlightFence = inFlightFences[currentFrame]
+            val commandBuffer = commandBuffers[currentFrame]!!
+
+            // Wait for previous use of THIS slot's resources to finish
+            // (i.e. frame N - FRAMES_IN_FLIGHT), not for the most recent
+            // frame to finish — that's what unlocks CPU↔GPU pipelining.
             vkWaitForFences(vulkanContext.vkDevice, inFlightFence, true, Long.MAX_VALUE)
 
             // Acquire next image
@@ -256,6 +285,18 @@ fun main() {
             }
         }
 
+        // Round-robin to the next frame slot.
+        currentFrame = (currentFrame + 1) % FRAMES_IN_FLIGHT
+
+        // spec 008 (FPS recovery): F11 toggles PerfFlags.enabled so a
+        // dev can A/B the perf gains live without restarting. One-frame
+        // latency is acceptable — change sites read the flag once at
+        // the top of each frame. See contracts/perf-flags.md.
+        if (inputSystem.isKeyJustPressed(GLFW_KEY_F11)) {
+            PerfFlags.enabled = !PerfFlags.enabled
+            println("[PerfFlags] enabled=${PerfFlags.enabled}")
+        }
+
         inputSystem.endFrame()
     }
 
@@ -263,9 +304,11 @@ fun main() {
     vulkanContext.waitIdle()
     launcher.cleanup()
 
-    vkDestroySemaphore(vulkanContext.vkDevice, imageAvailableSemaphore, null)
-    vkDestroySemaphore(vulkanContext.vkDevice, renderFinishedSemaphore, null)
-    vkDestroyFence(vulkanContext.vkDevice, inFlightFence, null)
+    for (i in 0 until FRAMES_IN_FLIGHT) {
+        vkDestroySemaphore(vulkanContext.vkDevice, imageAvailableSemaphores[i], null)
+        vkDestroySemaphore(vulkanContext.vkDevice, renderFinishedSemaphores[i], null)
+        vkDestroyFence(vulkanContext.vkDevice, inFlightFences[i], null)
+    }
     vkDestroyCommandPool(vulkanContext.vkDevice, commandPool, null)
 
     swapChain.close()

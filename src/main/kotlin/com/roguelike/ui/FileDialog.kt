@@ -33,6 +33,14 @@ class FileDialog(
     private var cursorBlinkTime = 0L
     private var onResult: ((File?) -> Unit)? = null
 
+    /**
+     * Extensions shown in the list (case-insensitive, leading dot
+     * required, e.g. `.wld`, `.json`). Directories are always shown
+     * regardless of this filter. Defaults to `[".wld"]` to preserve the
+     * historical behaviour of every existing caller.
+     */
+    private var extensions: List<String> = listOf(".wld")
+
     // Layout constants
     private val dialogW = 500f
     private val dialogH = 400f
@@ -43,16 +51,26 @@ class FileDialog(
     private val textScale = 1.2f
 
     /** Open the dialog in the given mode. [callback] receives the chosen file or null on cancel. */
-    fun open(mode: Mode, initialDir: File? = null, callback: (File?) -> Unit) {
+    fun open(
+        mode: Mode,
+        initialDir: File? = null,
+        extensions: List<String> = listOf(".wld"),
+        callback: (File?) -> Unit
+    ) {
         this.mode = mode
         this.onResult = callback
         this.isOpen = true
         this.selectedIndex = -1
         this.scrollOffset = 0
+        // Normalise filter: lowercase, ensure leading dot.
+        this.extensions = extensions
+            .map { it.lowercase() }
+            .map { if (it.startsWith(".")) it else ".$it" }
+            .ifEmpty { listOf(".wld") }
         // Drain any stale typed characters accumulated while the dialog was closed
         inputSystem.consumeTypedChars()
         if (mode == Mode.SAVE) {
-            filenameInput = "world.wld"
+            filenameInput = "world${this.extensions.first()}"
             filenameCursor = filenameInput.length
             filenameFieldFocused = true
             cursorBlinkTime = System.currentTimeMillis()
@@ -305,7 +323,9 @@ class FileDialog(
         if (!currentDir.exists()) currentDir.mkdirs()
         val files = currentDir.listFiles() ?: emptyArray()
         entries = files
-            .filter { it.isDirectory || it.name.endsWith(".wld", ignoreCase = true) }
+            .filter { f ->
+                f.isDirectory || extensions.any { ext -> f.name.endsWith(ext, ignoreCase = true) }
+            }
             .sortedWith(compareBy<File> { !it.isDirectory }.thenBy { it.name.lowercase() })
     }
 }

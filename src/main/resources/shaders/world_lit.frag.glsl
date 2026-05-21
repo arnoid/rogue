@@ -66,6 +66,21 @@ layout(set = 0, binding = 4) readonly buffer TileLightIndices {
     uint indices[];
 } tileLightIndices;
 
+// ── spec 008: per-tile shadow quality byte ──────────────────────────
+// One byte per tile, packed 4 bytes per uint, little-endian. Values:
+//   0 = empty (ambient-only), 1 = low (3 lights, 1-tap shadow),
+//   2 = full (6 lights, 5-tap PCF), 3..255 reserved (treat as 2).
+// Contract: specs/008-fps-fov-shadow-culling/contracts/tile-quality-ssbo.md
+layout(set = 0, binding = 5) readonly buffer TileQuality {
+    uint packed[];
+} tileQuality;
+
+uint readTileQuality(int tIdx) {
+    uint w = tileQuality.packed[uint(tIdx) >> 2u];
+    uint shift = uint(tIdx & 3) * 8u;
+    return (w >> shift) & 0xFFu;
+}
+
 layout(location = 0) out vec4 outColor;
 
 /// Get wall flags for grid cell (ix,iy,iz) — returns lower 7 bits only
@@ -97,8 +112,17 @@ void getShadowTriRange(int ix, int iy, int iz, out int start, out int count) {
     }
     uint idx = uint(lz * lighting.gridW * lighting.gridH + ly * lighting.gridW + lx);
     uint cell = grid.cells[idx];
-    start = int((cell >> 16u) & 0xFFFFu);
-    count = int((cell >> 7u) & 0x1FFu);
+    // Per-cell shadow triangle range packing. Must stay in lock-step with
+    // RoguelikeGame.uploadLighting / MapEditor:
+    //   bits  0-6  : wall/floor/ceiling flags
+    //   bits  7-14 : per-cell triangle count  (8 bits → max 255)
+    //   bits 15-31 : per-cell triangle start  (17 bits → max 131071)
+    // The previous 16-bit start field silently wrapped once a large
+    // dungeon's per-frame triangle total crossed 65k, causing cells past
+    // that point to read garbage triangle ranges and produce a "missing
+    // shadow squares" artefact in the rendered image.
+    start = int((cell >> 15u) & 0x1FFFFu);
+    count = int((cell >> 7u) & 0xFFu);
 }
 
 /// Möller–Trumbore ray-triangle intersection.
@@ -247,6 +271,54 @@ bool isOccluded(vec3 from, vec3 to) {
     return false;
 }
 
+/// Soft shadow visibility for [surfacePos → lightPos]. Returns a value
+/// in [0,1] where 1 = fully lit and 0 = fully occluded.
+///
+/// Why this exists: the underlying [isOccluded] DDA test produces a
+/// hard boolean exactly along voxel cell faces, which gave shadow
+/// terminators a "stair-step / blocky" appearance at typical view
+/// distances — particularly visible on the right edge of structures
+/// silhouetted against the dark background (see the repro screenshot
+/// in spec 007). We sample the DDA a handful of times on a small disc
+/// perpendicular to L and average the results, which converts the step
+/// function into a short ramp ~one voxel wide. With only 4 extra
+/// samples the cost is bounded (≤ 5 × DDA per surviving light, and the
+/// per-pixel top-K cap already keeps surviving lights ≤ 6), and the
+/// soft penumbra hides the voxel-grid alignment of the underlying
+/// shadow mesh.
+///
+/// The jitter radius is small (0.18 voxels) so contact shadows still
+/// look tight — we're smoothing aliasing, not blurring detail.
+float shadowVisibility(vec3 surfacePos, vec3 lightPos) {
+    // Build a tangent basis perpendicular to the light direction.
+    // Picking a reference axis not parallel to L is enough; we don't
+    // need a stable basis across frames because the samples are
+    // averaged and the noise is hidden by the small jitter radius.
+    vec3 L = normalize(lightPos - surfacePos);
+    vec3 ref = abs(L.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    vec3 T = normalize(cross(L, ref));
+    vec3 B = cross(L, T);
+    const float R = 0.18;
+
+    // 1 center + 4 perimeter samples on a square pattern. Cheaper than
+    // a disc and visually indistinguishable at this jitter radius.
+    int lit = 0;
+    if (!isOccluded(surfacePos,               lightPos)) lit++;
+    if (!isOccluded(surfacePos + ( T * R),    lightPos)) lit++;
+    if (!isOccluded(surfacePos + (-T * R),    lightPos)) lit++;
+    if (!isOccluded(surfacePos + ( B * R),    lightPos)) lit++;
+    if (!isOccluded(surfacePos + (-B * R),    lightPos)) lit++;
+    return float(lit) / 5.0;
+}
+
+/// spec 008: cheap 1-tap shadow test for low-quality tiles. No jitter,
+/// no perimeter samples — just the centre ray. Returns 0.0 (occluded)
+/// or 1.0 (lit). Used on peripheral tiles where the lost penumbra is
+/// hidden by being far off-axis from the viewer's focus.
+float shadowVisibilityCheap(vec3 surfacePos, vec3 lightPos) {
+    return isOccluded(surfacePos, lightPos) ? 0.0 : 1.0;
+}
+
 void main() {
     vec3 N = normalize(v_normal);
     vec3 baseColor = v_color.rgb;
@@ -309,16 +381,39 @@ void main() {
     int tileSize = int(lighting.screenParams.z);
     int tileLightN;
     int tileLightBase;
+    int tileQ;
     if (tilesX > 0 && tileSize > 0) {
         int tx = int(gl_FragCoord.x) / tileSize;
         int ty = int(gl_FragCoord.y) / tileSize;
         int tIdx = ty * tilesX + tx;
         tileLightN = int(tileLightCount.counts[tIdx]);
         tileLightBase = tIdx * MAX_LIGHTS_PER_TILE;
+        // ── spec 008: read the per-tile quality byte exactly once. ──
+        // The whole 16×16 tile shares one quality byte by construction,
+        // so SIMD divergence within a wave is zero. Treat reserved
+        // values (3..255) as full quality per the contract.
+        tileQ = int(readTileQuality(tIdx));
+        if (tileQ > 2) tileQ = 2;
     } else {
         tileLightN = numLights;
         tileLightBase = -1; // sentinel for "ignore tileLightIndices; iterate sequentially"
+        tileQ = 2;          // safe default: full quality when Forward+ disabled
     }
+
+    // ── spec 008: ambient-only short-circuit (quality byte 0). ──
+    // Tile has no lights AND PerfFlags-enabled — skip the entire top-K
+    // build and shading loop. The ambient fill below the lighting loop
+    // is the only thing this fragment owes the framebuffer.
+    if (tileQ == 0) {
+        totalLight = clamp(vec3(ambient), vec3(0.0), vec3(1.0));
+        outColor = vec4(baseColor * totalLight, v_color.a);
+        return;
+    }
+
+    // ── spec 008: cap the top-K loop at the LOW limit on quality-1
+    // tiles. The shading loop below also checks tileQ to pick the
+    // cheap 1-tap shadow path.
+    int kCap = (tileQ == 1) ? 3 : MAX_PER_PIXEL_LIGHTS; // MAX_PER_PIXEL_LIGHTS_LOW = 3
 
     for (int k = 0; k < tileLightN && k < MAX_LIGHTS; k++) {
         int i = (tileLightBase >= 0)
@@ -349,10 +444,13 @@ void main() {
 
         // Insertion sort into the top-K array (K is tiny, so this is
         // cheaper than any branchless alternative).
+        // spec 008: when tileQ == 1 we cap the effective K at
+        // MAX_PER_PIXEL_LIGHTS_LOW (3); see kCap above.
         int insertAt = -1;
         float minScore = topScore[0];
         int minSlot = 0;
         for (int s = 0; s < MAX_PER_PIXEL_LIGHTS; s++) {
+            if (s >= kCap) break;
             if (topIdx[s] < 0) { insertAt = s; break; }
             if (topScore[s] < minScore) {
                 minScore = topScore[s];
@@ -368,6 +466,7 @@ void main() {
 
     // ── Shade with the surviving lights only ────────────────────────────
     for (int s = 0; s < MAX_PER_PIXEL_LIGHTS; s++) {
+        if (s >= kCap) break; // spec 008: low-quality tiles stop early
         int i = topIdx[s];
         if (i < 0) continue;
 
@@ -388,7 +487,16 @@ void main() {
             int(floor(surfacePos.x)) == int(floor(lightPos.x)) &&
             int(floor(surfacePos.y)) == int(floor(lightPos.y)) &&
             int(floor(surfacePos.z)) == int(floor(lightPos.z));
-        if (!sameCell && isOccluded(surfacePos, lightPos)) continue;
+        float visibility = 1.0;
+        if (!sameCell) {
+            // spec 008: 1-tap centre-only ray on low-quality tiles;
+            // full 5-tap PCF on quality-2 tiles. The penumbra loss on
+            // peripheral tiles is hidden by the tile being off-centre.
+            visibility = (tileQ == 1)
+                ? shadowVisibilityCheap(surfacePos, lightPos)
+                : shadowVisibility(surfacePos, lightPos);
+            if (visibility <= 0.0) continue;
+        }
 
         // Distance attenuation.
         //
@@ -402,7 +510,7 @@ void main() {
         float kAtt = clamp(1.0 - pow(dist / radius, 4.0), 0.0, 1.0);
         float window = kAtt * kAtt;
         float attenuation = intensity * window / (1.0 + distSq * 0.05);
-        totalLight += lightColor * attenuation * NdotL;
+        totalLight += lightColor * attenuation * NdotL * visibility;
     }
 
     totalLight = clamp(totalLight, vec3(0.0), vec3(1.0));

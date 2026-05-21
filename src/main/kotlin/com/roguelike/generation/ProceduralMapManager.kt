@@ -373,6 +373,34 @@ class ProceduralMapManager(
      * light list, so distant lights still get culled and the priority
      * order keeps updating as the player moves.
      */
+    // ── Per-seed BFS cache ────────────────────────────────────────────
+    // The BFS over the room graph used to be repeated every frame: it
+    // produced a HashSet + ArrayList per ring, walked every reachable
+    // room (a few hundred on a generated dungeon), and re-sorted each
+    // ring by player distance. With maxRoomDistance=1_000_000 (i.e. the
+    // whole world) this scaled linearly with placed-room count and was
+    // measured at 3-6ms on a 69×138×27 world.
+    //
+    // Observation: the BFS result (room set per ring) is a pure function
+    // of (seedRoom, generator topology). It only changes when the player
+    // crosses a room boundary or new rooms are placed. So we cache the
+    // unsorted per-ring light lists keyed by (seedRoomOrigin,
+    // roomCount, maxRoomDistance, maxExtendedSearch) and only re-sort
+    // by player distance per frame (cheap: a few hundred lights total).
+    private data class BfsCacheKey(
+        val seedOrigin: Vector3Int,
+        val roomCount: Int,
+        val maxRoomDistance: Int
+    )
+
+    private var bfsCacheKey: BfsCacheKey? = null
+    private var bfsCacheRings: List<List<com.roguelike.core.model.LightSource>> = emptyList()
+
+    // Scratch buffers reused across frames for indirect distance sort.
+    // Grown on demand to fit the largest ring seen so far.
+    private var sortScratchIdxArr: IntArray = IntArray(64)
+    private var sortScratchDist: FloatArray = FloatArray(64)
+
     fun collectVisibleRoomLights(
         playerX: Float, playerY: Float, playerZ: Float,
         maxRoomDistance: Int
@@ -390,43 +418,95 @@ class ProceduralMapManager(
                 return emptyList()
             }
 
-        // BFS over the room socket graph, capped at `maxRoomDistance` hops.
-        // Each ring's lights are appended in distance-to-player order, so
-        // the final list is "ring 0 sorted, ring 1 sorted, ring 2 sorted…".
-        fun sortedByDistance(lights: List<com.roguelike.core.model.LightSource>): List<com.roguelike.core.model.LightSource> {
-            if (lights.size <= 1) return lights
-            return lights.sortedBy { ls ->
-                val dx = ls.x - playerX; val dy = ls.y - playerY; val dz = ls.z - playerZ
-                dx * dx + dy * dy + dz * dz
+        // Snapshot the placed-room count up front to detect new rooms
+        // appended by the background generator. Using just the count is
+        // safe because the generator only ever appends.
+        val roomCount = gen.placedSubmapsSnapshot().size
+        val key = BfsCacheKey(seedRoom.origin, roomCount, maxRoomDistance)
+
+        val rings: List<List<com.roguelike.core.model.LightSource>> =
+            if (bfsCacheKey == key) {
+                bfsCacheRings
+            } else {
+                val fresh = computeRings(gen, seedRoom, maxRoomDistance)
+                bfsCacheKey = key
+                bfsCacheRings = fresh
+                fresh
             }
+
+        // Re-sort each ring by current player distance and concatenate.
+        // Total light count is bounded by what fits in MAX_LIGHTS-ish
+        // candidates from uploadLighting; sort scratch is reused.
+        var total = 0
+        for (r in rings) total += r.size
+        val out = ArrayList<com.roguelike.core.model.LightSource>(total)
+        for (ring in rings) {
+            if (ring.isEmpty()) continue
+            if (ring.size == 1) { out.add(ring[0]); continue }
+            // Indirect sort: indices into the ring, sorted by distance²,
+            // then emitted in order. Avoids allocating a Comparator and
+            // boxing Floats per comparison.
+            val n = ring.size
+            if (sortScratchIdxArr.size < n) {
+                sortScratchIdxArr = IntArray(n.coerceAtLeast(sortScratchIdxArr.size * 2))
+                sortScratchDist = FloatArray(sortScratchIdxArr.size)
+            }
+            val idx = sortScratchIdxArr
+            val dist = sortScratchDist
+            for (i in 0 until n) {
+                idx[i] = i
+                val ls = ring[i]
+                val dx = ls.x - playerX; val dy = ls.y - playerY; val dz = ls.z - playerZ
+                dist[i] = dx * dx + dy * dy + dz * dz
+            }
+            // Insertion sort: ring sizes are typically tiny (≤8 lights),
+            // and this is allocation-free unlike Arrays.sort + boxing.
+            for (i in 1 until n) {
+                val ki = idx[i]; val kd = dist[ki]
+                var j = i - 1
+                while (j >= 0 && dist[idx[j]] > kd) {
+                    idx[j + 1] = idx[j]
+                    j--
+                }
+                idx[j + 1] = ki
+            }
+            for (i in 0 until n) out.add(ring[idx[i]])
         }
+
+        lightDebugLog(
+            "seed='${seedRoom.template.name}'@${seedRoom.origin} containing=${containing != null} " +
+                "rings=${rings.size} total=$total cacheHit=${bfsCacheKey == key}",
+            playerX, playerY, playerZ, seedRoom, out
+        )
+        return out
+    }
+
+    /**
+     * Topology-only BFS that produces the per-ring room-light lists. No
+     * player-distance sort here — that happens per frame on the cached
+     * result. Returns one inner list per ring, ring 0 being the seed
+     * room.
+     */
+    private fun computeRings(
+        gen: MapGenerator,
+        seedRoom: PlacedSubmap,
+        maxRoomDistance: Int
+    ): List<List<com.roguelike.core.model.LightSource>> {
+        val rings = ArrayList<List<com.roguelike.core.model.LightSource>>()
+        rings.add(ArrayList(seedRoom.lightSources))
+
+        // Lightless-corridor fallback: keep walking outward until we
+        // find at least one light, even past the strict horizon, so the
+        // player never plunges into a black scene.
+        val maxExtendedSearch = (maxRoomDistance * 4).coerceAtLeast(maxRoomDistance + 6)
+        var totalLightsSoFar = seedRoom.lightSources.size
 
         val visited = HashSet<Vector3Int>()
         visited.add(seedRoom.origin)
-        val out = ArrayList<com.roguelike.core.model.LightSource>()
-        out.addAll(sortedByDistance(seedRoom.lightSources))
-
-        // Per-ring trace: how many rooms walked, how many lights gathered.
-        // Kept compact so it can be flushed every frame without flooding.
-        val ringTrace = StringBuilder()
-        ringTrace.append("seed='${seedRoom.template.name}'@${seedRoom.origin}")
-        ringTrace.append(" containing=${containing != null}")
-        ringTrace.append(" seedLights=${seedRoom.lightSources.size}")
-
-        // If the player happens to be in a stretch of lightless rooms, the
-        // strict `maxRoomDistance` horizon may produce zero lights and the
-        // scene goes pitch black. In that case keep walking the room graph
-        // outward (up to [maxExtendedSearch]) until at least one light is
-        // found, so the player always has something to see by. The cheap
-        // BFS only revisits unvisited rooms, so this is bounded.
-        val maxExtendedSearch = (maxRoomDistance * 4).coerceAtLeast(maxRoomDistance + 6)
-
         var frontier: List<PlacedSubmap> = listOf(seedRoom)
         var depth = 0
         while (frontier.isNotEmpty()) {
-            // Always honour the strict horizon. Beyond it we keep walking
-            // ONLY if we still haven't found any lights at all.
-            if (depth >= maxRoomDistance && out.isNotEmpty()) break
+            if (depth >= maxRoomDistance && totalLightsSoFar > 0) break
             if (depth >= maxExtendedSearch) break
 
             val nextFrontier = ArrayList<PlacedSubmap>()
@@ -439,14 +519,12 @@ class ProceduralMapManager(
                     }
                 }
             }
-            out.addAll(sortedByDistance(ringLights))
-            ringTrace.append(" | ring${depth + 1}: rooms=${nextFrontier.size} lights=${ringLights.size}")
+            rings.add(ringLights)
+            totalLightsSoFar += ringLights.size
             frontier = nextFrontier
             depth++
         }
-
-        lightDebugLog(ringTrace.toString(), playerX, playerY, playerZ, seedRoom, out)
-        return out
+        return rings
     }
 
     // Last log fingerprint, so we only print when the situation actually

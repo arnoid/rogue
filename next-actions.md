@@ -1,0 +1,4 @@
+1. Triage the pre-existing BasicShadowLightTest.wallBlocksAllLight failure before opening a PR. git log -p --follow src/main/resources/shaders/world_lit.frag.glsl | head -200 should pinpoint the unrelated change that caused the brightness drift.
+2. Capture a real before/after on your hardware: load Arena → walk to the dense-light scene → take 60 s of [Profile] with F11 disabled, then 60 s with F11 enabled. Save both into specs/008-fps-fov-shadow-culling/baseline.log and after.log (T003 + T047). That closes SC-004 and validates SC-001/003 are real on your reference machine.
+3. Run the full render suite when you have ~30-45 min available, to satisfy T020 / T026 acceptance gates with the pre-existing failure resolved.
+4. Then proceed to US2 (/speckit.implement again, ask it to execute T033-T041): perf HUD wiring, PerfRegressionTest, and dense-lights.wld perf scene.

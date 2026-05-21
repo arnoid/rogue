@@ -4,11 +4,6 @@
     "version": 1
   },
   "biomes": [
-    {
-      "name": "default",
-      "type": "default",
-      "file": "./default/biome.json"
-    }
+    { "name": "default", "type": "default", "file": "./default/biome.json" }
   ]
 }
-
